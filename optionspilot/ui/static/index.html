@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OptionsPilot</title>
+<style>
+:root {
+  --page:#0d0d0d; --surface:#1a1a19; --surface-2:#222220;
+  --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --baseline:#383835; --ring:rgba(255,255,255,.10);
+  --accent:#3987e5; --good:#0ca30c; --bad:#d03b3b; --warn:#fab219;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+* { box-sizing:border-box; margin:0; }
+body { background:var(--page); color:var(--ink); font-size:14px; display:flex; min-height:100vh; }
+
+/* sidebar */
+nav { width:200px; background:var(--surface); border-right:1px solid var(--grid);
+      padding:18px 12px; display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
+nav .logo { font-weight:700; font-size:16px; padding:4px 10px 14px; letter-spacing:.3px; }
+nav .logo span { color:var(--accent); }
+nav button { all:unset; cursor:pointer; padding:9px 12px; border-radius:8px; color:var(--ink-2); }
+nav button:hover { background:var(--surface-2); }
+nav button.active { background:var(--surface-2); color:var(--ink); font-weight:600; }
+nav .spacer { flex:1; }
+.badge { display:inline-block; font-size:11px; font-weight:700; letter-spacing:.6px;
+         padding:3px 8px; border-radius:6px; background:#2b2113; color:var(--warn); }
+nav .ver { color:var(--muted); font-size:11px; padding:10px 12px 0; }
+
+/* main */
+main { flex:1; padding:20px 26px; max-width:1200px; }
+header { display:flex; align-items:center; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+header h1 { font-size:18px; font-weight:650; margin-right:auto; }
+.pill { font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--ring); color:var(--ink-2); }
+.pill.open { color:var(--good); border-color:var(--good); }
+.btn { cursor:pointer; border:1px solid var(--ring); background:var(--surface-2); color:var(--ink);
+       padding:7px 14px; border-radius:8px; font-size:13px; }
+.btn:hover { border-color:var(--accent); }
+.btn:disabled { opacity:.45; cursor:default; }
+.btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+
+.banner { background:#2a1414; border:1px solid var(--bad); color:#f0b6b6; border-radius:10px;
+          padding:12px 16px; margin-bottom:16px; display:flex; gap:14px; align-items:center; }
+.banner b { color:#ff9d9d; }
+
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+.card { background:var(--surface); border:1px solid var(--grid); border-radius:12px; padding:14px 16px; }
+.card .k { color:var(--muted); font-size:12px; margin-bottom:6px; }
+.card .v { font-size:22px; font-weight:650; }
+.card .v.small { font-size:17px; }
+.up { color:var(--good); } .down { color:var(--bad); }
+
+.panel { background:var(--surface); border:1px solid var(--grid); border-radius:12px;
+         padding:16px 18px; margin-bottom:16px; }
+.panel h2 { font-size:13px; font-weight:600; color:var(--ink-2); margin-bottom:12px;
+            text-transform:uppercase; letter-spacing:.6px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:1000px){ .grid2{grid-template-columns:1fr} }
+
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { text-align:left; color:var(--muted); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--grid); }
+td { padding:7px 8px; border-bottom:1px solid var(--grid); color:var(--ink-2); }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+tr:last-child td { border-bottom:none; }
+tr.expandable { cursor:pointer; }
+tr.expandable:hover td { background:var(--surface-2); }
+.reasons { color:var(--muted); font-size:12px; white-space:pre-wrap; padding:4px 8px 10px 24px; }
+
+.chip { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+.chip.long { background:#0f2416; color:var(--good); }
+.chip.short { background:#2a1414; color:#ff9d9d; }
+
+.meter { display:flex; align-items:center; gap:10px; margin:7px 0; }
+.meter .sym { width:52px; font-weight:600; }
+.meter .bar { flex:1; height:14px; background:var(--surface-2); border-radius:7px; position:relative; overflow:hidden; }
+.meter .fill { position:absolute; inset:0 auto 0 0; background:var(--accent); border-radius:7px 4px 4px 7px; }
+.meter .thresh { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--warn); }
+.meter .val { width:88px; text-align:right; color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.meter .skip { color:var(--muted); font-size:11px; margin-left:6px; }
+
+svg.chart { width:100%; height:200px; display:block; }
+.tooltip { position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--ring);
+           border-radius:8px; padding:6px 10px; font-size:12px; color:var(--ink); display:none; z-index:10; }
+
+.notif { border-left:3px solid var(--accent); padding:6px 10px; margin-bottom:8px; background:var(--surface-2); border-radius:0 8px 8px 0; }
+.notif.risk_limit { border-color:var(--bad); }
+.notif.trade_closed { border-color:var(--good); }
+.notif .t { font-weight:600; font-size:13px; }
+.notif .b { color:var(--muted); font-size:12px; white-space:pre-line; }
+.notif .ts { color:var(--muted); font-size:11px; float:right; }
+
+form.bt { display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:14px; }
+form.bt label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+form.bt input { background:var(--surface-2); border:1px solid var(--ring); color:var(--ink);
+                border-radius:8px; padding:8px 10px; width:110px; font-size:13px; }
+pre.cfg { background:var(--surface-2); border-radius:10px; padding:14px; overflow:auto;
+          font-size:12px; line-height:1.5; color:var(--ink-2); }
+.hint { color:var(--muted); font-size:12px; margin-top:8px; }
+.empty { color:var(--muted); padding:14px 4px; }
+h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
+</style>
+</head>
+<body data-palette="#3987e5">
+<nav>
+  <div class="logo">Options<span>Pilot</span></div>
+  <button data-tab="dashboard" class="active">Dashboard</button>
+  <button data-tab="journal">Journal</button>
+  <button data-tab="backtest">Backtest</button>
+  <button data-tab="learning">Learning</button>
+  <button data-tab="settings">Settings</button>
+  <div class="spacer"></div>
+  <div style="padding:0 12px"><span class="badge">PAPER TRADING</span></div>
+  <div class="ver" id="ver"></div>
+</nav>
+
+<main>
+  <header>
+    <h1 id="tab-title">Dashboard</h1>
+    <span class="pill" id="market-pill">…</span>
+    <span class="pill" id="cycle-pill" title="last scan cycle">no scan yet</span>
+    <button class="btn" id="scan-btn">Scan now</button>
+  </header>
+
+  <div id="halt-banner" class="banner" style="display:none">
+    <div style="flex:1"><b>TRADING HALTED</b> — <span id="halt-reason"></span></div>
+    <button class="btn" id="reset-halt">Reset halt (manual override)</button>
+  </div>
+
+  <!-- DASHBOARD -->
+  <section id="tab-dashboard">
+    <div class="cards" id="cards"></div>
+    <div class="panel">
+      <h2>Equity — session history</h2>
+      <svg class="chart" id="equity-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
+      <div class="hint" id="equity-hint">Equity points accumulate as scan cycles run.</div>
+    </div>
+    <div class="grid2">
+      <div class="panel">
+        <h2>Watchlist — AI confidence</h2>
+        <div id="signals"></div>
+        <div class="hint">Yellow tick = trade threshold. Signals below it are logged, never traded.</div>
+      </div>
+      <div class="panel">
+        <h2>Notifications</h2>
+        <div id="notifs"><div class="empty">Nothing yet.</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Open positions</h2>
+      <div id="positions"></div>
+    </div>
+  </section>
+
+  <!-- JOURNAL -->
+  <section id="tab-journal" style="display:none">
+    <div class="cards" id="journal-stats"></div>
+    <div class="panel">
+      <h2>Trades (click a row for the AI's reasoning)</h2>
+      <div id="journal-table"></div>
+    </div>
+  </section>
+
+  <!-- BACKTEST -->
+  <section id="tab-backtest" style="display:none">
+    <div class="panel">
+      <h2>Run a backtest</h2>
+      <form class="bt" id="bt-form">
+        <label>Symbol <input id="bt-symbol" value="SPY"></label>
+        <label>Days <input id="bt-days" type="number" value="25" min="5" max="55"></label>
+        <label>Min confidence % <input id="bt-conf" type="number" value="" placeholder="config"></label>
+        <button class="btn primary" type="submit" id="bt-run">Run backtest</button>
+        <span id="bt-status" class="hint"></span>
+      </form>
+      <div class="hint">Runs bar-by-bar through the same engine, risk manager and broker as live paper
+        trading. Options are Black-Scholes priced from realized volatility (documented limitation).</div>
+    </div>
+    <div id="bt-result"></div>
+  </section>
+
+  <!-- LEARNING -->
+  <section id="tab-learning" style="display:none">
+    <div class="panel">
+      <h2>Evidence weights <span class="hint" id="weights-ver"></span></h2>
+      <div id="weights"></div>
+      <div class="hint">Learned weights are bounded to 0.25×–2× of default, move ≤20% per cycle,
+        and require a minimum sample. Explicit config overrides always win.</div>
+    </div>
+    <div class="grid2">
+      <div class="panel"><h2>Performance by evidence</h2><div id="lrn-evidence"></div></div>
+      <div class="panel"><h2>By hour (ET)</h2><div id="lrn-hour"></div></div>
+      <div class="panel"><h2>By confidence bucket</h2><div id="lrn-conf"></div></div>
+      <div class="panel"><h2>By exit reason</h2><div id="lrn-exit"></div></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section id="tab-settings" style="display:none">
+    <div class="panel">
+      <h2>Effective configuration (read-only)</h2>
+      <pre class="cfg" id="config"></pre>
+      <div class="hint">Edit <code>config.yaml</code> (or OPTIONSPILOT__SECTION__KEY environment
+        variables) and restart to change settings. Validation failures refuse to start — by design.</div>
+    </div>
+  </section>
+</main>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const fmt$ = v => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined,
+                  {minimumFractionDigits:2, maximumFractionDigits:2});
+const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+/* ── tabs ─────────────────────────────────────────────────────────────── */
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  b.classList.add("active");
+  document.querySelectorAll("main section").forEach(s => s.style.display = "none");
+  $("tab-" + b.dataset.tab).style.display = "";
+  $("tab-title").textContent = b.textContent;
+  if (b.dataset.tab === "journal") loadJournal();
+  if (b.dataset.tab === "learning") loadLearning();
+  if (b.dataset.tab === "settings") loadConfig();
+});
+
+/* ── live status ──────────────────────────────────────────────────────── */
+let lastStatus = null;
+
+function renderStatus(s) {
+  lastStatus = s;
+  $("ver").textContent = "v" + s.version;
+  $("market-pill").textContent = s.market_open ? "market open" : "market closed";
+  $("market-pill").className = "pill" + (s.market_open ? " open" : "");
+  $("cycle-pill").textContent = s.last_cycle_ts
+      ? "last scan " + new Date(s.last_cycle_ts).toLocaleTimeString() : "no scan yet";
+
+  const halted = s.risk.halted;
+  $("halt-banner").style.display = halted ? "" : "none";
+  if (halted) $("halt-reason").textContent = s.risk.halt_reason +
+      (s.risk.halt_until ? " (resumes " + new Date(s.risk.halt_until).toLocaleString() + ")"
+                         : " — manual reset required");
+
+  const a = s.account, p = s.pnl;
+  const openPnl = s.positions.reduce((x, q) => x + q.unrealized, 0);
+  $("cards").innerHTML = [
+    ["Equity", fmt$(a.equity), ""],
+    ["Cash", fmt$(a.cash), ""],
+    ["P&L today", fmt$(p.today), cls(p.today)],
+    ["P&L this week", fmt$(p.week), cls(p.week)],
+    ["P&L this month", fmt$(p.month), cls(p.month)],
+    ["Open P&L", fmt$(openPnl), cls(openPnl)],
+  ].map(([k, v, c]) =>
+    `<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join("");
+
+  drawEquity($("equity-chart"), s.equity_history.map(([t, e]) => [new Date(t), e]),
+             a.starting_balance);
+  $("equity-hint").style.display = s.equity_history.length > 1 ? "none" : "";
+
+  $("signals").innerHTML = s.watchlist.map(sym => {
+    const sig = s.signals[sym];
+    const conf = sig ? sig.confidence : 0;
+    const dir = sig ? sig.direction : "—";
+    const skip = s.skipped[sym] ? `<span class="skip">${esc(s.skipped[sym])}</span>` : "";
+    return `<div class="meter"><span class="sym">${sym}</span>
+      <div class="bar"><div class="fill" style="width:${Math.min(conf,100)}%"></div>
+        <div class="thresh" style="left:${s.min_confidence}%"></div></div>
+      <span class="val">${sig ? conf.toFixed(1) + "% " + dir : "—"}</span>${skip}</div>`;
+  }).join("");
+
+  $("positions").innerHTML = s.positions.length === 0
+    ? `<div class="empty">Flat. The engine only trades ≥ ${s.min_confidence}% confidence.</div>`
+    : `<table><tr><th>Contract</th><th>Dir</th><th class="num">Qty</th>
+        <th class="num">Avg</th><th class="num">Mark</th><th class="num">Unrealized</th>
+        <th class="num">Stop</th><th class="num">Target</th></tr>` +
+      s.positions.map(q => `<tr><td>${q.contract}</td>
+        <td><span class="chip ${q.direction}">${q.direction}</span></td>
+        <td class="num">${q.quantity}</td><td class="num">${q.avg_price.toFixed(2)}</td>
+        <td class="num">${q.mark.toFixed(2)}</td>
+        <td class="num ${cls(q.unrealized)}">${fmt$(q.unrealized)}</td>
+        <td class="num">${q.stop}</td><td class="num">${q.target}</td></tr>`).join("") + "</table>";
+
+  $("notifs").innerHTML = s.notifications.length === 0
+    ? `<div class="empty">Nothing yet.</div>`
+    : s.notifications.map(n => `<div class="notif ${n.kind}">
+        <span class="ts">${new Date(n.ts).toLocaleTimeString()}</span>
+        <div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div></div>`).join("");
+}
+
+/* ── equity chart (single series + crosshair tooltip) ─────────────────── */
+function drawEquity(svg, pts, baselineVal) {
+  const W = 960, H = 200, P = 12;
+  svg.innerHTML = "";
+  if (pts.length < 2) return;
+  const vals = pts.map(p => p[1]);
+  const lo = Math.min(...vals, baselineVal), hi = Math.max(...vals, baselineVal);
+  const span = (hi - lo) || 1;
+  const X = i => P + i * (W - 2 * P) / (pts.length - 1);
+  const Y = v => H - P - (v - lo) / span * (H - 2 * P);
+  const line = pts.map((p, i) => `${X(i)},${Y(p[1])}`).join(" ");
+  const by = Y(baselineVal);
+  svg.innerHTML =
+    `<line x1="${P}" y1="${by}" x2="${W-P}" y2="${by}" stroke="var(--baseline)" stroke-dasharray="4 4"/>` +
+    `<polyline points="${line}" fill="none" stroke="var(--accent)" stroke-width="2"/>` +
+    `<line id="xh" y1="${P}" y2="${H-P}" stroke="var(--muted)" stroke-width="1" visibility="hidden"/>` +
+    `<circle id="dot" r="4" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" visibility="hidden"/>`;
+  const tip = $("tooltip"), xh = svg.querySelector("#xh"), dot = svg.querySelector("#dot");
+  svg.onmousemove = e => {
+    const r = svg.getBoundingClientRect();
+    const i = Math.max(0, Math.min(pts.length - 1,
+      Math.round((e.clientX - r.left) / r.width * (pts.length - 1))));
+    xh.setAttribute("x1", X(i)); xh.setAttribute("x2", X(i));
+    dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(pts[i][1]));
+    xh.setAttribute("visibility", "visible"); dot.setAttribute("visibility", "visible");
+    tip.style.display = "block";
+    tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 10) + "px";
+    tip.innerHTML = `<b>${fmt$(pts[i][1])}</b><br>${pts[i][0].toLocaleTimeString()}`;
+  };
+  svg.onmouseleave = () => { tip.style.display = "none";
+    xh.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); };
+}
+
+/* ── journal ──────────────────────────────────────────────────────────── */
+async function loadJournal() {
+  const d = await (await fetch("/api/journal?last=200")).json();
+  const st = d.stats;
+  $("journal-stats").innerHTML = st.trades === 0
+    ? `<div class="card"><div class="k">Trades</div><div class="v">0</div></div>`
+    : [["Trades", st.trades], ["Win rate", (st.win_rate*100).toFixed(1)+"%"],
+       ["Total P&L", fmt$(st.total_pnl), cls(st.total_pnl)],
+       ["Expectancy", fmt$(st.expectancy), cls(st.expectancy)],
+       ["Profit factor", st.profit_factor], ["Avg win / loss",
+        `<span class="v small">${fmt$(st.avg_win)} / ${fmt$(st.avg_loss)}</span>`]]
+      .map(([k,v,c]) => `<div class="card"><div class="k">${k}</div><div class="v ${c||""}">${v}</div></div>`).join("");
+  $("journal-table").innerHTML = d.trades.length === 0
+    ? `<div class="empty">No completed trades yet.</div>`
+    : `<table><tr><th>Entry</th><th>Symbol</th><th>Dir</th><th class="num">Qty</th>
+       <th class="num">In</th><th class="num">Out</th><th class="num">P&L</th>
+       <th class="num">Conf</th><th>Exit reason</th></tr>` +
+      d.trades.map((t, i) => `<tr class="expandable" onclick="toggleReasons(${i})">
+        <td>${new Date(t.entry_ts).toLocaleString()}</td><td>${t.symbol}</td>
+        <td><span class="chip ${t.direction}">${t.direction}</span></td>
+        <td class="num">${t.quantity}</td><td class="num">${t.entry_price.toFixed(2)}</td>
+        <td class="num">${t.exit_price.toFixed(2)}</td>
+        <td class="num ${cls(t.pnl)}">${fmt$(t.pnl)}</td>
+        <td class="num">${t.confidence.toFixed(0)}%</td><td>${esc(t.exit_reason)}</td></tr>
+        <tr id="reasons-${i}" style="display:none"><td colspan="9">
+          <div class="reasons">${t.entry_reasons.map(esc).join("\n")}</div></td></tr>`).join("") + "</table>";
+  window._journal = d.trades;
+}
+window.toggleReasons = i => {
+  const r = $("reasons-" + i);
+  r.style.display = r.style.display === "none" ? "" : "none";
+};
+
+/* ── backtest ─────────────────────────────────────────────────────────── */
+$("bt-form").onsubmit = async e => {
+  e.preventDefault();
+  $("bt-run").disabled = true;
+  $("bt-status").textContent = "starting…";
+  const body = { symbol: $("bt-symbol").value, days: +$("bt-days").value };
+  if ($("bt-conf").value) body.min_confidence = +$("bt-conf").value;
+  await fetch("/api/backtest", { method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
+  pollBacktest();
+};
+async function pollBacktest() {
+  const j = await (await fetch("/api/backtest")).json();
+  if (j.state === "running") {
+    $("bt-status").textContent = `running ${j.symbol}… (downloads data, then replays bar by bar)`;
+    setTimeout(pollBacktest, 1500);
+    return;
+  }
+  $("bt-run").disabled = false;
+  if (j.state === "error") { $("bt-status").textContent = "failed: " + j.error; return; }
+  if (j.state !== "done") { $("bt-status").textContent = ""; return; }
+  $("bt-status").textContent = "done.";
+  const r = j.report;
+  const eq = r.equity_curve.map(([t, e]) => [new Date(t), e]);
+  $("bt-result").innerHTML = `
+    <div class="cards">
+      ${[["Net profit", fmt$(r.net_profit) + ` (${r.net_profit_pct >= 0 ? "+" : ""}${r.net_profit_pct}%)`, cls(r.net_profit)],
+         ["Trades", r.n_trades], ["Win rate", (r.win_rate*100).toFixed(1)+"%"],
+         ["Profit factor", r.profit_factor], ["Max drawdown", r.max_drawdown_pct+"%"],
+         ["Sharpe", r.sharpe]]
+        .map(([k,v,c]) => `<div class="card"><div class="k">${k}</div><div class="v small ${c||""}">${v}</div></div>`).join("")}
+    </div>
+    <div class="panel"><h2>Backtest equity — ${r.symbol}, ${r.strategy}</h2>
+      <svg class="chart" id="bt-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg></div>
+    <div class="panel"><h2>Trades</h2>
+      <table><tr><th>Entry</th><th>Dir</th><th class="num">Qty</th><th class="num">P&L</th>
+      <th class="num">Conf</th><th>Exit</th></tr>
+      ${r.trades.map(t => `<tr><td>${new Date(t.entry_ts).toLocaleString()}</td>
+        <td><span class="chip ${t.direction}">${t.direction}</span></td>
+        <td class="num">${t.quantity}</td><td class="num ${cls(t.pnl)}">${fmt$(t.pnl)}</td>
+        <td class="num">${t.confidence.toFixed(0)}%</td><td>${esc(t.exit_reason)}</td></tr>`).join("")}
+      </table></div>
+    <div class="panel"><h2>Notes</h2>
+      ${r.notes.map(n => `<div class="hint">• ${esc(n)}</div>`).join("")}</div>`;
+  drawEquity($("bt-chart"), eq, r.initial_balance);
+}
+
+/* ── learning ─────────────────────────────────────────────────────────── */
+async function loadLearning() {
+  const d = await (await fetch("/api/learning")).json();
+  $("weights-ver").textContent = d.weights_version ? `(learned v${d.weights_version})` : "(no learned weights yet)";
+  $("weights").innerHTML = `<table><tr><th>Evidence</th><th class="num">Default</th>
+    <th class="num">Learned</th><th class="num">Effective</th></tr>` +
+    Object.entries(d.weights).map(([k, w]) => `<tr><td>${k}</td>
+      <td class="num">${w.default.toFixed(2)}</td>
+      <td class="num">${w.learned == null ? "—" : w.learned.toFixed(2)}</td>
+      <td class="num"><b>${w.effective.toFixed(2)}</b></td></tr>`).join("") + "</table>";
+  const slice = rows => rows.length === 0 ? `<div class="empty">No trades yet.</div>`
+    : `<table><tr><th>Slice</th><th class="num">Trades</th><th class="num">Win rate</th>
+       <th class="num">Expectancy</th></tr>` +
+      rows.map(s => `<tr><td>${esc(s.label)}</td><td class="num">${s.trades}</td>
+        <td class="num">${(s.win_rate*100).toFixed(0)}%</td>
+        <td class="num ${cls(s.expectancy)}">${fmt$(s.expectancy)}</td></tr>`).join("") + "</table>";
+  $("lrn-evidence").innerHTML = slice(d.by_evidence);
+  $("lrn-hour").innerHTML = slice(d.by_hour);
+  $("lrn-conf").innerHTML = slice(d.by_confidence);
+  $("lrn-exit").innerHTML = slice(d.by_exit_reason);
+}
+
+/* ── settings ─────────────────────────────────────────────────────────── */
+async function loadConfig() {
+  const d = await (await fetch("/api/config")).json();
+  $("config").textContent = JSON.stringify(d, null, 2);
+}
+
+/* ── scan / halt buttons ──────────────────────────────────────────────── */
+$("scan-btn").onclick = async () => {
+  $("scan-btn").disabled = true; $("scan-btn").textContent = "Scanning…";
+  try { await fetch("/api/scan", { method: "POST" }); await refresh(); }
+  finally { $("scan-btn").disabled = false; $("scan-btn").textContent = "Scan now"; }
+};
+$("reset-halt").onclick = async () => {
+  if (confirm("Manually reset the risk circuit breaker? Only do this after reviewing what tripped it."))
+    { await fetch("/api/risk/reset_halt", { method: "POST" }); await refresh(); }
+};
+
+/* ── transport: WS with polling fallback ──────────────────────────────── */
+async function refresh() {
+  try { renderStatus(await (await fetch("/api/status")).json()); } catch {}
+}
+function connectWS() {
+  try {
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
+                             + location.host + "/ws");
+    ws.onmessage = e => renderStatus(JSON.parse(e.data));
+    ws.onclose = () => setTimeout(connectWS, 3000);
+  } catch { setInterval(refresh, 3000); }
+}
+refresh();
+connectWS();
+</script>
+</body>
+</html>

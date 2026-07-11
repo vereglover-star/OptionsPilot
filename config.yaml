@@ -1,0 +1,46 @@
+# OptionsPilot user configuration.
+# Anything omitted falls back to safe defaults (see docs/ARCHITECTURE.md §2.11).
+# Environment variables override this file: OPTIONSPILOT__RISK__RISK_PER_TRADE_PCT=0.5
+
+data:
+  provider: yfinance
+  watchlist: [SPY, QQQ, AAPL, NVDA, TSLA]
+  timeframes: [1d, 4h, 1h, 15m, 5m]
+
+engine:
+  min_confidence: 80        # signals below this are logged, never traded
+  target_delta: 0.45
+  min_dte: 7
+  max_dte: 45
+  max_spread_pct: 0.10      # reject option spreads wider than 10% of mid
+  min_open_interest: 200
+  min_option_volume: 50
+
+risk:
+  starting_balance: 25000
+  risk_per_trade_pct: 1.0
+  max_daily_loss_pct: 3.0
+  max_weekly_loss_pct: 6.0
+  max_drawdown_pct: 15.0
+  max_consecutive_losses: 3
+  max_contracts: 10
+  max_open_positions: 3
+  daily_trade_limit: 5
+  min_risk_reward: 1.5
+  cooldown_minutes_after_loss: 15
+  trading_start: "09:45"    # ET — skip opening chop
+  trading_end: "15:30"      # ET — no new entries near the close
+
+broker:
+  name: paper               # v1: paper only. Live requires explicit two-flag opt-in.
+  commission_per_contract: 0.65
+  slippage_pct: 0.01
+
+notify:
+  desktop: true
+  email: false
+  daily_summary: true
+  weekly_summary: true
+
+logging:
+  level: INFO
