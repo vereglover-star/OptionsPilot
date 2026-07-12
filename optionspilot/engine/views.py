@@ -31,6 +31,9 @@ from optionspilot.core.models import Timeframe
 
 MIN_BARS = 40           # below this, a timeframe is skipped rather than guessed at
 RECENT_GRAB_BARS = 10   # liquidity grabs older than this are stale context
+ANALYSIS_WINDOW = 400   # analyze only the trailing N bars: recent structure is
+                        # what the scorer consumes, and this bounds per-scan cost
+                        # no matter how much history the caller hands in
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +86,8 @@ class MultiTimeframeAnalyzer:
 
     def _build_view(self, tf: Timeframe, df: pd.DataFrame) -> TimeframeView:
         icfg = self._cfg.indicators
+        if len(df) > ANALYSIS_WINDOW:
+            df = df.tail(ANALYSIS_WINDOW)
         close = df["close"]
         last_close = float(close.iloc[-1])
         atr_val = float(ind.atr(df, icfg.atr_period).iloc[-1])
