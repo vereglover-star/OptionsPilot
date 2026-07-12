@@ -75,6 +75,10 @@ threshold, delta/DTE/liquidity filters, evidence weight overrides), `risk`
   Priority: stop → target → invalidation → partial (half off, stop → breakeven).
   Mutates position management fields; caller persists via
   `broker.update_position_management`.
+- `registry.create_broker(config, db_path, cash)` — the only place brokers are
+  constructed. `paper` is real; `alpaca`/`tradier`/`webull`/`ibkr` are
+  extension slots that raise `BrokerError` with adapter guidance. The live
+  gate (two config flags) is re-checked here, defense in depth.
 
 ## Journal / Learning / Backtest (`journal/`, `learning/`, `backtest/`)
 - `TradeJournal` — SQLite record of every round trip (reasons, evidence names,
@@ -95,13 +99,24 @@ threshold, delta/DTE/liquidity filters, evidence weight overrides), `risk`
 - `NotificationCenter.notify(kind, title, body)` — never raises; desktop
   toasts + SMTP email (password via `OPTIONSPILOT_SMTP_PASSWORD`).
 
+## Integrations (`integrations/`)
+- `parse_alert(payload, secret)` — validates TradingView webhook JSON
+  (constant-time secret compare, symbol normalization, note truncation).
+- `Orchestrator.scan_single(symbol)` — what an alert triggers: the full
+  engine + risk pipeline for one symbol. Alerts change *when* the system
+  looks, never *whether* it trades.
+- Config gate: `integrations.tradingview_webhook` + 16-char minimum secret.
+
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop)` — FastAPI: `/api/status`,
   `/api/scan`, `/api/journal`, `/api/learning`, `/api/config`,
-  `/api/risk/reset_halt`, `/api/backtest` (job slot), `/ws` (2s status push).
-  All orchestrator access serialized through `UIServer.lock`.
+  `/api/risk/reset_halt`, `/api/backtest` (job slot), `/ws` (2s status push),
+  `/webhook/tradingview`. All orchestrator access serialized through
+  `UIServer.lock`.
 - `ui/static/index.html` — self-contained dark dashboard (no build step).
 - `ui/desktop.py` — uvicorn thread + pywebview native window.
 - CLI: `run | ui | serve | scan | status | journal | backtest | learn`.
 - Packaging: `scripts/build_exe.ps1` → `dist/OptionsPilot/OptionsPilot.exe`
   (args pass through to the CLI; no args opens the desktop app).
+- `scripts/soak.py --cycles N` — stability soak: repeated live cycles on a
+  scratch data dir, tracking exceptions, heap growth, and cycle times.

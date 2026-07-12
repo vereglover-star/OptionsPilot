@@ -58,8 +58,21 @@ Checkboxes are updated as work lands.
 - [x] PyInstaller packaging → dist\OptionsPilot\OptionsPilot.exe
       (`scripts\build_exe.ps1`)
 
-## Phase 8 — Hardening & Extension Points
-- [ ] Soak testing on live paper sessions
-- [ ] TradingView webhook alert listener (inbound signals)
-- [ ] Broker adapter slots: Alpaca, Tradier, Webull (pending API approval), IBKR
-- [ ] Performance profiling and optimization pass
+## Phase 8 — Hardening & Extension Points (complete)
+- [x] Soak harness (`scripts/soak.py`): repeated live cycles with exception,
+      memory-growth, and cycle-time tracking — rerun during market hours before
+      long unattended sessions
+- [x] TradingView webhook alert listener (`/webhook/tradingview`): secret-gated,
+      triggers a full-pipeline scan, can never place an order directly
+- [x] Broker adapter registry (`broker/registry.py`) with Alpaca / Tradier /
+      Webull (pending API approval) / IBKR slots that fail loudly with guidance
+- [x] Performance pass: smart-money detectors vectorized, analyzer capped to a
+      400-bar window — backtest 7.9s → 4.7s on 520 bars, identical results
+
+## Beyond v1 (candidate work, unscheduled)
+- [ ] Candle cache in the live loop (incremental fetch + merge) to cut
+      yfinance traffic during long sessions
+- [ ] First real live-broker adapter (Alpaca options paper API is the natural
+      candidate) — only after sustained paper profitability
+- [ ] News / economic calendar / sentiment inputs as new evidence types
+- [ ] Portfolio-level risk (correlated positions, sector exposure)

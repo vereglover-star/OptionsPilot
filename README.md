@@ -21,7 +21,10 @@ Phase 1 of 8 complete — see [docs/ROADMAP.md](docs/ROADMAP.md).
 | 5 | Journal, learning, backtesting | ✅ done |
 | 6 | Orchestrator + notifications + CLI | ✅ done |
 | 7 | Desktop UI (pywebview + FastAPI, PyInstaller packaging) | ✅ done |
-| 8 | Hardening + broker adapter slots | next |
+| 8 | Hardening: soak harness, TradingView webhook, broker adapter slots, performance pass | ✅ done |
+
+All 8 planned phases are complete. See [docs/ROADMAP.md](docs/ROADMAP.md)
+for candidate post-v1 work.
 
 ## Setup
 
@@ -67,10 +70,24 @@ Double-click the exe to open the desktop app. CLI commands pass through:
 .venv\Scripts\python -m optionspilot journal      # recent trades + stats
 .venv\Scripts\python -m optionspilot backtest SPY --days 25 --min-confidence 40
 .venv\Scripts\python -m optionspilot learn        # learning cycle over the journal
+.venv\Scripts\python scripts\soak.py --cycles 10  # stability soak (scratch account)
 ```
 
 All state lives under `data/` (paper account, journal, learned weights,
 backtest reports). Logs rotate under `logs/` per subsystem.
+
+### TradingView alerts (optional)
+
+Enable in `config.yaml` (`integrations.tradingview_webhook: true` plus a 16+
+character `tradingview_secret`), then point a TradingView alert webhook at
+`http://<host>:<port>/webhook/tradingview` with the message:
+
+```json
+{"secret": "<your secret>", "symbol": "{{ticker}}", "note": "optional"}
+```
+
+An alert triggers a scan of that symbol through the full engine + risk
+pipeline — it changes *when* the system looks, never *whether* it trades.
 
 ## Configuration
 
@@ -85,12 +102,25 @@ $env:OPTIONSPILOT__RISK__RISK_PER_TRADE_PCT = "0.5"
 
 ```
 optionspilot/
-  config/      layered, validated configuration
-  core/        domain models, logging
-  data/        provider interface, yfinance adapter, SQLite candle cache
-  analysis/    indicators (Phase 2 adds patterns, structure, SMC, options math)
-docs/          ARCHITECTURE.md, ROADMAP.md
-tests/         pytest suite
+  config/        layered, validated configuration
+  core/          domain models, logging
+  data/          provider interface, yfinance adapter, SQLite candle cache
+  analysis/      indicators, candlesticks, structure, smart money, volume,
+                 options math (pure functions, shared by live + backtest)
+  engine/        multi-timeframe analyzer, confluence scorer, contract
+                 selector, trade planner
+  risk/          the gate: limits, circuit breaker, position sizing
+  broker/        Broker ABC, paper simulator, position manager, registry
+  journal/       SQLite trade journal
+  learning/      performance slicing, bounded weight updates, WeightStore
+  backtest/      event-driven replay + JSON/HTML reports
+  notify/        desktop + email notification center
+  integrations/  TradingView webhook parsing
+  ui/            FastAPI backend, static dashboard, pywebview shell
+  orchestrator.py  the live event loop
+scripts/         build_exe.ps1, soak.py
+docs/            ARCHITECTURE.md, ROADMAP.md, MODULES.md
+tests/           pytest suite (225 tests)
 ```
 
 ## Documentation
