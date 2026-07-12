@@ -42,5 +42,14 @@ notify:
   daily_summary: true
   weekly_summary: true
 
+# TradingView alerts (inbound webhook). An alert triggers a scan of that
+# symbol through the full engine + risk pipeline — it can never place an
+# order directly. Alert message format in TradingView:
+#   {"secret": "<your secret>", "symbol": "{{ticker}}", "note": "optional"}
+# POST it to http://<host>:<port>/webhook/tradingview
+integrations:
+  tradingview_webhook: false
+  tradingview_secret: ""      # required (16+ chars) when enabling the webhook
+
 logging:
   level: INFO

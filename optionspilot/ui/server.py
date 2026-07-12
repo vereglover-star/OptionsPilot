@@ -285,6 +285,29 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         with server._bt_lock:
             return server.backtest_job
 
+    @app.post("/webhook/tradingview")
+    def tradingview(payload: dict):
+        from optionspilot.integrations import parse_alert
+
+        icfg = config.integrations
+        if not icfg.tradingview_webhook:
+            return JSONResponse(
+                {"error": "tradingview webhook disabled in config"},
+                status_code=403,
+            )
+        try:
+            alert = parse_alert(payload, icfg.tradingview_secret)
+        except ValueError as exc:
+            log.warning("rejected tradingview webhook: %s", exc)
+            code = 403 if "secret" in str(exc) else 422
+            return JSONResponse({"error": str(exc)}, status_code=code)
+        log.info("tradingview alert: scan %s (%s)", alert.symbol,
+                 alert.note or "no note")
+        with server.lock:
+            summary = server.orch.scan_single(alert.symbol)
+        return {"source": "tradingview", "symbol": alert.symbol,
+                "note": alert.note, **summary}
+
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
         await socket.accept()

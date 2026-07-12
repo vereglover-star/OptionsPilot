@@ -31,7 +31,7 @@ import pandas as pd
 
 from optionspilot.analysis.options_metrics import bs_greeks
 from optionspilot.analysis.structure import detect_events, find_swings
-from optionspilot.broker import PaperBroker, PositionManager
+from optionspilot.broker import PositionManager, create_broker
 from optionspilot.broker.base import Broker
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
@@ -140,8 +140,8 @@ class Orchestrator:
         self.cfg = config
         data_dir = Path(data_dir)
         self.provider = provider or YFinanceProvider()
-        self.broker = broker or PaperBroker(
-            config.broker, data_dir / "paper.db", config.risk.starting_balance
+        self.broker = broker or create_broker(
+            config, data_dir / "paper.db", config.risk.starting_balance
         )
         self.journal = journal or TradeJournal(data_dir / "journal.db")
         self.notifier = notifier or build_notification_center(config.notify)
@@ -216,6 +216,26 @@ class Orchestrator:
         self._surface_halt()
         self._scan_for_entries(now, candles, summary)
         self._check_large_moves(candles)
+        return summary
+
+    def scan_single(self, symbol: str, now: datetime | None = None) -> dict:
+        """On-demand scan of one symbol through the full pipeline — used by the
+        TradingView webhook. An external alert changes *when* the system looks,
+        never *whether* it trades: confidence threshold, contract filters, and
+        every risk gate apply exactly as in a scheduled scan."""
+        now = now or utcnow()
+        symbol = symbol.upper()
+        summary: dict = {"ts": now.isoformat(), "opened": [], "closed": [],
+                         "signals": {}, "skipped": {}}
+        held = {p.contract.underlying for p in self.broker.get_positions()}
+        if symbol in held:
+            summary["skipped"][symbol] = "position already open"
+            return summary
+        try:
+            self._scan_symbol(symbol, now, self._fetch_candles(symbol), summary)
+        except Exception as exc:  # noqa: BLE001 — webhook must not crash the app
+            log.exception("single-symbol scan failed for %s: %s", symbol, exc)
+            summary["skipped"][symbol] = f"scan error: {exc}"
         return summary
 
     # ── data ─────────────────────────────────────────────────────────────────

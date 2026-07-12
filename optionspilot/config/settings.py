@@ -177,6 +177,25 @@ class NotifyConfig(_Section):
         return self
 
 
+class IntegrationsConfig(_Section):
+    """Inbound integrations. TradingView has no trading/data API; its alerts
+    can only POST a webhook. An alert triggers a *scan* of that symbol through
+    the full engine + risk pipeline — it can never place an order directly."""
+
+    tradingview_webhook: bool = False
+    tradingview_secret: str = ""   # shared secret the alert JSON must carry
+
+    @model_validator(mode="after")
+    def _secret_required(self) -> "IntegrationsConfig":
+        if self.tradingview_webhook and len(self.tradingview_secret) < 16:
+            raise ValueError(
+                "tradingview_webhook requires tradingview_secret of at least "
+                "16 characters — anyone who can reach the port can otherwise "
+                "trigger scans"
+            )
+        return self
+
+
 class LoggingConfig(_Section):
     dir: str = "logs"
     level: str = "INFO"
@@ -200,6 +219,7 @@ class AppConfig(_Section):
     risk: RiskConfig = RiskConfig()
     broker: BrokerConfig = BrokerConfig()
     notify: NotifyConfig = NotifyConfig()
+    integrations: IntegrationsConfig = IntegrationsConfig()
     logging: LoggingConfig = LoggingConfig()
 
 
