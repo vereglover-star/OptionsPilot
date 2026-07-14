@@ -69,6 +69,13 @@ Checkboxes are updated as work lands.
 - [x] Performance pass: smart-money detectors vectorized, analyzer capped to a
       400-bar window — backtest 7.9s → 4.7s on 520 bars, identical results
 
+## Post-v1 additions (shipped)
+- [x] Trading modes (2026-07-14): `engine.trading_mode` — conservative (fixed
+      80% bar, default) vs high_risk (setup-quality-adaptive threshold via
+      `engine/gate.py`: excellent 62 / good 70 / average 77 / poor never;
+      stretch entries require RR ≥ 2.0; identical risk management in both
+      modes; full accept/reject reasoning in logs, journal, and dashboard)
+
 ## Beyond v1 (candidate work, unscheduled)
 - [ ] Candle cache in the live loop (incremental fetch + merge) to cut
       yfinance traffic during long sessions

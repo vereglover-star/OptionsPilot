@@ -89,6 +89,30 @@ character `tradingview_secret`), then point a TradingView alert webhook at
 An alert triggers a scan of that symbol through the full engine + risk
 pipeline — it changes *when* the system looks, never *whether* it trades.
 
+## Trading modes
+
+Set `engine.trading_mode` in `config.yaml`:
+
+- **conservative** (default) — trades only at ≥ `min_confidence` (80%).
+  Accuracy over frequency.
+- **high_risk** — the required confidence adapts to *setup quality*, a
+  structured assessment of trend alignment, market structure, volume,
+  momentum, S/R positioning, divergence, and consolidation:
+
+  | Setup quality | Required confidence (base 80) |
+  |---|---|
+  | excellent | 62% |
+  | good | 70% |
+  | average | 77% |
+  | poor | never trades, at any confidence |
+
+  Bounded below by `high_risk_floor` (60%). Entries below the conservative
+  bar additionally need risk/reward ≥ `high_risk_min_rr_stretch` (2.0) —
+  selective aggression, not recklessness. Stops, position sizing, loss
+  limits, cooldowns and liquidity filters are identical in both modes.
+  Every accept/reject is logged with the passed/failed confirmations and
+  shown per-symbol on the dashboard.
+
 ## Configuration
 
 Edit `config.yaml` (validated at startup; typos and out-of-range values fail

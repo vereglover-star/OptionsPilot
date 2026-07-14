@@ -152,7 +152,8 @@ class Backtester:
 
         report = BacktestReport(
             symbol=symbol,
-            strategy=f"confluence_v1 (min_conf {cfg.engine.min_confidence:.0f}%)",
+            strategy=(f"confluence_v1 ({cfg.engine.trading_mode}, "
+                      f"min_conf {cfg.engine.min_confidence:.0f}%)"),
             start=entry_df.index[WARMUP_BARS].to_pydatetime(),
             end=entry_df.index[-1].to_pydatetime(),
             initial_balance=cfg.risk.starting_balance,
@@ -197,12 +198,21 @@ class Backtester:
         risk.record_entry(ts.to_pydatetime())
         views = decision.views
         htf = next((views[tf] for tf in views if tf.minutes > entry_tf.minutes), None)
+        gate_conditions = {}
+        if decision.gate is not None:
+            gate_conditions = {
+                "mode": decision.gate.mode,
+                "setup_quality": decision.gate.setup_quality,
+                "min_confidence_used":
+                    f"{decision.gate.min_confidence_required:.0f}",
+            }
         return _OpenTrade(
             plan=plan, quantity=approval.quantity, entry_fill=fill,
             conditions={
                 "htf_trend": htf.trend.value if htf else "unknown",
                 "entry_timeframe": str(entry_tf),
                 "sizing": approval.notes[0] if approval.notes else "",
+                **gate_conditions,
             },
         )
 

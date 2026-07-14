@@ -34,6 +34,7 @@ header { display:flex; align-items:center; gap:12px; margin-bottom:18px; flex-wr
 header h1 { font-size:18px; font-weight:650; margin-right:auto; }
 .pill { font-size:12px; padding:4px 10px; border-radius:999px; border:1px solid var(--ring); color:var(--ink-2); }
 .pill.open { color:var(--good); border-color:var(--good); }
+.pill.hr { color:var(--warn); border-color:var(--warn); }
 .btn { cursor:pointer; border:1px solid var(--ring); background:var(--surface-2); color:var(--ink);
        padding:7px 14px; border-radius:8px; font-size:13px; }
 .btn:hover { border-color:var(--accent); }
@@ -78,6 +79,9 @@ tr.expandable:hover td { background:var(--surface-2); }
 .meter .thresh { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--warn); }
 .meter .val { width:88px; text-align:right; color:var(--ink-2); font-variant-numeric:tabular-nums; }
 .meter .skip { color:var(--muted); font-size:11px; margin-left:6px; }
+.gate { color:var(--muted); font-size:11px; margin:-3px 0 8px 62px; cursor:default; }
+.gate.ok { color:var(--good); }
+.gate b { font-weight:600; color:var(--ink-2); }
 
 svg.chart { width:100%; height:200px; display:block; }
 .tooltip { position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--ring);
@@ -118,6 +122,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <header>
     <h1 id="tab-title">Dashboard</h1>
     <span class="pill" id="market-pill">…</span>
+    <span class="pill" id="mode-pill" title="">…</span>
     <span class="pill" id="cycle-pill" title="last scan cycle">no scan yet</span>
     <button class="btn" id="scan-btn">Scan now</button>
   </header>
@@ -139,7 +144,9 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
       <div class="panel">
         <h2>Watchlist — AI confidence</h2>
         <div id="signals"></div>
-        <div class="hint">Yellow tick = trade threshold. Signals below it are logged, never traded.</div>
+        <div class="hint">Yellow tick = required confidence for that symbol's setup
+        (fixed in Conservative Mode; adapts to setup quality in High-Risk Mode).
+        Hover a verdict line for the passed/failed confirmations.</div>
       </div>
       <div class="panel">
         <h2>Notifications</h2>
@@ -197,6 +204,10 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <!-- SETTINGS -->
   <section id="tab-settings" style="display:none">
     <div class="panel">
+      <h2>Trading mode</h2>
+      <div id="mode-explainer" class="hint" style="font-size:13px; line-height:1.6"></div>
+    </div>
+    <div class="panel">
       <h2>Effective configuration (read-only)</h2>
       <pre class="cfg" id="config"></pre>
       <div class="hint">Edit <code>config.yaml</code> (or OPTIONSPILOT__SECTION__KEY environment
@@ -238,6 +249,20 @@ function renderStatus(s) {
   $("cycle-pill").textContent = s.last_cycle_ts
       ? "last scan " + new Date(s.last_cycle_ts).toLocaleTimeString() : "no scan yet";
 
+  const highRisk = s.trading_mode === "high_risk";
+  $("mode-pill").textContent = highRisk ? "high-risk mode" : "conservative mode";
+  $("mode-pill").className = "pill" + (highRisk ? " hr" : "");
+  $("mode-pill").title = highRisk
+    ? `High-Risk Mode: the required confidence adapts to setup quality — excellent ` +
+      `setups trade from ${Math.max(s.high_risk_floor, s.min_confidence - 18).toFixed(0)}%, ` +
+      `good from ${Math.max(s.high_risk_floor, s.min_confidence - 10).toFixed(0)}%, ` +
+      `average from ${Math.max(s.high_risk_floor, s.min_confidence - 3).toFixed(0)}%; ` +
+      `poor setups never trade. Entries below ${s.min_confidence}% also require ` +
+      `risk/reward ≥ ${s.high_risk_min_rr_stretch}. All risk limits still apply.`
+    : `Conservative Mode: trades only at ≥ ${s.min_confidence}% confidence, ` +
+      `prioritizing accuracy over trade frequency. Switch via ` +
+      `engine.trading_mode in config.yaml.`;
+
   const halted = s.risk.halted;
   $("halt-banner").style.display = halted ? "" : "none";
   if (halted) $("halt-reason").textContent = s.risk.halt_reason +
@@ -264,15 +289,34 @@ function renderStatus(s) {
     const sig = s.signals[sym];
     const conf = sig ? sig.confidence : 0;
     const dir = sig ? sig.direction : "—";
-    const skip = s.skipped[sym] ? `<span class="skip">${esc(s.skipped[sym])}</span>` : "";
+    const required = sig && sig.min_confidence_required != null
+        ? sig.min_confidence_required : s.min_confidence;
+    const skip = s.skipped[sym] && !(sig && sig.setup_quality)
+        ? `<span class="skip">${esc(s.skipped[sym])}</span>` : "";
+    let gate = "";
+    if (sig && sig.setup_quality) {
+      const hist = (s.setup_history || {})[sig.setup_quality];
+      const prob = hist && hist.trades >= 10
+          ? `est. success ${(hist.win_rate * 100).toFixed(0)}% (${hist.trades} trades)`
+          : "est. success: n/a (insufficient history)";
+      const need = sig.min_confidence_required == null
+          ? "not tradeable" : `needs ${sig.min_confidence_required.toFixed(0)}%`;
+      const tip = `Passed: ${(sig.confirmations_passed || []).join(", ") || "none"}\n` +
+                  `Failed: ${(sig.confirmations_failed || []).join(", ") || "none"}`;
+      gate = `<div class="gate ${sig.accepted ? "ok" : ""}" title="${esc(tip)}">` +
+             `<b>${esc(sig.setup_quality)}</b> setup · ${need} · ${prob} · ` +
+             `${esc(sig.reason || "")}</div>`;
+    }
     return `<div class="meter"><span class="sym">${sym}</span>
       <div class="bar"><div class="fill" style="width:${Math.min(conf,100)}%"></div>
-        <div class="thresh" style="left:${s.min_confidence}%"></div></div>
-      <span class="val">${sig ? conf.toFixed(1) + "% " + dir : "—"}</span>${skip}</div>`;
+        <div class="thresh" style="left:${required}%"></div></div>
+      <span class="val">${sig ? conf.toFixed(1) + "% " + dir : "—"}</span>${skip}</div>${gate}`;
   }).join("");
 
   $("positions").innerHTML = s.positions.length === 0
-    ? `<div class="empty">Flat. The engine only trades ≥ ${s.min_confidence}% confidence.</div>`
+    ? `<div class="empty">Flat. ${highRisk
+        ? "High-Risk Mode: threshold adapts to setup quality (floor " + s.high_risk_floor + "%)."
+        : "The engine only trades ≥ " + s.min_confidence + "% confidence."}</div>`
     : `<table><tr><th>Contract</th><th>Dir</th><th class="num">Qty</th>
         <th class="num">Avg</th><th class="num">Mark</th><th class="num">Unrealized</th>
         <th class="num">Stop</th><th class="num">Target</th></tr>` +
@@ -429,6 +473,21 @@ async function loadLearning() {
 async function loadConfig() {
   const d = await (await fetch("/api/config")).json();
   $("config").textContent = JSON.stringify(d, null, 2);
+  const e = d.engine, hr = e.trading_mode === "high_risk";
+  $("mode-explainer").innerHTML =
+    `Current mode: <b>${hr ? "High-Risk" : "Conservative"}</b> — change via ` +
+    `<code>engine.trading_mode</code> in <code>config.yaml</code> ` +
+    `(<code>conservative</code> or <code>high_risk</code>) and restart.<br><br>` +
+    `<b>Conservative</b> (default): trades only at ≥ ${e.min_confidence}% confidence. ` +
+    `Prioritizes accuracy over frequency.<br>` +
+    `<b>High-Risk</b>: the required confidence adapts to setup quality — ` +
+    `excellent ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 18).toFixed(0)}%, ` +
+    `good ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 10).toFixed(0)}%, ` +
+    `average ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 3).toFixed(0)}%, ` +
+    `poor setups never trade at any confidence. Entries below the conservative bar ` +
+    `additionally require risk/reward ≥ ${e.high_risk_min_rr_stretch}. ` +
+    `Selective aggression, not recklessness: stops, position sizing, loss limits, ` +
+    `cooldowns and liquidity filters are identical in both modes.`;
 }
 
 /* ── scan / halt buttons ──────────────────────────────────────────────── */

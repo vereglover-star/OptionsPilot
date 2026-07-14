@@ -50,8 +50,15 @@ threshold, delta/DTE/liquidity filters, evidence weight overrides), `risk`
 - `ContractSelector.select(direction, chain, spot, today)` → `SelectionResult`
   with per-reason rejection counts.
 - `TradePlanner.plan(signal, entry_view, contract, spot)` → `TradePlan | None`.
-- `DecisionEngine` — facade: `evaluate()` (always returns the signal, flags
-  `tradeable` vs threshold), `build_plan()`.
+- `TradeGate.assess(score_result)` → `GateReport(mode, setup_quality,
+  min_confidence_required, accepted, reason, confirmations_passed/failed)`.
+  Conservative mode: fixed `min_confidence` bar. High-risk mode: threshold by
+  setup quality (excellent base−18 / good base−10 / average base−3, floored at
+  `high_risk_floor`; poor never trades). `stretch_rr_ok()` additionally
+  requires `high_risk_min_rr_stretch` RR for entries below the base bar
+  (enforced in `build_plan`).
+- `DecisionEngine` — facade: `evaluate()` (always returns the signal +
+  GateReport, flags `tradeable` per the gate), `build_plan()`.
 
 ## Risk (`optionspilot/risk/`)
 `RiskManager` — the only path to the broker.

@@ -363,8 +363,11 @@ class Orchestrator:
         summary["signals"][symbol] = {
             "direction": decision.signal.direction.value,
             "confidence": decision.signal.confidence,
+            **(decision.gate.to_dict() if decision.gate else {}),
         }
         if not decision.tradeable:
+            if decision.gate is not None:
+                summary["skipped"][symbol] = decision.gate.reason
             return
         spot = self.provider.get_quote(symbol).last
         chain = self._chain_in_dte_window(symbol, now.date())
@@ -380,7 +383,7 @@ class Orchestrator:
             return
         fill = self.broker.open_position(plan, approval.quantity, now)
         self.risk.record_entry(now)
-        self._register_meta(plan, approval.quantity, fill)
+        self._register_meta(plan, approval.quantity, fill, decision.gate)
         summary["opened"].append({
             "symbol": symbol, "contract": plan.contract.symbol,
             "quantity": approval.quantity, "confidence": decision.signal.confidence,
@@ -394,8 +397,16 @@ class Orchestrator:
             f"| RR {plan.risk_reward}\n" + "\n".join(plan.signal.reasons[:6]),
         )
 
-    def _register_meta(self, plan: TradePlan, quantity: int, fill: Fill) -> None:
+    def _register_meta(self, plan: TradePlan, quantity: int, fill: Fill,
+                       gate=None) -> None:
         signal = plan.signal
+        gate_conditions = {}
+        if gate is not None:
+            gate_conditions = {
+                "mode": gate.mode,
+                "setup_quality": gate.setup_quality,
+                "min_confidence_used": f"{gate.min_confidence_required:.0f}",
+            }
         meta = _TradeMeta(
             trade_id=f"{signal.symbol}-{fill.ts:%Y%m%d-%H%M%S}",
             symbol=signal.symbol,
@@ -413,6 +424,7 @@ class Orchestrator:
                 "hour_et": str(fill.ts.astimezone(ET).hour),
                 "dte": str(plan.contract.dte(fill.ts.date())),
                 "risk_reward": f"{plan.risk_reward:.2f}",
+                **gate_conditions,
             },
         )
         self._metas[plan.contract.symbol] = meta

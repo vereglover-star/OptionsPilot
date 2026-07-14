@@ -95,6 +95,11 @@ class TestBacktester:
         assert report.n_trades >= 1
         assert all(t.entry_reasons for t in report.trades)     # evidence recorded
         assert all(t.exit_reason for t in report.trades)
+        # gate context journaled on every trade
+        assert all(t.market_conditions.get("mode") == "conservative"
+                   for t in report.trades)
+        assert all(t.market_conditions.get("setup_quality")
+                   for t in report.trades)
 
     def test_equity_accounting_is_consistent(self, report):
         assert report.final_equity == pytest.approx(

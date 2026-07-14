@@ -78,6 +78,16 @@ class IndicatorsConfig(_Section):
 
 class EngineConfig(_Section):
     min_confidence: float = Field(80.0, ge=0, le=100)
+    # Trading mode:
+    #   "conservative" — fixed min_confidence bar (default; current behaviour).
+    #   "high_risk"    — the bar adapts to setup quality (excellent/good/average
+    #                    setups trade at lower confidence; poor setups never
+    #                    trade at any confidence). Selective, not reckless: every
+    #                    risk-manager limit still applies, and sub-threshold
+    #                    entries additionally require high_risk_min_rr_stretch.
+    trading_mode: str = "conservative"
+    high_risk_floor: float = Field(60.0, ge=50, le=100)   # absolute confidence floor
+    high_risk_min_rr_stretch: float = Field(2.0, gt=0)    # RR required below min_confidence
     scan_interval_seconds: int = Field(60, ge=5)
     htf_trend_timeframes: list[str] = ["1d", "4h"]
     entry_timeframes: list[str] = ["15m", "5m"]
@@ -96,6 +106,14 @@ class EngineConfig(_Section):
     # against the scorer's known evidence names at engine startup. The learning
     # system (Phase 5) proposes changes here; config remains the authority.
     evidence_weights: dict[str, float] = {}
+
+    @field_validator("trading_mode")
+    @classmethod
+    def _known_mode(cls, v: str) -> str:
+        modes = ("conservative", "high_risk")
+        if v not in modes:
+            raise ValueError(f"trading_mode must be one of {modes}, got {v!r}")
+        return v
 
     @field_validator("evidence_weights")
     @classmethod

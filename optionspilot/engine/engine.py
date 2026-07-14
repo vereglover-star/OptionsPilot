@@ -21,6 +21,7 @@ from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionContract, Signal, Timeframe, TradePlan
 from optionspilot.engine.contracts import ContractSelector, SelectionResult
+from optionspilot.engine.gate import GateReport, TradeGate, stretch_rr_ok
 from optionspilot.engine.planner import TradePlanner
 from optionspilot.engine.scorer import ConfluenceScorer
 from optionspilot.engine.views import MultiTimeframeAnalyzer, TimeframeView
@@ -33,9 +34,10 @@ STRATEGY_NAME = "confluence_v1"
 @dataclass(frozen=True, slots=True)
 class EngineDecision:
     signal: Signal | None
-    tradeable: bool                     # confidence >= configured threshold
+    tradeable: bool                     # gate accepted (mode-aware threshold)
     views: dict[Timeframe, TimeframeView]
     entry_view: TimeframeView | None
+    gate: GateReport | None = None      # full accept/reject reasoning
 
 
 class DecisionEngine:
@@ -47,6 +49,7 @@ class DecisionEngine:
                                        learned_weights)
         self.selector = ContractSelector(config.engine)
         self.planner = TradePlanner(config.engine)
+        self.gate = TradeGate(config.engine)
 
     def evaluate(
         self, symbol: str, candles_by_tf: dict[Timeframe, pd.DataFrame]
@@ -71,15 +74,17 @@ class DecisionEngine:
             strategy=STRATEGY_NAME,
             timeframe=entry_view.timeframe,
         )
-        tradeable = signal.confidence >= self._cfg.engine.min_confidence
+        gate = self.gate.assess(result)
         log.info(
-            "%s: %s %.1f%% (%s threshold %.0f%%)\n  %s",
+            "%s: %s %.1f%% | %s | %s\n  gate: %s\n  passed: %s\n  failed: %s\n  %s",
             symbol, signal.direction.value, signal.confidence,
-            "TRADEABLE, meets" if tradeable else "below",
-            self._cfg.engine.min_confidence,
+            gate.mode, "TRADEABLE" if gate.accepted else "no trade",
+            gate.reason,
+            "; ".join(gate.confirmations_passed) or "none",
+            "; ".join(gate.confirmations_failed) or "none",
             "\n  ".join(signal.reasons),
         )
-        return EngineDecision(signal, tradeable, views, entry_view)
+        return EngineDecision(signal, gate.accepted, views, entry_view, gate)
 
     def build_plan(
         self,
@@ -98,6 +103,17 @@ class DecisionEngine:
             return None
         plan = self.planner.plan(decision.signal, decision.entry_view,
                                  selection.contract, spot)
+        if plan is not None and not stretch_rr_ok(
+            self._cfg.engine, decision.signal.confidence, plan.risk_reward
+        ):
+            log.info(
+                "%s: stretch entry rejected — confidence %.1f%% is below the "
+                "conservative bar (%.0f%%), so RR %.2f must be ≥ %.2f",
+                decision.signal.symbol, decision.signal.confidence,
+                self._cfg.engine.min_confidence, plan.risk_reward,
+                self._cfg.engine.high_risk_min_rr_stretch,
+            )
+            return None
         if plan is not None:
             log.info(
                 "%s: plan %s x %s | entry %.2f stop %.2f target %.2f RR %.2f",

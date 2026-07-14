@@ -8,7 +8,17 @@ data:
   timeframes: [1d, 4h, 1h, 15m, 5m]
 
 engine:
-  min_confidence: 80        # signals below this are logged, never traded
+  min_confidence: 80        # the conservative bar; also the base for high-risk tiers
+  # Trading mode — "conservative" (default) or "high_risk":
+  #   conservative: only trade at >= min_confidence. Accuracy over frequency.
+  #   high_risk:    the bar adapts to setup quality (excellent 62 / good 70 /
+  #                 average 77 with the default base of 80; poor setups never
+  #                 trade). Entries below min_confidence also require
+  #                 risk/reward >= high_risk_min_rr_stretch. All risk limits,
+  #                 stops and position sizing stay fully enforced.
+  trading_mode: conservative
+  high_risk_floor: 60           # never trade below this confidence, ever
+  high_risk_min_rr_stretch: 2.0 # RR required for below-base-confidence entries
   target_delta: 0.45
   min_dte: 7
   max_dte: 45

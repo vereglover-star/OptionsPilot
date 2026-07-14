@@ -130,6 +130,10 @@ class UIServer:
                 "last_cycle_ts": self.last_summary.get("ts"),
                 "watchlist": self.cfg.data.watchlist,
                 "min_confidence": self.cfg.engine.min_confidence,
+                "trading_mode": self.cfg.engine.trading_mode,
+                "high_risk_floor": self.cfg.engine.high_risk_floor,
+                "high_risk_min_rr_stretch": self.cfg.engine.high_risk_min_rr_stretch,
+                "setup_history": self._setup_history(),
                 "equity_history": self.equity_history[-300:],
                 "notifications": [
                     {"kind": e.kind, "title": e.title, "body": e.body,
@@ -137,6 +141,19 @@ class UIServer:
                     for e in orch.notifier.history[-15:]
                 ][::-1],
             }
+
+    def _setup_history(self) -> dict:
+        """Measured win rate per setup quality from the journal — the honest
+        'estimated probability of success' (n/a until enough history exists)."""
+        buckets: dict[str, list[bool]] = {}
+        for t in self.orch.journal.all():
+            quality = t.market_conditions.get("setup_quality")
+            if quality:
+                buckets.setdefault(quality, []).append(t.is_win)
+        return {
+            q: {"trades": len(v), "win_rate": round(sum(v) / len(v), 3)}
+            for q, v in buckets.items()
+        }
 
     def _pnl_windows(self, now_et: datetime) -> dict:
         day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)

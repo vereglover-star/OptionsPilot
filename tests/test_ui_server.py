@@ -13,10 +13,11 @@ from optionspilot.core.models import Timeframe
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    # Freeze the orchestrator's clock inside the trading window (Friday
-    # 11:00 ET) — /api/scan uses wall time, and tests must not depend on
-    # when they are run.
+    # Freeze both clocks inside the trading window (Friday 11:00 ET) —
+    # /api/scan and the P&L day/week windows use wall time, and tests must
+    # not depend on when they are run.
     monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+    monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
     candles = bullish_candles()
     spot = float(candles[Timeframe.M5]["close"].iloc[-1])
     provider = FakeProvider(candles, spot, NOW.date())
