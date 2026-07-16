@@ -31,7 +31,7 @@ import pandas as pd
 
 from optionspilot.analysis.options_metrics import bs_greeks
 from optionspilot.analysis.structure import detect_events, find_swings
-from optionspilot.broker import PositionManager, create_broker
+from optionspilot.broker import OrderManager, PositionManager, create_broker
 from optionspilot.broker.base import Broker
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
@@ -150,6 +150,7 @@ class Orchestrator:
         self.engine = DecisionEngine(config, learned_weights)
         self.risk = RiskManager(config.risk)
         self.pm = PositionManager()
+        self.orders = OrderManager(self.broker, data_dir / "orders.db")
         self._meta_store = _MetaStore(data_dir / "state" / "open_trades.json")
         self._metas = self._meta_store.load()
         self._timeframes = [Timeframe.from_string(s) for s in config.data.timeframes]
@@ -215,6 +216,7 @@ class Orchestrator:
         }
 
         self._manage_positions(now, candles, summary)
+        self._evaluate_orders(now, summary)
         self._mark_and_update_risk(now)
         self._surface_halt()
         self._scan_for_entries(now, candles, summary)
@@ -335,6 +337,52 @@ class Orchestrator:
                         symbol, realized)
             self.risk.record_closed_trade(utcnow(), realized)
 
+    # ── working orders (manual trading) ──────────────────────────────────────
+
+    def _evaluate_orders(self, now: datetime, summary: dict) -> None:
+        if not self.orders.working():
+            return
+        spot_cache: dict[str, float | None] = {}
+        chain_cache: dict[tuple, list] = {}
+
+        def get_spot(underlying: str) -> float | None:
+            if underlying not in spot_cache:
+                try:
+                    spot_cache[underlying] = self.provider.get_quote(underlying).last
+                except Exception as exc:  # noqa: BLE001 — order stays working
+                    log.error("order eval: quote failed for %s: %s", underlying, exc)
+                    spot_cache[underlying] = None
+            return spot_cache[underlying]
+
+        def get_option_quote(contract) -> tuple[float, float]:
+            key = (contract.underlying, contract.expiration)
+            if key not in chain_cache:
+                try:
+                    chain_cache[key] = self.provider.get_option_chain(*key)
+                except Exception as exc:  # noqa: BLE001
+                    log.error("order eval: chain failed for %s: %s", key, exc)
+                    chain_cache[key] = []
+            live = next((c for c in chain_cache[key]
+                         if c.symbol == contract.symbol), None)
+            return (live.bid, live.ask) if live is not None else (0.0, 0.0)
+
+        for event in self.orders.evaluate(now, get_spot, get_option_quote):
+            summary.setdefault("orders", []).append(event)
+            order = event["order"]
+            if event["event"] == "filled":
+                self.notifier.notify(
+                    "trade_opened" if order["side"] == "buy_to_open"
+                    else "trade_closed",
+                    f"Order filled: {order['kind']} {order['contract']} "
+                    f"x{order['quantity']}",
+                    order["result"],
+                )
+            elif event["event"] in ("expired", "rejected"):
+                self.notifier.notify(
+                    "risk_limit", f"Order {event['event']}: {order['contract']}",
+                    order["result"],
+                )
+
     # ── marking / risk ───────────────────────────────────────────────────────
 
     def _mark_and_update_risk(self, now: datetime) -> None:
@@ -348,6 +396,8 @@ class Orchestrator:
         if marks:
             self.broker.mark_positions(marks)
         self.risk.update_equity(self.broker.get_account().equity, now)
+        if hasattr(self.broker, "record_equity_snapshot"):
+            self.broker.record_equity_snapshot(now)
 
     def _surface_halt(self) -> None:
         status = self.risk.status()

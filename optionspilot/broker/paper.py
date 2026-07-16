@@ -51,7 +51,16 @@ CREATE TABLE IF NOT EXISTS fills (
     side TEXT NOT NULL, quantity INTEGER NOT NULL,
     price REAL NOT NULL, commission REAL NOT NULL, reason TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS equity_history (
+    ts TEXT PRIMARY KEY,
+    equity REAL NOT NULL
+);
 """
+
+_MIGRATIONS = [
+    # v2: manual trading — who manages this position's exits
+    "ALTER TABLE positions ADD COLUMN managed_by TEXT NOT NULL DEFAULT 'ai'",
+]
 
 
 class PaperBroker(Broker):
@@ -63,6 +72,12 @@ class PaperBroker(Broker):
         # cross-thread use as long as calls don't overlap).
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.executescript(_SCHEMA)
+        for migration in _MIGRATIONS:
+            try:
+                self._conn.execute(migration)
+            except sqlite3.OperationalError:
+                pass  # already applied
+        self._conn.commit()
         row = self._conn.execute("SELECT cash, realized_pnl FROM account").fetchone()
         if row is None:
             self._cash, self._realized = starting_cash, 0.0
@@ -182,6 +197,65 @@ class PaperBroker(Broker):
             realized_pnl=round(self._realized, 2),
         )
 
+    def open_manual(self, contract: OptionContract, quantity: int, ts: datetime,
+                    entry_spot: float = 0.0) -> Fill:
+        """Buy to open WITHOUT a TradePlan — the manual (Human Mode) path.
+        Exits are the user's job (market/limit/stop orders via the
+        OrderManager); the AI position manager leaves these alone."""
+        if quantity < 1:
+            raise BrokerError(f"invalid quantity {quantity}")
+        if contract.ask <= 0:
+            raise BrokerError(f"{contract.symbol}: no ask price to fill against")
+        fill_price = round(contract.ask * (1 + self._cfg.slippage_pct), 4)
+        commission = self._cfg.commission_per_contract * quantity
+        cost = fill_price * 100 * quantity + commission
+        if cost > self._cash:
+            raise BrokerError(
+                f"insufficient cash: need {cost:.2f}, have {self._cash:.2f}"
+            )
+        fill = Fill(order_id=str(uuid.uuid4()), ts=ts, quantity=quantity,
+                    price=fill_price, commission=commission)
+        self._cash -= cost
+        existing = self._positions.get(contract.symbol)
+        if existing is not None:
+            total = existing.quantity + quantity
+            existing.avg_price = (
+                existing.avg_price * existing.quantity + fill_price * quantity
+            ) / total
+            existing.quantity = total
+            position = existing
+        else:
+            position = Position(
+                contract=contract, quantity=quantity, avg_price=fill_price,
+                opened_at=ts, plan=None,
+                direction=(Direction.LONG if contract.right is OptionRight.CALL
+                           else Direction.SHORT),
+                entry_spot=entry_spot, managed_by="manual",
+            )
+            self._positions[contract.symbol] = position
+        self._marks.setdefault(contract.symbol, contract.mid or fill_price)
+        self._persist(position, fill, side="buy_to_open", reason="manual")
+        log.info("OPEN(manual) %s x%d @ %.2f (cash %.2f)",
+                 contract.symbol, quantity, fill_price, self._cash)
+        return fill
+
+    def record_equity_snapshot(self, ts: datetime) -> None:
+        """Persist an equity point (minute resolution) for lifetime metrics
+        like max drawdown and total-return charts."""
+        stamp = ts.replace(second=0, microsecond=0).isoformat()
+        self._conn.execute(
+            "INSERT OR REPLACE INTO equity_history VALUES (?, ?)",
+            (stamp, self.get_account().equity),
+        )
+        self._conn.commit()
+
+    def equity_history(self, last: int = 5000) -> list[tuple[str, float]]:
+        rows = self._conn.execute(
+            "SELECT ts, equity FROM equity_history ORDER BY ts DESC LIMIT ?",
+            (last,),
+        ).fetchall()
+        return rows[::-1]
+
     def update_position_management(self, position: Position) -> None:
         """Persist trailed stops / consumed partial levels."""
         self._save_position(position)
@@ -212,22 +286,23 @@ class PaperBroker(Broker):
     def _save_position(self, p: Position) -> None:
         c = p.contract
         self._conn.execute(
-            "INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT OR REPLACE INTO positions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (c.symbol, c.underlying, c.expiration.isoformat(), c.strike,
              c.right.value, p.quantity, p.avg_price, p.opened_at.isoformat(),
              p.direction.value, p.entry_spot, p.stop_current, p.target,
-             ",".join(str(x) for x in p.partials_remaining)),
+             ",".join(str(x) for x in p.partials_remaining), p.managed_by),
         )
 
     def _load_positions(self) -> dict[str, Position]:
         rows = self._conn.execute(
             "SELECT symbol, underlying, expiration, strike, right, quantity, "
             "avg_price, opened_at, direction, entry_spot, stop_current, target, "
-            "partials FROM positions"
+            "partials, managed_by FROM positions"
         ).fetchall()
         out: dict[str, Position] = {}
         for (symbol, underlying, expiration, strike, right, quantity, avg_price,
-             opened_at, direction, entry_spot, stop_current, target, partials) in rows:
+             opened_at, direction, entry_spot, stop_current, target, partials,
+             managed_by) in rows:
             contract = OptionContract(
                 underlying=underlying, expiration=date.fromisoformat(expiration),
                 strike=strike, right=OptionRight(right),
@@ -241,6 +316,7 @@ class PaperBroker(Broker):
                 partials_remaining=tuple(
                     float(x) for x in partials.split(",") if x
                 ),
+                managed_by=managed_by,
             )
         if out:
             log.info("restored %d open position(s): %s",

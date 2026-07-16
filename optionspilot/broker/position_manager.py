@@ -42,14 +42,20 @@ class PositionManager:
         ts: datetime,
         opposing_choch: bool = False,
     ) -> list[ExitIntent]:
+        if position.managed_by != "ai":
+            return []   # manual positions are run by the user's working orders
         is_long = position.direction is Direction.LONG
 
-        stop_hit = spot <= position.stop_current if is_long else spot >= position.stop_current
+        stop_hit = position.stop_current > 0 and (
+            spot <= position.stop_current if is_long else spot >= position.stop_current
+        )
         if stop_hit:
             return [ExitIntent("stop", position.quantity,
                                f"stop hit: spot {spot:.2f} vs stop {position.stop_current:.2f}")]
 
-        target_hit = spot >= position.target if is_long else spot <= position.target
+        target_hit = position.target > 0 and (
+            spot >= position.target if is_long else spot <= position.target
+        )
         if target_hit:
             return [ExitIntent("target", position.quantity,
                                f"target reached: spot {spot:.2f} vs target {position.target:.2f}")]

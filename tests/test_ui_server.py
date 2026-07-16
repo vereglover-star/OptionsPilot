@@ -181,6 +181,89 @@ class TestModeAPI:
         assert client.post("/api/mode", json={"mode": "yolo"}).status_code == 422
 
 
+class TestManualTradingAPI:
+    def chain(self, client):
+        d = client.get("/api/chain", params={"symbol": "SPY"}).json()
+        assert d["chain"], d
+        return d
+
+    def atm_call(self, d):
+        spot = d["spot"]
+        calls = [r for r in d["chain"] if r["right"] == "call"]
+        return min(calls, key=lambda r: abs(r["strike"] - spot))
+
+    def test_chain_endpoint_serves_ticket_data(self, client):
+        d = self.chain(client)
+        row = self.atm_call(d)
+        assert row["bid"] > 0 and row["ask"] >= row["bid"]
+        assert 0 < abs(row["delta"]) < 1
+        assert d["expirations"]
+
+    def test_market_buy_then_close(self, client):
+        d = self.chain(client)
+        row = self.atm_call(d)
+        r = client.post("/api/orders", json={
+            "kind": "market", "side": "buy_to_open", "symbol": "SPY",
+            "expiration": d["expiration"], "strike": row["strike"],
+            "right": "call", "quantity": 2,
+        }).json()
+        assert r["event"] == "filled"
+        s = client.get("/api/status").json()
+        assert s["positions"][0]["quantity"] == 2
+        r2 = client.post("/api/orders", json={
+            "kind": "market", "side": "sell_to_close", "symbol": "SPY",
+            "expiration": d["expiration"], "strike": row["strike"],
+            "right": "call", "quantity": 2,
+        }).json()
+        assert r2["event"] == "filled"
+        assert client.get("/api/status").json()["positions"] == []
+
+    def test_stop_loss_lifecycle_via_scan(self, client):
+        d = self.chain(client)
+        row = self.atm_call(d)
+        base = {"symbol": "SPY", "expiration": d["expiration"],
+                "strike": row["strike"], "right": "call"}
+        client.post("/api/orders", json={
+            **base, "kind": "market", "side": "buy_to_open", "quantity": 1})
+        manual_contract = client.get("/api/status").json()["positions"][0]["contract"]
+        r = client.post("/api/orders", json={
+            **base, "kind": "stop_loss", "side": "sell_to_close",
+            "quantity": 1, "tif": "gtc", "stop_level": d["spot"] - 2.0}).json()
+        assert r["event"] == "working"
+        working = client.get("/api/orders").json()["working"]
+        assert len(working) == 1 and working[0]["kind"] == "stop_loss"
+        # underlying tanks; the next cycle fires the stop
+        client.provider.spot = d["spot"] - 3.0
+        client.post("/api/scan")
+        assert client.get("/api/orders").json()["working"] == []
+        # the manual position is stopped out (the AI is free to open its own
+        # afterwards in the same cycle — that's unrelated to this order)
+        positions = client.get("/api/status").json()["positions"]
+        assert all(p["contract"] != manual_contract for p in positions)
+        hist = client.get("/api/orders").json()["history"]
+        assert any(h["status"] == "filled" and h["kind"] == "stop_loss"
+                   for h in hist)
+
+    def test_invalid_order_rejected(self, client):
+        d = self.chain(client)
+        r = client.post("/api/orders", json={
+            "kind": "limit", "side": "buy_to_open", "symbol": "SPY",
+            "expiration": d["expiration"], "strike": self.atm_call(d)["strike"],
+            "right": "call", "quantity": 1,          # limit without price
+        })
+        assert r.status_code == 422 and "limit_price" in r.json()["error"]
+
+    def test_account_metrics_shape(self, client):
+        m = client.get("/api/account/metrics").json()
+        assert m["portfolio_value"] == 25_000.0
+        assert m["buying_power"] == 25_000.0
+        assert m["total_return_pct"] == 0.0
+        assert m["max_drawdown_pct"] == 0.0
+        for key in ("win_rate", "profit_factor", "avg_win", "avg_loss",
+                    "daily_pnl", "unrealized_pnl", "equity_history"):
+            assert key in m
+
+
 class TestWebSocket:
     def test_ws_pushes_status(self, client):
         with client.websocket_connect("/ws") as ws:

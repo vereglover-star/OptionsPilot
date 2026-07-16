@@ -9,3 +9,5 @@ OptionsPilot.spec
 /logs/
 config.local.yaml
 .pytest_cache/
+
+.Rhistory

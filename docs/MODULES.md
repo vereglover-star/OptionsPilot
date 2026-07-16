@@ -81,7 +81,19 @@ threshold, delta/DTE/liquidity filters, evidence weight overrides), `risk`
 - `PositionManager.review(position, spot, ts, opposing_choch)` → `[ExitIntent]`.
   Priority: stop → target → invalidation → partial (half off, stop → breakeven).
   Mutates position management fields; caller persists via
-  `broker.update_position_management`.
+  `broker.update_position_management`. **Only touches `managed_by == "ai"`
+  positions** — manual positions belong to the OrderManager.
+- `OrderManager` (`broker/orders.py`) — working orders for manual trading:
+  MARKET (immediate), LIMIT (option premium), STOP_LOSS / TAKE_PROFIT /
+  TRAILING_STOP (underlying levels, put-aware mirroring), DAY (expires 16:00
+  ET) / GTC. `place()` validates (position/reservation checks, required
+  params), `evaluate(now, get_spot, get_option_quote)` runs once per scan
+  cycle and returns fill/expiry/cancel events; sell orders auto-cancel when
+  the position closes first. Persisted to `data/orders.db` (restart-safe;
+  fills after restart use live quotes, never stored ones).
+- `PaperBroker.open_manual(contract, qty, ts, entry_spot)` — plan-less entry
+  for Human Mode; `record_equity_snapshot` / `equity_history` persist equity
+  for lifetime max-drawdown and return metrics.
 - `registry.create_broker(config, db_path, cash)` — the only place brokers are
   constructed. `paper` is real; `alpaca`/`tradier`/`webull`/`ibkr` are
   extension slots that raise `BrokerError` with adapter guidance. The live

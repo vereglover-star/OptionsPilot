@@ -37,9 +37,12 @@ def setup_logging(config: LoggingConfig, base_dir: str | Path = ".") -> None:
         root.removeHandler(h)
         h.close()
 
-    console = logging.StreamHandler()
-    console.setFormatter(formatter)
-    root.addHandler(console)
+    # Windowed (no-console) builds have sys.stderr = None; file logs only.
+    import sys
+    if sys.stderr is not None:
+        console = logging.StreamHandler()
+        console.setFormatter(formatter)
+        root.addHandler(console)
 
     combined = logging.handlers.RotatingFileHandler(
         log_dir / "app.log", maxBytes=config.max_bytes,

@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time as _time
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -118,6 +118,10 @@ class UIServer:
                 positions.append({
                     "contract": p.contract.symbol,
                     "underlying": p.contract.underlying,
+                    "expiration": p.contract.expiration.isoformat(),
+                    "strike": p.contract.strike,
+                    "right": p.contract.right.value,
+                    "managed_by": p.managed_by,
                     "direction": p.direction.value,
                     "quantity": p.quantity,
                     "avg_price": round(p.avg_price, 2),
@@ -168,6 +172,120 @@ class UIServer:
                     for e in orch.notifier.history[-15:]
                 ][::-1],
             }
+
+    # ── manual trading (Human Mode order flow) ───────────────────────────────
+
+    def chain_payload(self, symbol: str, expiration: str = "") -> dict:
+        from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
+
+        symbol = symbol.upper()
+        with self.lock:
+            provider = self.orch.provider
+            expirations = [e.isoformat() for e in provider.get_expirations(symbol)]
+            if not expirations:
+                return {"symbol": symbol, "expirations": [], "chain": []}
+            exp = expiration or expirations[0]
+            spot = provider.get_quote(symbol).last
+            today = utcnow().date()
+            chain = provider.get_option_chain(symbol, date.fromisoformat(exp))
+            rows = []
+            for c in chain:
+                if c.delta == 0.0:
+                    c = enrich_greeks(c, spot, today)
+                rows.append({
+                    "strike": c.strike, "right": c.right.value,
+                    "bid": c.bid, "ask": c.ask, "mid": round(c.mid, 2),
+                    "delta": round(c.delta, 3), "iv": round(c.implied_volatility, 4),
+                    "volume": c.volume, "open_interest": c.open_interest,
+                    "liquidity": liquidity_score(c),
+                    "dte": c.dte(today),
+                })
+            return {"symbol": symbol, "spot": spot, "expiration": exp,
+                    "expirations": expirations, "chain": rows}
+
+    def place_order(self, payload: dict) -> dict:
+        from optionspilot.broker.orders import OrderKind, TIF
+        from optionspilot.core.models import OptionRight
+
+        kind = OrderKind(str(payload.get("kind", "market")))
+        tif = TIF(str(payload.get("tif", "day")))
+        side = str(payload.get("side", "buy_to_open"))
+        symbol = str(payload.get("symbol", "")).upper()
+        expiration = date.fromisoformat(str(payload.get("expiration")))
+        strike = float(payload.get("strike"))
+        right = OptionRight(str(payload.get("right")))
+        quantity = int(payload.get("quantity", 1))
+
+        with self.lock:
+            provider = self.orch.provider
+            chain = provider.get_option_chain(symbol, expiration)
+            contract = next(
+                (c for c in chain
+                 if c.strike == strike and c.right is right), None)
+            if contract is None:
+                raise ValueError(
+                    f"no {right.value} @ {strike} for {symbol} {expiration}")
+            try:
+                spot = provider.get_quote(symbol).last
+            except Exception:  # noqa: BLE001 — spot is advisory for buys
+                spot = 0.0
+            order, event = self.orch.orders.place(
+                kind=kind, side=side, contract=contract, quantity=quantity,
+                ts=utcnow(), tif=tif,
+                limit_price=float(payload.get("limit_price") or 0),
+                stop_level=float(payload.get("stop_level") or 0),
+                trail=float(payload.get("trail") or 0),
+                trail_pct=float(payload.get("trail_pct") or 0),
+                spot=spot,
+            )
+        return {"order": order.to_dict(),
+                "event": event["event"] if event else "working"}
+
+    def account_metrics(self) -> dict:
+        with self.lock:
+            broker = self.orch.broker
+            acct = broker.get_account()
+            trades = self.orch.journal.all()
+            marks = (broker.current_marks()
+                     if hasattr(broker, "current_marks") else {})
+            unrealized = sum(
+                p.unrealized_pnl(marks.get(p.contract.symbol, p.avg_price))
+                for p in broker.get_positions()
+            )
+            history = (broker.equity_history()
+                       if hasattr(broker, "equity_history") else [])
+            now_et = utcnow().astimezone(ET)
+            day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)
+            daily = sum(t.pnl for t in trades
+                        if t.exit_ts.astimezone(ET) >= day_start)
+        start = self.cfg.risk.starting_balance
+        pnls = [t.pnl for t in trades]
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        gross_win, gross_loss = sum(wins), abs(sum(losses))
+        max_dd = 0.0
+        peak = start
+        for _, equity in history:
+            peak = max(peak, equity)
+            if peak > 0:
+                max_dd = max(max_dd, (peak - equity) / peak * 100)
+        return {
+            "cash": acct.cash,
+            "buying_power": acct.cash,      # options buying power = cash (no margin)
+            "portfolio_value": acct.equity,
+            "unrealized_pnl": round(unrealized, 2),
+            "realized_pnl": acct.realized_pnl,
+            "daily_pnl": round(daily, 2),
+            "total_return_pct": round((acct.equity / start - 1) * 100, 2),
+            "trades": len(trades),
+            "win_rate": round(len(wins) / len(pnls), 4) if pnls else 0.0,
+            "avg_win": round(gross_win / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
+            "profit_factor": (round(gross_win / gross_loss, 2)
+                              if gross_loss else None),
+            "max_drawdown_pct": round(max_dd, 2),
+            "equity_history": history[-500:],
+        }
 
     # ── watchlist management ─────────────────────────────────────────────────
 
@@ -413,6 +531,47 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     @app.get("/api/config")
     def config_view():
         return JSONResponse(config.model_dump(mode="json"))
+
+    @app.get("/api/chain")
+    def chain_view(symbol: str, expiration: str = ""):
+        try:
+            return server.chain_payload(symbol, expiration)
+        except Exception as exc:  # noqa: BLE001 — surface as a clean 502
+            log.error("chain fetch failed: %s", exc)
+            return JSONResponse({"error": f"chain unavailable: {exc}"},
+                                status_code=502)
+
+    @app.get("/api/orders")
+    def orders_view():
+        with server.lock:
+            return {
+                "working": [o.to_dict() for o in server.orch.orders.working()],
+                "history": server.orch.orders.history(50),
+            }
+
+    @app.post("/api/orders")
+    def orders_place(payload: dict):
+        from optionspilot.broker.base import BrokerError
+
+        try:
+            return server.place_order(payload)
+        except (ValueError, KeyError, TypeError, BrokerError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.post("/api/orders/cancel")
+    def orders_cancel(payload: dict):
+        from optionspilot.broker.base import BrokerError
+
+        try:
+            with server.lock:
+                order = server.orch.orders.cancel(str(payload.get("id", "")))
+            return order.to_dict()
+        except BrokerError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+
+    @app.get("/api/account/metrics")
+    def account_metrics():
+        return server.account_metrics()
 
     @app.get("/api/watchlist")
     def watchlist_view():

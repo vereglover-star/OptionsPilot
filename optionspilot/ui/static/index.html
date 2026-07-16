@@ -171,6 +171,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
 <nav>
   <div class="logo">Options<span>Pilot</span></div>
   <button data-tab="dashboard" class="active">Dashboard</button>
+  <button data-tab="trade">Trade</button>
   <button data-tab="watchlist">Watchlist</button>
   <button data-tab="journal">Journal</button>
   <button data-tab="backtest">Backtest</button>
@@ -223,6 +224,62 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
     <div class="panel">
       <h2>Open positions</h2>
       <div id="positions"></div>
+    </div>
+  </section>
+
+  <!-- TRADE (manual paper trading) -->
+  <section id="tab-trade" style="display:none">
+    <div class="cards" id="acct-cards"></div>
+    <div class="grid2">
+      <div class="panel">
+        <h2>Option chain</h2>
+        <div class="wl-tools" style="margin-top:0">
+          <input id="tk-symbol" placeholder="Symbol (e.g. SPY)" value="SPY" style="width:130px">
+          <select id="tk-exp" style="min-width:130px"><option>—</option></select>
+          <span class="seg" id="tk-right">
+            <button data-right="call" class="active">Calls</button>
+            <button data-right="put">Puts</button>
+          </span>
+          <button class="btn" id="tk-load">Load chain</button>
+          <span class="hint" id="tk-spot" style="display:inline"></span>
+        </div>
+        <div id="tk-chain" style="max-height:420px; overflow:auto">
+          <div class="empty">Load a chain to pick a contract.</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Order ticket <span class="hint" style="display:inline">— paper only, fills vs delayed quotes each scan cycle</span></h2>
+        <div id="tk-selected" class="empty">Click a chain row to select a contract.</div>
+        <form class="bt" id="tk-form" style="display:none; margin-top:10px">
+          <label>Side
+            <select id="tk-side">
+              <option value="buy_to_open">Buy to open</option>
+              <option value="sell_to_close">Sell to close</option>
+            </select></label>
+          <label>Type
+            <select id="tk-kind">
+              <option value="market">Market</option>
+              <option value="limit">Limit</option>
+              <option value="stop_loss">Stop loss</option>
+              <option value="take_profit">Take profit</option>
+              <option value="trailing_stop">Trailing stop</option>
+            </select></label>
+          <label>Qty <input id="tk-qty" type="number" value="1" min="1" style="width:70px"></label>
+          <label>TIF
+            <select id="tk-tif"><option value="day">Day</option><option value="gtc">GTC</option></select></label>
+          <label id="tk-f-limit" style="display:none">Limit price <input id="tk-limit" type="number" step="0.01"></label>
+          <label id="tk-f-stop" style="display:none">Underlying level <input id="tk-stop" type="number" step="0.01"></label>
+          <label id="tk-f-trail" style="display:none">Trail (pts) <input id="tk-trail" type="number" step="0.1"></label>
+          <label id="tk-f-trailpct" style="display:none">or trail % <input id="tk-trailpct" type="number" step="0.1"></label>
+          <button class="btn primary" type="submit">Place order</button>
+        </form>
+        <div class="hint">Stop loss / take profit / trailing stop trigger on the <b>underlying</b>
+          price; limit orders on the option premium. Day orders expire at 4:00 pm ET.</div>
+        <h3 class="sub">Working orders</h3>
+        <div id="tk-working"><div class="empty">None.</div></div>
+        <h3 class="sub">Recent order history</h3>
+        <div id="tk-history"><div class="empty">None yet.</div></div>
+      </div>
     </div>
   </section>
 
@@ -363,6 +420,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("main section").forEach(s => s.style.display = "none");
   $("tab-" + b.dataset.tab).style.display = "";
   $("tab-title").textContent = b.textContent;
+  if (b.dataset.tab === "trade") loadTrade();
   if (b.dataset.tab === "watchlist") loadWatchlist();
   if (b.dataset.tab === "journal") loadJournal();
   if (b.dataset.tab === "learning") loadLearning();
@@ -437,15 +495,29 @@ function renderStatus(s) {
     ? `<div class="empty">Flat. ${highRisk
         ? "High-Risk Mode: threshold adapts to setup quality (floor " + s.high_risk_floor + "%)."
         : "The engine only trades ≥ " + s.min_confidence + "% confidence."}</div>`
-    : `<table><tr><th>Contract</th><th>Dir</th><th class="num">Qty</th>
+    : `<table><tr><th>Contract</th><th>Dir</th><th>By</th><th class="num">Qty</th>
         <th class="num">Avg</th><th class="num">Mark</th><th class="num">Unrealized</th>
-        <th class="num">Stop</th><th class="num">Target</th></tr>` +
-      s.positions.map(q => `<tr><td>${q.contract}</td>
+        <th class="num">Stop</th><th class="num">Target</th><th></th></tr>` +
+      s.positions.map((q, i) => `<tr><td>${q.contract}</td>
         <td><span class="chip ${q.direction}">${q.direction}</span></td>
+        <td>${q.managed_by === "manual" ? "you" : "AI"}</td>
         <td class="num">${q.quantity}</td><td class="num">${q.avg_price.toFixed(2)}</td>
         <td class="num">${q.mark.toFixed(2)}</td>
         <td class="num ${cls(q.unrealized)}">${fmt$(q.unrealized)}</td>
-        <td class="num">${q.stop}</td><td class="num">${q.target}</td></tr>`).join("") + "</table>";
+        <td class="num">${q.stop || "—"}</td><td class="num">${q.target || "—"}</td>
+        <td><button class="btn pos-close" data-i="${i}"
+          style="padding:2px 9px; font-size:12px">Close</button></td></tr>`).join("") + "</table>";
+  document.querySelectorAll(".pos-close").forEach(b => b.onclick = async () => {
+    const q = lastStatus.positions[+b.dataset.i];
+    if (!q) return;
+    const resp = await fetch("/api/orders", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({kind: "market", side: "sell_to_close",
+        symbol: q.underlying, expiration: q.expiration, strike: q.strike,
+        right: q.right, quantity: q.quantity})});
+    const d = await resp.json();
+    toast(resp.ok ? `✓ closed ${q.contract}: ${d.order.result}` : d.error, resp.ok);
+  });
 
   $("notifs").innerHTML = s.notifications.length === 0
     ? `<div class="empty">Nothing yet.</div>`
@@ -868,6 +940,154 @@ $("wl-list").addEventListener("keydown", e => {
     renderWL();
   }
 });
+
+/* ── manual trading (Trade tab) ───────────────────────────────────────── */
+let tkChain = null, tkSel = null, tkRight = "call";
+const post = (url, body) => fetch(url, {method: "POST",
+  headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+
+async function loadTrade() {
+  await Promise.all([loadMetrics(), loadOrders()]);
+  if (!tkChain) loadChain();
+}
+
+async function loadMetrics() {
+  const m = await (await fetch("/api/account/metrics")).json();
+  $("acct-cards").innerHTML = [
+    ["Buying power", fmt$(m.buying_power), ""],
+    ["Portfolio value", fmt$(m.portfolio_value), ""],
+    ["Unrealized P/L", fmt$(m.unrealized_pnl), cls(m.unrealized_pnl)],
+    ["Realized P/L", fmt$(m.realized_pnl), cls(m.realized_pnl)],
+    ["Daily P/L", fmt$(m.daily_pnl), cls(m.daily_pnl)],
+    ["Total return", m.total_return_pct.toFixed(2) + "%", cls(m.total_return_pct)],
+    ["Win rate", m.trades ? (m.win_rate * 100).toFixed(0) + "%" : "—", ""],
+    ["Profit factor", m.profit_factor ?? "—", ""],
+    ["Avg win / loss", m.trades ? `${m.avg_win} / ${m.avg_loss}` : "—", ""],
+    ["Max drawdown", m.max_drawdown_pct.toFixed(2) + "%", ""],
+  ].map(([k, v, c]) =>
+    `<div class="card"><div class="k">${k}</div><div class="v small ${c}">${v}</div></div>`).join("");
+}
+
+async function loadChain() {
+  const symbol = $("tk-symbol").value.trim().toUpperCase();
+  if (!symbol) return;
+  $("tk-chain").innerHTML = `<div class="empty">Loading ${symbol}…</div>`;
+  const exp = $("tk-exp").value !== "—" ? $("tk-exp").value : "";
+  const resp = await fetch(`/api/chain?symbol=${encodeURIComponent(symbol)}` +
+                           (exp ? `&expiration=${exp}` : ""));
+  const d = await resp.json();
+  if (d.error) { toast(d.error, false); $("tk-chain").innerHTML =
+    `<div class="empty">${esc(d.error)}</div>`; return; }
+  tkChain = d;
+  $("tk-exp").innerHTML = d.expirations.map(e =>
+    `<option ${e === d.expiration ? "selected" : ""}>${e}</option>`).join("");
+  $("tk-spot").textContent = `spot $${d.spot.toFixed(2)}`;
+  renderChain();
+}
+
+function renderChain() {
+  if (!tkChain) return;
+  const rows = tkChain.chain.filter(r => r.right === tkRight)
+      .sort((a, b) => a.strike - b.strike);
+  $("tk-chain").innerHTML = `<table>
+    <tr><th class="num">Strike</th><th class="num">Bid</th><th class="num">Ask</th>
+    <th class="num">Delta</th><th class="num">IV</th><th class="num">OI</th>
+    <th class="num">Liq</th></tr>` +
+    rows.map(r => {
+      const atm = Math.abs(r.strike - tkChain.spot) < (tkChain.spot * 0.005);
+      const sel = tkSel && tkSel.strike === r.strike && tkSel.right === r.right;
+      return `<tr class="expandable ${sel ? "sel" : ""}" data-strike="${r.strike}"
+        style="${atm ? "background:#16233a" : ""}">
+        <td class="num"><b>${r.strike}</b></td><td class="num">${r.bid.toFixed(2)}</td>
+        <td class="num">${r.ask.toFixed(2)}</td><td class="num">${r.delta.toFixed(2)}</td>
+        <td class="num">${(r.iv * 100).toFixed(1)}%</td><td class="num">${r.open_interest}</td>
+        <td class="num">${r.liquidity.toFixed(0)}</td></tr>`;
+    }).join("") + "</table>";
+  document.querySelectorAll("#tk-chain tr[data-strike]").forEach(tr =>
+    tr.onclick = () => selectContract(+tr.dataset.strike));
+}
+
+function selectContract(strike) {
+  const row = tkChain.chain.find(r => r.strike === strike && r.right === tkRight);
+  if (!row) return;
+  tkSel = row;
+  $("tk-selected").className = "";
+  $("tk-selected").innerHTML =
+    `<b>${tkChain.symbol} ${tkChain.expiration} ${row.strike} ${row.right.toUpperCase()}</b>
+     &nbsp; bid ${row.bid.toFixed(2)} / ask ${row.ask.toFixed(2)} · Δ ${row.delta.toFixed(2)}
+     · ${row.dte} DTE · ~$${(row.mid * 100).toFixed(0)}/contract`;
+  $("tk-form").style.display = "";
+  renderChain();
+}
+
+$("tk-load").onclick = e => { e.preventDefault(); loadChain(); };
+$("tk-symbol").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); tkChain = null; loadChain(); }
+});
+$("tk-exp").onchange = () => loadChain();
+document.querySelectorAll("#tk-right button").forEach(b => b.onclick = () => {
+  tkRight = b.dataset.right;
+  document.querySelectorAll("#tk-right button").forEach(x =>
+    x.classList.toggle("active", x === b));
+  tkSel = null; $("tk-form").style.display = "none";
+  $("tk-selected").className = "empty";
+  $("tk-selected").textContent = "Click a chain row to select a contract.";
+  renderChain();
+});
+$("tk-kind").onchange = () => {
+  const k = $("tk-kind").value;
+  $("tk-f-limit").style.display = k === "limit" ? "" : "none";
+  $("tk-f-stop").style.display =
+    (k === "stop_loss" || k === "take_profit") ? "" : "none";
+  $("tk-f-trail").style.display = k === "trailing_stop" ? "" : "none";
+  $("tk-f-trailpct").style.display = k === "trailing_stop" ? "" : "none";
+};
+
+$("tk-form").onsubmit = async e => {
+  e.preventDefault();
+  if (!tkSel) return;
+  const body = {
+    kind: $("tk-kind").value, side: $("tk-side").value,
+    tif: $("tk-tif").value, symbol: tkChain.symbol,
+    expiration: tkChain.expiration, strike: tkSel.strike, right: tkSel.right,
+    quantity: +$("tk-qty").value,
+    limit_price: +$("tk-limit").value || 0,
+    stop_level: +$("tk-stop").value || 0,
+    trail: +$("tk-trail").value || 0, trail_pct: +$("tk-trailpct").value || 0,
+  };
+  const resp = await post("/api/orders", body);
+  const d = await resp.json();
+  if (!resp.ok) { toast(d.error, false); return; }
+  toast(d.event === "filled"
+    ? `✓ filled: ${d.order.result}`
+    : `order working: ${d.order.kind} ${d.order.contract} x${d.order.quantity} (${d.order.tif})`);
+  await Promise.all([loadMetrics(), loadOrders()]);
+};
+
+async function loadOrders() {
+  const d = await (await fetch("/api/orders")).json();
+  $("tk-working").innerHTML = d.working.length === 0
+    ? `<div class="empty">None.</div>`
+    : `<table><tr><th>Kind</th><th>Contract</th><th class="num">Qty</th>
+       <th>TIF</th><th class="num">Trigger</th><th></th></tr>` +
+      d.working.map(o => `<tr><td>${o.kind}</td><td>${o.contract}</td>
+        <td class="num">${o.quantity}</td><td>${o.tif}</td>
+        <td class="num">${o.limit_price ?? o.stop_level ?? o.trail_stop_at ?? "—"}</td>
+        <td><button class="rm" data-id="${o.id}" title="cancel">×</button></td></tr>`
+      ).join("") + "</table>";
+  document.querySelectorAll("#tk-working .rm").forEach(b => b.onclick = async () => {
+    const resp = await post("/api/orders/cancel", {id: b.dataset.id});
+    toast(resp.ok ? "order cancelled" : (await resp.json()).error, resp.ok);
+    loadOrders();
+  });
+  $("tk-history").innerHTML = d.history.length === 0
+    ? `<div class="empty">None yet.</div>`
+    : `<table><tr><th>Kind</th><th>Contract</th><th class="num">Qty</th>
+       <th>Status</th><th>Result</th></tr>` +
+      d.history.slice(0, 12).map(o => `<tr><td>${o.kind}</td><td>${o.contract}</td>
+        <td class="num">${o.quantity}</td><td>${o.status}</td>
+        <td>${esc(o.result)}</td></tr>`).join("") + "</table>";
+}
 
 /* ── scan / halt buttons ──────────────────────────────────────────────── */
 $("scan-btn").onclick = async () => {

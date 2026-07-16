@@ -23,9 +23,14 @@ if (Test-Path $dataDir) {
     Write-Host "Backed up app data to $backup"
 }
 
+# --windowed: no console window — this is a real desktop app. CLI commands
+# still work headlessly (OptionsPilot.exe scan) but print nothing; use
+# `python -m optionspilot` from the repo for CLI output.
 .\.venv\Scripts\pyinstaller --noconfirm --clean `
   --name OptionsPilot `
   --onedir `
+  --windowed `
+  --icon "assets\optionspilot.ico" `
   --add-data "optionspilot\ui\static;optionspilot\ui\static" `
   --add-data "optionspilot\data_assets;optionspilot\data_assets" `
   --collect-all webview `

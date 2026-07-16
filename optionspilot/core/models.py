@@ -256,6 +256,8 @@ class Position:
     stop_current: float = 0.0         # working stop on the underlying (may trail)
     target: float = 0.0               # target on the underlying
     partials_remaining: tuple[float, ...] = ()
+    managed_by: str = "ai"            # "ai": PositionManager runs stops/targets;
+                                      # "manual": user's working orders do
 
     def unrealized_pnl(self, mark: float) -> float:
         return (mark - self.avg_price) * self.quantity * 100

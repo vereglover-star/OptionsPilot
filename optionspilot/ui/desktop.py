@@ -18,10 +18,25 @@ from optionspilot.core.logging_setup import get_logger
 log = get_logger("ui")
 
 
+SINGLE_INSTANCE_PORT = 8786   # held open as a cross-process mutex
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+def _acquire_single_instance() -> socket.socket | None:
+    """Two instances sharing one SQLite account file is corruption waiting to
+    happen — hold a localhost port for the app's lifetime as a mutex."""
+    lock = socket.socket()
+    try:
+        lock.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+        return lock
+    except OSError:
+        lock.close()
+        return None
 
 
 def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI entry point
@@ -29,6 +44,20 @@ def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI e
     import webview
 
     from optionspilot.ui.server import create_app
+
+    instance_lock = _acquire_single_instance()
+    if instance_lock is None:
+        log.warning("another OptionsPilot instance is already running — exiting")
+        webview.create_window(
+            "OptionsPilot", html="<body style='background:#0d0d0d;color:#e6e8eb;"
+            "font-family:system-ui;display:grid;place-items:center;height:95vh'>"
+            "<div><h2>OptionsPilot is already running</h2>"
+            "<p>Close the other window first — two instances would fight over "
+            "the same paper account.</p></div></body>",
+            width=460, height=220,
+        )
+        webview.start()
+        return
 
     port = _free_port()
     app = create_app(config, run_loop=True, runtime=runtime)
@@ -53,3 +82,4 @@ def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI e
     )
     webview.start()
     server.should_exit = True
+    instance_lock.close()
