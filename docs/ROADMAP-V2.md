@@ -1,0 +1,88 @@
+# OptionsPilot V2 — Professional Trading Platform Roadmap
+
+Goal: evolve the working v1 paper-trading system into a polished desktop
+trading platform — TradingView-inspired workspace, full manual paper trading
+with an AI coach (Human Mode), autonomous trading (AI Mode), replay, and a
+professional journal — while keeping the v1 discipline: every phase is built,
+tested, and committed before the next begins.
+
+## Architecture decision: keep the Python + pywebview + PyInstaller shell
+
+Considered: Electron, Tauri. Rejected for now:
+- The backend (pandas/numpy analysis, engine, broker sim) is Python and would
+  be embedded either way; Electron/Tauri would only replace the *window*.
+- The current shell already meets the standalone requirements: single exe,
+  embedded backend auto-starts, clean stop on close, state beside the exe.
+- A rewrite risks 240+ passing tests for zero user-visible gain.
+Revisit if we ever need multi-window/multi-monitor layouts (Tauri preferred).
+
+Remaining gaps for "professional desktop app" feel are addressed in V2-1:
+windowed (no console) build, app icon, shutdown audit.
+
+## Phases
+
+### V2-0 — Stabilize (complete the in-flight work)
+- [ ] Watchlist manager + runtime settings + mode toggle: suite green
+- [ ] Live browser verification; commit
+
+### V2-1 — True desktop application
+- [ ] `--noconsole` windowed build for the GUI path (CLI stays available via
+      `python -m optionspilot`; document)
+- [ ] Application icon (.ico), window title/branding pass
+- [ ] Clean-shutdown audit (threads, sqlite, uvicorn) on window close
+- [ ] Build script hardening (data preserved — done; verify output)
+
+### V2-2 — Trading engine: orders, manual trading, account metrics
+- [ ] `OrderManager` module: working orders evaluated each cycle against fresh
+      quotes — MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP; DAY / GTC
+- [ ] Manual trading API: place/cancel/modify orders, close/scale positions,
+      pick contract from a served option chain
+- [ ] Order ticket UI + working-orders panel
+- [ ] Account metrics endpoint: buying power, portfolio value, unrealized/
+      realized/daily P/L, total return %, win rate, avg win/loss, profit
+      factor, max drawdown (from persisted equity history)
+- [ ] Stock (share) positions after options are solid
+- [ ] Fill realism documented (delayed data; evaluated per cycle)
+
+### V2-3 — AI Mode vs Human Mode
+- [ ] `operating_mode: ai | human` — instant switch, persisted (runtime store)
+- [ ] Human Mode: engine still scans/advises, NEVER auto-trades
+- [ ] `TradeCoach`: deterministic post-trade review from the analysis stack —
+      before (setup quality, trend/momentum/volume/IV/theta/strike/DTE,
+      chased?), during (stop moved? averaged down? exited vs plan?), after
+      (why it won/lost, what pros would do differently), score /100, EV
+      estimate, mistake tags
+- [ ] Mistake taxonomy + per-trade tags persisted in the journal
+- [ ] Coaching profile: recurring mistakes, strengths/weaknesses, long-term stats
+
+### V2-4 — Chart workspace (TradingView-inspired)
+- [ ] Bundle lightweight-charts (Apache-2.0, offline in the exe)
+- [ ] Workspace layout: top bar (ticker search, live price, market status,
+      timeframe selector, mode toggles, settings), right sidebar (watchlist,
+      positions, orders, account, AI analysis), bottom panel (history,
+      journal, coaching, performance, strategy tester)
+- [ ] Chart: candles, volume, zoom/pan/crosshair, multiple timeframes,
+      indicator overlays (EMA/VWAP/Bollinger/Supertrend), position/order lines
+- [ ] Drawing tools on an overlay: trendline, horizontal line, fib
+      retracement, rectangle, note — persisted per symbol
+- [ ] Trade-from-chart (order ticket prefilled)
+
+### V2-5 — Replay engine
+- [ ] Pick a historical day/session; future candles hidden server-side
+- [ ] Play / pause / step-one-candle / speed control
+- [ ] Separate replay paper account; orders fill against replay bars
+- [ ] Coach reviews replay trades exactly like live ones
+
+### V2-6 — Journal & improvement dashboard
+- [ ] Chart-context snapshot per trade (candle window + entry/exit markers,
+      re-rendered on demand — deliberate substitute for static screenshots)
+- [ ] Notes + emotions fields; filter by strategy/symbol/P&L/date/mistake
+- [ ] Improvement dashboard: win-rate trend, weaknesses, best hours/days/
+      conditions, mistake frequency over time, recommended exercises
+
+## Known constraints carried forward (honest limits)
+- Free yfinance data is ~15-min delayed with limited intraday history; fills
+  are simulated per scan cycle. A paid feed (Polygon/Tradier) is the upgrade
+  path and slots into the existing provider interface.
+- The AI coach is deterministic (built on the analysis engine), not an LLM.
+- Live brokers stay out until sustained paper profitability (v1 gate stands).
