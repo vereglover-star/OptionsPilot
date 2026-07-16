@@ -21,28 +21,29 @@ windowed (no console) build, app icon, shutdown audit.
 
 ## Phases
 
-### V2-0 — Stabilize (complete the in-flight work)
-- [ ] Watchlist manager + runtime settings + mode toggle: suite green
-- [ ] Live browser verification; commit
+### V2-0 — Stabilize (complete) 
+- [x] Watchlist manager + runtime settings + mode toggle: 272 green, verified live
 
-### V2-1 — True desktop application
-- [ ] `--noconsole` windowed build for the GUI path (CLI stays available via
-      `python -m optionspilot`; document)
-- [ ] Application icon (.ico), window title/branding pass
-- [ ] Clean-shutdown audit (threads, sqlite, uvicorn) on window close
-- [ ] Build script hardening (data preserved — done; verify output)
+### V2-1 — True desktop application (complete)
+- [x] `--windowed` no-console build (CLI stays available via
+      `python -m optionspilot`)
+- [x] Application icon (scripts/make_icon.py → assets/optionspilot.ico)
+- [x] Single-instance guard (localhost mutex + friendly notice window)
+- [x] Windowed-safe logging (no console handler when stderr is absent)
 
-### V2-2 — Trading engine: orders, manual trading, account metrics
-- [ ] `OrderManager` module: working orders evaluated each cycle against fresh
-      quotes — MARKET, LIMIT, STOP_LOSS, TAKE_PROFIT, TRAILING_STOP; DAY / GTC
-- [ ] Manual trading API: place/cancel/modify orders, close/scale positions,
-      pick contract from a served option chain
-- [ ] Order ticket UI + working-orders panel
-- [ ] Account metrics endpoint: buying power, portfolio value, unrealized/
-      realized/daily P/L, total return %, win rate, avg win/loss, profit
-      factor, max drawdown (from persisted equity history)
-- [ ] Stock (share) positions after options are solid
-- [ ] Fill realism documented (delayed data; evaluated per cycle)
+### V2-2 — Trading engine: orders, manual trading, account metrics (complete)
+- [x] `OrderManager`: MARKET, LIMIT (premium), STOP_LOSS / TAKE_PROFIT /
+      TRAILING_STOP (underlying, put-aware); DAY (expires 16:00 ET) / GTC;
+      reservation checks; auto-cancel on position close; restart-safe
+- [x] Manual trading API: /api/chain, /api/orders place/list/cancel,
+      one-click position close; `managed_by` separation from AI positions
+- [x] Trade tab: account cards, live chain, order ticket, working orders
+- [x] /api/account/metrics: buying power, portfolio value, unrealized/
+      realized/daily P/L, total return %, win rate, avg win/loss, PF,
+      max drawdown from persisted equity snapshots
+- [ ] Stock (share) positions — deferred until after V2-3
+- [x] Fill realism documented (delayed data; per-cycle evaluation; pre-market
+      zero-quote orders reject cleanly)
 
 ### V2-3 — AI Mode vs Human Mode
 - [ ] `operating_mode: ai | human` — instant switch, persisted (runtime store)
