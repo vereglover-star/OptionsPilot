@@ -89,9 +89,27 @@ character `tradingview_secret`), then point a TradingView alert webhook at
 An alert triggers a scan of that symbol through the full engine + risk
 pipeline — it changes *when* the system looks, never *whether* it trades.
 
+## Watchlist
+
+Managed entirely from the app's **Watchlist** tab — no config editing:
+type a ticker and press Enter (autocomplete as you type), or paste a whole
+list from anywhere (commas, spaces, or new lines — `$AAPL`-style cashtags
+work too). Every symbol is validated against a bundled 12k-symbol US
+directory (unknown tickers fall back to a live quote check); duplicates and
+invalid symbols are reported without blocking the rest. One-click preset
+lists (Magnificent 7, AI Stocks, Semiconductors, …) plus a saveable
+"My Favorites". Pin (★) to top, drag ≡ to reorder, one-click remove, search
+within the list, sort by price / daily change / volume / market cap / AI
+confidence. Keyboard: Enter adds, Ctrl+V pastes-and-parses, Delete removes
+selected, Ctrl+A selects all. Everything saves automatically to
+`data/settings.json` and survives restarts. Capped at 30 symbols (the free
+data feed scans take seconds per symbol).
+
 ## Trading modes
 
-Set `engine.trading_mode` in `config.yaml`:
+Switch live from the app (segmented control in the header and Settings —
+takes effect on the next scan, persists across restarts), or set the default
+via `engine.trading_mode` in `config.yaml`:
 
 - **conservative** (default) — trades only at ≥ `min_confidence` (80%).
   Accuracy over frequency.
@@ -112,6 +130,15 @@ Set `engine.trading_mode` in `config.yaml`:
   limits, cooldowns and liquidity filters are identical in both modes.
   Every accept/reject is logged with the passed/failed confirmations and
   shown per-symbol on the dashboard.
+- **custom** — advanced users can set their own fixed confidence bar plus
+  risk-per-trade %, max trades/day, max contracts, min risk/reward, and
+  daily loss limit, from Settings → Advanced settings. Values are validated
+  like config.yaml (out-of-range is rejected); switching back to
+  conservative/high-risk restores the yaml values exactly.
+
+In-app mode switches and watchlist edits live in `data/settings.json`
+(they overlay config.yaml at startup; explicit `engine.evidence_weights`
+etc. in yaml still apply).
 
 ## Configuration
 

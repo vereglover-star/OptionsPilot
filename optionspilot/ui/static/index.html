@@ -83,6 +83,68 @@ tr.expandable:hover td { background:var(--surface-2); }
 .gate.ok { color:var(--good); }
 .gate b { font-weight:600; color:var(--ink-2); }
 
+/* segmented mode control */
+.seg { display:inline-flex; border:1px solid var(--ring); border-radius:999px; overflow:hidden; }
+.seg button { all:unset; cursor:pointer; padding:5px 12px; font-size:12px; color:var(--muted); }
+.seg button:hover { color:var(--ink); }
+.seg button.active { background:var(--surface-2); color:var(--ink); font-weight:600; }
+.seg button.active.hr { color:var(--warn); }
+
+/* toasts */
+#toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%) translateY(80px);
+         background:var(--surface-2); border:1px solid var(--good); color:var(--ink);
+         border-radius:10px; padding:10px 18px; font-size:13px; z-index:50;
+         transition:transform .18s ease; max-width:70vw; }
+#toast.show { transform:translateX(-50%) translateY(0); }
+#toast.err { border-color:var(--bad); }
+
+/* watchlist manager */
+.wl-addwrap { position:relative; margin-bottom:12px; }
+textarea.wl-input { width:100%; background:var(--surface-2); border:1px solid var(--ring);
+  color:var(--ink); border-radius:10px; padding:11px 13px; font-size:14px; resize:vertical;
+  min-height:44px; font-family:inherit; }
+textarea.wl-input:focus { outline:none; border-color:var(--accent); }
+.ac { position:absolute; top:100%; left:0; right:0; background:var(--surface-2);
+      border:1px solid var(--ring); border-radius:10px; margin-top:4px; z-index:20;
+      max-height:280px; overflow:auto; display:none; }
+.ac div { padding:8px 13px; cursor:pointer; display:flex; gap:10px; }
+.ac div:hover, .ac div.hot { background:var(--surface); }
+.ac .s { font-weight:700; width:64px; }
+.ac .n { color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.chips { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:6px; }
+.chips button { cursor:pointer; border:1px solid var(--ring); background:var(--surface-2);
+  color:var(--ink-2); border-radius:999px; padding:5px 12px; font-size:12px; }
+.chips button:hover { border-color:var(--accent); color:var(--ink); }
+.wl-tools { display:flex; gap:10px; align-items:center; margin:6px 0 10px; flex-wrap:wrap; }
+.wl-tools input, .wl-tools select { background:var(--surface-2); border:1px solid var(--ring);
+  color:var(--ink); border-radius:8px; padding:7px 10px; font-size:13px; }
+.wl-list { outline:none; }
+.wl-row { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:8px;
+  border-bottom:1px solid var(--grid); user-select:none; }
+.wl-row:hover { background:var(--surface-2); }
+.wl-row.sel { background:#16233a; }
+.wl-row.dragging { opacity:.4; }
+.wl-row .drag { cursor:grab; color:var(--muted); width:16px; }
+.wl-row .pin { all:unset; cursor:pointer; width:20px; color:var(--muted); text-align:center; }
+.wl-row .pin.on { color:var(--warn); }
+.wl-row .sym { font-weight:700; width:60px; }
+.wl-row .name { flex:1; color:var(--muted); font-size:12px; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; min-width:60px; }
+.wl-row .col { width:86px; text-align:right; font-variant-numeric:tabular-nums;
+  color:var(--ink-2); font-size:12.5px; }
+.wl-row .rm { all:unset; cursor:pointer; color:var(--muted); padding:0 6px; font-size:16px; }
+.wl-row .rm:hover { color:var(--bad); }
+.wl-head { display:flex; gap:10px; padding:2px 10px 6px; color:var(--muted); font-size:11px;
+  text-transform:uppercase; letter-spacing:.4px; }
+.wl-head .col { width:86px; text-align:right; }
+
+/* advanced custom mode form */
+.adv { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-top:12px; }
+.adv label { display:flex; flex-direction:column; gap:4px; color:var(--muted); font-size:12px; }
+.adv input { background:var(--surface-2); border:1px solid var(--ring); color:var(--ink);
+  border-radius:8px; padding:8px 10px; font-size:13px; }
+details.advwrap summary { cursor:pointer; color:var(--ink-2); font-size:13px; margin-top:10px; }
+
 svg.chart { width:100%; height:200px; display:block; }
 .tooltip { position:fixed; pointer-events:none; background:var(--surface-2); border:1px solid var(--ring);
            border-radius:8px; padding:6px 10px; font-size:12px; color:var(--ink); display:none; z-index:10; }
@@ -109,6 +171,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
 <nav>
   <div class="logo">Options<span>Pilot</span></div>
   <button data-tab="dashboard" class="active">Dashboard</button>
+  <button data-tab="watchlist">Watchlist</button>
   <button data-tab="journal">Journal</button>
   <button data-tab="backtest">Backtest</button>
   <button data-tab="learning">Learning</button>
@@ -122,7 +185,11 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <header>
     <h1 id="tab-title">Dashboard</h1>
     <span class="pill" id="market-pill">…</span>
-    <span class="pill" id="mode-pill" title="">…</span>
+    <span class="seg" id="mode-seg" title="Trading mode — switches instantly, persists across restarts">
+      <button data-mode="conservative">🟢 Conservative</button>
+      <button data-mode="high_risk">🔴 High-Risk</button>
+      <button data-mode="custom">⚙️ Custom</button>
+    </span>
     <span class="pill" id="cycle-pill" title="last scan cycle">no scan yet</span>
     <button class="btn" id="scan-btn">Scan now</button>
   </header>
@@ -156,6 +223,45 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
     <div class="panel">
       <h2>Open positions</h2>
       <div id="positions"></div>
+    </div>
+  </section>
+
+  <!-- WATCHLIST -->
+  <section id="tab-watchlist" style="display:none">
+    <div class="panel">
+      <h2>Quick add <span class="hint" style="display:inline">— type a ticker and press Enter, or paste a whole list from anywhere</span></h2>
+      <div class="wl-addwrap">
+        <textarea id="wl-input" class="wl-input" rows="1" spellcheck="false"
+          placeholder="AAPL  ·  or paste:  AAPL, TSLA, NVDA, AMD, META  (commas, spaces or new lines all work)"></textarea>
+        <div class="ac" id="wl-ac"></div>
+      </div>
+      <div class="chips" id="wl-presets"></div>
+      <div class="hint">One-click lists add every symbol in the group (duplicates are skipped).
+        <button class="btn" id="wl-savefav" style="padding:3px 10px; font-size:12px; margin-left:8px">★ Save current list as My Favorites</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Watchlist <span class="hint" style="display:inline" id="wl-count"></span></h2>
+      <div class="wl-tools">
+        <input id="wl-filter" placeholder="Search within watchlist…" style="flex:1; min-width:160px">
+        <select id="wl-sort">
+          <option value="custom">Custom order (drag to reorder)</option>
+          <option value="alpha">Alphabetical</option>
+          <option value="price">Price</option>
+          <option value="change">Daily change</option>
+          <option value="volume">Volume</option>
+          <option value="mcap">Market cap</option>
+          <option value="conf">AI confidence</option>
+        </select>
+      </div>
+      <div class="wl-head"><span style="width:16px"></span><span style="width:20px"></span>
+        <span style="width:60px">Symbol</span><span style="flex:1">Company</span>
+        <span class="col">Price</span><span class="col">Change</span><span class="col">Volume</span>
+        <span class="col">Mkt cap</span><span class="col">AI conf</span><span style="width:28px"></span></div>
+      <div class="wl-list" id="wl-list" tabindex="0"></div>
+      <div class="hint">★ pins to top · drag ≡ to reorder (custom order) · click to select,
+        Ctrl+click for multi, Ctrl+A selects all, Delete removes selected · × removes one ·
+        every change saves automatically. Price/volume update after each scan cycle.</div>
     </div>
   </section>
 
@@ -205,7 +311,30 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <section id="tab-settings" style="display:none">
     <div class="panel">
       <h2>Trading mode</h2>
-      <div id="mode-explainer" class="hint" style="font-size:13px; line-height:1.6"></div>
+      <div style="margin-bottom:10px; font-size:14px">Trading Mode:
+        <b id="mode-line">…</b></div>
+      <span class="seg" id="mode-seg2">
+        <button data-mode="conservative">🟢 Conservative</button>
+        <button data-mode="high_risk">🔴 High-Risk</button>
+        <button data-mode="custom">⚙️ Custom</button>
+      </span>
+      <div id="mode-explainer" class="hint" style="font-size:13px; line-height:1.6; margin-top:12px"></div>
+      <details class="advwrap" id="adv-wrap">
+        <summary>Advanced settings (Custom mode)</summary>
+        <div class="adv">
+          <label>Min confidence % <input id="adv-conf" type="number" min="0" max="100" step="1"></label>
+          <label>Risk per trade % <input id="adv-risk" type="number" min="0.1" max="10" step="0.1"></label>
+          <label>Max trades per day <input id="adv-trades" type="number" min="1" step="1"></label>
+          <label>Max contracts <input id="adv-contracts" type="number" min="1" step="1"></label>
+          <label>Min risk/reward <input id="adv-rr" type="number" min="0.1" step="0.1"></label>
+          <label>Daily loss limit % <input id="adv-loss" type="number" min="0.5" max="50" step="0.5"></label>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn primary" id="adv-apply">Apply as Custom mode</button>
+          <span class="hint" style="display:inline; margin-left:10px">Values are validated —
+            out-of-range settings are rejected. Leave a field blank to keep the config.yaml value.</span>
+        </div>
+      </details>
     </div>
     <div class="panel">
       <h2>Effective configuration (read-only)</h2>
@@ -217,6 +346,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
 </main>
 
 <div class="tooltip" id="tooltip"></div>
+<div id="toast"></div>
 
 <script>
 "use strict";
@@ -233,6 +363,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   document.querySelectorAll("main section").forEach(s => s.style.display = "none");
   $("tab-" + b.dataset.tab).style.display = "";
   $("tab-title").textContent = b.textContent;
+  if (b.dataset.tab === "watchlist") loadWatchlist();
   if (b.dataset.tab === "journal") loadJournal();
   if (b.dataset.tab === "learning") loadLearning();
   if (b.dataset.tab === "settings") loadConfig();
@@ -250,18 +381,7 @@ function renderStatus(s) {
       ? "last scan " + new Date(s.last_cycle_ts).toLocaleTimeString() : "no scan yet";
 
   const highRisk = s.trading_mode === "high_risk";
-  $("mode-pill").textContent = highRisk ? "high-risk mode" : "conservative mode";
-  $("mode-pill").className = "pill" + (highRisk ? " hr" : "");
-  $("mode-pill").title = highRisk
-    ? `High-Risk Mode: the required confidence adapts to setup quality — excellent ` +
-      `setups trade from ${Math.max(s.high_risk_floor, s.min_confidence - 18).toFixed(0)}%, ` +
-      `good from ${Math.max(s.high_risk_floor, s.min_confidence - 10).toFixed(0)}%, ` +
-      `average from ${Math.max(s.high_risk_floor, s.min_confidence - 3).toFixed(0)}%; ` +
-      `poor setups never trade. Entries below ${s.min_confidence}% also require ` +
-      `risk/reward ≥ ${s.high_risk_min_rr_stretch}. All risk limits still apply.`
-    : `Conservative Mode: trades only at ≥ ${s.min_confidence}% confidence, ` +
-      `prioritizing accuracy over trade frequency. Switch via ` +
-      `engine.trading_mode in config.yaml.`;
+  renderMode(s);
 
   const halted = s.risk.halted;
   $("halt-banner").style.display = halted ? "" : "none";
@@ -332,6 +452,12 @@ function renderStatus(s) {
     : s.notifications.map(n => `<div class="notif ${n.kind}">
         <span class="ts">${new Date(n.ts).toLocaleTimeString()}</span>
         <div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div></div>`).join("");
+
+  // keep the watchlist tab live (quotes/confidence refresh each cycle)
+  if (wl && $("tab-watchlist").style.display !== "none") {
+    if (JSON.stringify(s.watchlist) !== JSON.stringify(wl.watchlist)) loadWatchlist();
+    else { wl.quotes = s.quotes || wl.quotes; renderWL(); }
+  }
 }
 
 /* ── equity chart (single series + crosshair tooltip) ─────────────────── */
@@ -473,22 +599,275 @@ async function loadLearning() {
 async function loadConfig() {
   const d = await (await fetch("/api/config")).json();
   $("config").textContent = JSON.stringify(d, null, 2);
-  const e = d.engine, hr = e.trading_mode === "high_risk";
-  $("mode-explainer").innerHTML =
-    `Current mode: <b>${hr ? "High-Risk" : "Conservative"}</b> — change via ` +
-    `<code>engine.trading_mode</code> in <code>config.yaml</code> ` +
-    `(<code>conservative</code> or <code>high_risk</code>) and restart.<br><br>` +
-    `<b>Conservative</b> (default): trades only at ≥ ${e.min_confidence}% confidence. ` +
-    `Prioritizes accuracy over frequency.<br>` +
-    `<b>High-Risk</b>: the required confidence adapts to setup quality — ` +
-    `excellent ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 18).toFixed(0)}%, ` +
-    `good ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 10).toFixed(0)}%, ` +
-    `average ≥ ${Math.max(e.high_risk_floor, e.min_confidence - 3).toFixed(0)}%, ` +
-    `poor setups never trade at any confidence. Entries below the conservative bar ` +
-    `additionally require risk/reward ≥ ${e.high_risk_min_rr_stretch}. ` +
-    `Selective aggression, not recklessness: stops, position sizing, loss limits, ` +
-    `cooldowns and liquidity filters are identical in both modes.`;
 }
+
+/* ── toasts ───────────────────────────────────────────────────────────── */
+let toastTimer = null;
+function toast(msg, ok = true) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = ok ? "show" : "show err";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "", 3600);
+}
+
+/* ── trading mode control ─────────────────────────────────────────────── */
+const MODE_LABEL = {conservative: "🟢 Conservative", high_risk: "🔴 High-Risk",
+                    custom: "⚙️ Custom"};
+
+function renderMode(s) {
+  for (const seg of ["mode-seg", "mode-seg2"]) {
+    document.querySelectorAll(`#${seg} button`).forEach(b => {
+      b.className = (b.dataset.mode === s.trading_mode ? "active" : "") +
+                    (b.dataset.mode === "high_risk" ? " hr" : "");
+    });
+  }
+  $("mode-line").textContent = MODE_LABEL[s.trading_mode] || s.trading_mode;
+  const r = s.risk_settings || {};
+  $("mode-explainer").innerHTML =
+    `<b>🟢 Conservative</b> (default): trades only at ≥ ${s.min_confidence}% confidence. ` +
+    `Fewer trades, highest bar for quality — accuracy over frequency.<br>` +
+    `<b>🔴 High-Risk</b>: the required confidence adapts to setup quality — excellent ` +
+    `setups from ${Math.max(s.high_risk_floor, s.min_confidence - 18).toFixed(0)}%, good from ` +
+    `${Math.max(s.high_risk_floor, s.min_confidence - 10).toFixed(0)}%, average from ` +
+    `${Math.max(s.high_risk_floor, s.min_confidence - 3).toFixed(0)}%; poor setups never trade ` +
+    `at any confidence, and entries below the conservative bar need risk/reward ≥ ` +
+    `${s.high_risk_min_rr_stretch}. More opportunities, same discipline.<br>` +
+    `<b>⚙️ Custom</b>: your own fixed confidence bar and risk limits (Advanced settings below).<br><br>` +
+    `In every mode: stops, position sizing (${r.risk_per_trade_pct}%/trade), daily loss limit ` +
+    `(${r.max_daily_loss_pct}%), max ${r.daily_trade_limit} trades/day, and liquidity filters ` +
+    `stay fully enforced. Switching is instant and persists across restarts.`;
+  // Advanced inputs: show live values as placeholders, saved custom as values
+  const c = s.custom_settings || {};
+  const fields = [["adv-conf", "min_confidence", s.min_confidence],
+                  ["adv-risk", "risk_per_trade_pct", r.risk_per_trade_pct],
+                  ["adv-trades", "daily_trade_limit", r.daily_trade_limit],
+                  ["adv-contracts", "max_contracts", r.max_contracts],
+                  ["adv-rr", "min_risk_reward", r.min_risk_reward],
+                  ["adv-loss", "max_daily_loss_pct", r.max_daily_loss_pct]];
+  for (const [id, key, live] of fields) {
+    const el = $(id);
+    el.placeholder = live ?? "";
+    if (document.activeElement !== el && c[key] != null) el.value = c[key];
+  }
+  if (s.trading_mode === "custom") $("adv-wrap").open = true;
+}
+
+async function setMode(mode, custom = undefined) {
+  const body = custom === undefined ? {mode} : {mode, custom};
+  const resp = await fetch("/api/mode", {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const d = await resp.json();
+  if (!resp.ok) { toast(d.error || "mode change rejected", false); return; }
+  toast(`Trading mode: ${MODE_LABEL[d.trading_mode]} — active immediately, saved`);
+  if (lastStatus) { lastStatus.trading_mode = d.trading_mode;
+                    lastStatus.min_confidence = d.min_confidence;
+                    lastStatus.custom_settings = d.custom_settings;
+                    renderMode(lastStatus); }
+}
+
+document.querySelectorAll("#mode-seg button, #mode-seg2 button").forEach(b =>
+  b.onclick = () => setMode(b.dataset.mode));
+
+$("adv-apply").onclick = () => {
+  const custom = {};
+  const map = {"adv-conf": "min_confidence", "adv-risk": "risk_per_trade_pct",
+               "adv-trades": "daily_trade_limit", "adv-contracts": "max_contracts",
+               "adv-rr": "min_risk_reward", "adv-loss": "max_daily_loss_pct"};
+  for (const [id, key] of Object.entries(map)) {
+    const v = $(id).value.trim();
+    if (v !== "") custom[key] = +v;
+  }
+  setMode("custom", custom);
+};
+
+/* ── watchlist manager ────────────────────────────────────────────────── */
+let wl = null, wlPresets = {}, wlSel = new Set();
+let wlSort = localStorage.getItem("wlSort") || "custom", wlFilter = "";
+let acIdx = -1, acTimer = null;
+
+async function loadWatchlist() {
+  const [w, p] = await Promise.all([
+    fetch("/api/watchlist").then(r => r.json()),
+    fetch("/api/watchlist/presets").then(r => r.json()),
+  ]);
+  wl = w; wlPresets = p;
+  $("wl-sort").value = wlSort;
+  renderPresets(); renderWL();
+}
+
+function renderPresets() {
+  $("wl-presets").innerHTML = Object.entries(wlPresets).map(([name, syms]) =>
+    `<button data-syms="${esc(syms.join(","))}" ${syms.length ? "" : "disabled"}
+       title="${esc(syms.join(", ") || "save a list first")}">${esc(name)}</button>`
+  ).join("");
+  document.querySelectorAll("#wl-presets button").forEach(b =>
+    b.onclick = () => wlAdd(b.dataset.syms));
+}
+
+async function wlAdd(text) {
+  if (!text.trim()) return;
+  const r = await fetch("/api/watchlist/add", {method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({text})}).then(r => r.json());
+  const parts = [];
+  if (r.added?.length) parts.push(`✓ added ${r.added.join(", ")}`);
+  if (r.duplicates?.length) parts.push(`already listed: ${r.duplicates.join(", ")}`);
+  if (r.invalid?.length) parts.push(`✗ not a known ticker: ${r.invalid.join(", ")}`);
+  if (r.error) parts.push(r.error);
+  toast(parts.join("  ·  ") || "nothing to add",
+        !(r.invalid?.length || r.error) && !!r.added?.length || !!r.duplicates?.length);
+  await loadWatchlist();
+}
+
+async function wlRemove(symbols) {
+  for (const s of symbols) {
+    const resp = await fetch("/api/watchlist/remove", {method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({symbol: s})});
+    if (!resp.ok) { toast((await resp.json()).error, false); break; }
+  }
+  wlSel.clear();
+  toast(`removed ${symbols.join(", ")}`);
+  await loadWatchlist();
+}
+
+function wlRows() {
+  if (!wl) return [];
+  const conf = s => (wl.signals?.[s] || lastStatus?.signals?.[s] || {}).confidence;
+  const rows = wl.watchlist.map(s => ({
+    sym: s, pinned: wl.pinned.includes(s),
+    name: (wl.meta[s] || {}).name || "",
+    mcap: (wl.meta[s] || {}).market_cap,
+    q: wl.quotes?.[s] || lastStatus?.quotes?.[s] || {},
+    conf: conf(s),
+  }));
+  const f = wlFilter.toUpperCase();
+  const shown = f ? rows.filter(r => r.sym.includes(f) ||
+                                     r.name.toUpperCase().includes(f)) : rows;
+  const desc = key => (a, b) => ((b[key] ?? -Infinity) - (a[key] ?? -Infinity));
+  const sorters = {
+    alpha: (a, b) => a.sym.localeCompare(b.sym),
+    price: (a, b) => ((b.q.price ?? -1) - (a.q.price ?? -1)),
+    change: (a, b) => ((b.q.change_pct ?? -Infinity) - (a.q.change_pct ?? -Infinity)),
+    volume: (a, b) => ((b.q.volume ?? -1) - (a.q.volume ?? -1)),
+    mcap: desc("mcap"), conf: desc("conf"),
+  };
+  if (sorters[wlSort]) shown.sort(sorters[wlSort]);
+  // pinned always float to the top, in their pin order
+  const pinRank = s => { const i = wl.pinned.indexOf(s); return i < 0 ? 1e9 : i; };
+  shown.sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1) ||
+                       (a.pinned && b.pinned ? pinRank(a.sym) - pinRank(b.sym) : 0));
+  return shown;
+}
+
+const compact = v => v == null ? "—"
+  : v >= 1e12 ? (v / 1e12).toFixed(2) + "T" : v >= 1e9 ? (v / 1e9).toFixed(1) + "B"
+  : v >= 1e6 ? (v / 1e6).toFixed(1) + "M" : v >= 1e3 ? (v / 1e3).toFixed(1) + "K"
+  : String(v);
+
+function renderWL() {
+  if (!wl) return;
+  $("wl-count").textContent = `— ${wl.watchlist.length} / ${wl.max} symbols`;
+  const draggable = wlSort === "custom" && !wlFilter;
+  $("wl-list").innerHTML = wlRows().map(r => `
+    <div class="wl-row ${wlSel.has(r.sym) ? "sel" : ""}" data-sym="${r.sym}"
+         ${draggable ? 'draggable="true"' : ""}>
+      <span class="drag" title="${draggable ? "drag to reorder" : "switch to custom order to drag"}">${draggable ? "≡" : ""}</span>
+      <button class="pin ${r.pinned ? "on" : ""}" title="${r.pinned ? "unpin" : "pin to top"}">★</button>
+      <span class="sym">${r.sym}</span>
+      <span class="name" title="${esc(r.name)}">${esc(r.name)}</span>
+      <span class="col">${r.q.price != null ? "$" + r.q.price.toFixed(2) : "—"}</span>
+      <span class="col ${cls(r.q.change_pct ?? 0)}">${r.q.change_pct != null ? (r.q.change_pct >= 0 ? "+" : "") + r.q.change_pct.toFixed(2) + "%" : "—"}</span>
+      <span class="col">${compact(r.q.volume)}</span>
+      <span class="col">${compact(r.mcap)}</span>
+      <span class="col">${r.conf != null ? r.conf.toFixed(1) + "%" : "—"}</span>
+      <button class="rm" title="remove ${r.sym}">×</button>
+    </div>`).join("") ||
+    `<div class="empty">Watchlist is empty — add a ticker above.</div>`;
+  wireWLRows();
+}
+
+function wireWLRows() {
+  let dragging = null;
+  document.querySelectorAll(".wl-row").forEach(row => {
+    const sym = row.dataset.sym;
+    row.querySelector(".rm").onclick = e => { e.stopPropagation(); wlRemove([sym]); };
+    row.querySelector(".pin").onclick = async e => {
+      e.stopPropagation();
+      await fetch("/api/watchlist/pin", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({symbol: sym, pinned: !wl.pinned.includes(sym)})});
+      await loadWatchlist();
+    };
+    row.onclick = e => {
+      if (!(e.ctrlKey || e.metaKey)) wlSel.clear();
+      wlSel.has(sym) ? wlSel.delete(sym) : wlSel.add(sym);
+      renderWL();
+    };
+    row.ondragstart = () => { dragging = sym; row.classList.add("dragging"); };
+    row.ondragend = () => { dragging = null; renderWL(); };
+    row.ondragover = e => e.preventDefault();
+    row.ondrop = async e => {
+      e.preventDefault();
+      if (!dragging || dragging === sym) return;
+      const order = wl.watchlist.filter(s => s !== dragging);
+      order.splice(order.indexOf(sym) + (order.indexOf(sym) >= wl.watchlist.indexOf(dragging) ? 1 : 0), 0, dragging);
+      await fetch("/api/watchlist/reorder", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({symbols: order})});
+      await loadWatchlist();
+    };
+  });
+}
+
+/* quick add: Enter adds, paste just works, autocomplete as you type */
+$("wl-input").addEventListener("keydown", e => {
+  const items = document.querySelectorAll("#wl-ac div");
+  if (e.key === "ArrowDown" && items.length) { e.preventDefault(); acIdx = Math.min(acIdx + 1, items.length - 1); paintAc(items); return; }
+  if (e.key === "ArrowUp" && items.length) { e.preventDefault(); acIdx = Math.max(acIdx - 1, -1); paintAc(items); return; }
+  if (e.key === "Escape") { hideAc(); return; }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (acIdx >= 0 && items[acIdx]) { wlAdd(items[acIdx].dataset.sym); }
+    else { wlAdd($("wl-input").value); }
+    $("wl-input").value = ""; hideAc();
+  }
+});
+$("wl-input").addEventListener("input", () => {
+  clearTimeout(acTimer);
+  const v = $("wl-input").value.trim();
+  if (!/^[A-Za-z.\-]{1,10}$/.test(v)) { hideAc(); return; }
+  acTimer = setTimeout(async () => {
+    const d = await fetch("/api/symbols/search?q=" + encodeURIComponent(v)).then(r => r.json());
+    acIdx = -1;
+    $("wl-ac").innerHTML = d.results.map(r =>
+      `<div data-sym="${r.symbol}"><span class="s">${r.symbol}</span><span class="n">${esc(r.name)}</span></div>`).join("");
+    $("wl-ac").style.display = d.results.length ? "block" : "none";
+    document.querySelectorAll("#wl-ac div").forEach(item =>
+      item.onclick = () => { wlAdd(item.dataset.sym); $("wl-input").value = ""; hideAc(); });
+  }, 150);
+});
+function paintAc(items) { items.forEach((it, i) => it.classList.toggle("hot", i === acIdx)); }
+function hideAc() { $("wl-ac").style.display = "none"; acIdx = -1; }
+
+$("wl-filter").oninput = () => { wlFilter = $("wl-filter").value.trim(); renderWL(); };
+$("wl-sort").onchange = () => { wlSort = $("wl-sort").value;
+                                localStorage.setItem("wlSort", wlSort); renderWL(); };
+$("wl-savefav").onclick = async () => {
+  await fetch("/api/watchlist/favorites", {method: "POST",
+    headers: {"Content-Type": "application/json"}, body: "{}"});
+  toast("★ current list saved as My Favorites");
+  await loadWatchlist();
+};
+$("wl-list").addEventListener("keydown", e => {
+  if (e.key === "Delete" && wlSel.size) { wlRemove([...wlSel]); }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
+    e.preventDefault();
+    wlRows().forEach(r => wlSel.add(r.sym));
+    renderWL();
+  }
+});
 
 /* ── scan / halt buttons ──────────────────────────────────────────────── */
 $("scan-btn").onclick = async () => {

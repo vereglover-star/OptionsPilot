@@ -24,14 +24,14 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def launch(config: AppConfig) -> None:  # pragma: no cover - GUI entry point
+def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI entry point
     import uvicorn
     import webview
 
     from optionspilot.ui.server import create_app
 
     port = _free_port()
-    app = create_app(config, run_loop=True)
+    app = create_app(config, run_loop=True, runtime=runtime)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning"
     ))

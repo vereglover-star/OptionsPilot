@@ -210,6 +210,9 @@ class Orchestrator:
         candles = {
             sym: self._fetch_candles(sym) for sym in self.cfg.data.watchlist
         }
+        summary["quotes"] = {
+            sym: self._quote_snapshot(tfs) for sym, tfs in candles.items()
+        }
 
         self._manage_positions(now, candles, summary)
         self._mark_and_update_risk(now)
@@ -237,6 +240,21 @@ class Orchestrator:
             log.exception("single-symbol scan failed for %s: %s", symbol, exc)
             summary["skipped"][symbol] = f"scan error: {exc}"
         return summary
+
+    @staticmethod
+    def _quote_snapshot(tfs: dict[Timeframe, pd.DataFrame]) -> dict:
+        """Price / daily change / volume for watchlist display and sorting,
+        derived from candles already fetched this cycle — no extra requests."""
+        daily = tfs.get(Timeframe.D1)
+        if daily is None or len(daily) < 2:
+            return {}
+        last = float(daily["close"].iloc[-1])
+        prev = float(daily["close"].iloc[-2])
+        return {
+            "price": round(last, 2),
+            "change_pct": round((last / prev - 1) * 100, 2),
+            "volume": int(daily["volume"].iloc[-1]),
+        }
 
     # ── data ─────────────────────────────────────────────────────────────────
 

@@ -110,7 +110,7 @@ class EngineConfig(_Section):
     @field_validator("trading_mode")
     @classmethod
     def _known_mode(cls, v: str) -> str:
-        modes = ("conservative", "high_risk")
+        modes = ("conservative", "high_risk", "custom")
         if v not in modes:
             raise ValueError(f"trading_mode must be one of {modes}, got {v!r}")
         return v

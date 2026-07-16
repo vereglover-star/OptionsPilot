@@ -79,6 +79,16 @@ class YFinanceProvider(MarketDataProvider):
             bid = ask = last
         return Quote(symbol=symbol.upper(), ts=utcnow(), bid=bid, ask=ask, last=last)
 
+    def get_market_cap(self, symbol: str) -> float | None:
+        """Best-effort market cap for watchlist sorting (not part of the
+        Broker/data ABC — callers must feature-detect)."""
+        self._throttle()
+        try:
+            cap = yf.Ticker(symbol).fast_info["market_cap"]
+            return float(cap) if cap else None
+        except Exception:  # noqa: BLE001 — sorting metadata is never critical
+            return None
+
     def get_expirations(self, symbol: str) -> list[date]:
         self._throttle()
         return sorted(

@@ -87,7 +87,9 @@ class TradeGate:
         base = self._cfg.min_confidence
         mode = self._cfg.trading_mode
 
-        if mode == "conservative":
+        if mode != "high_risk":
+            # conservative and custom both use a fixed bar; custom just lets
+            # the user pick where it sits (via runtime settings)
             required: float | None = base
             accepted = confidence >= base
         elif quality == "poor":

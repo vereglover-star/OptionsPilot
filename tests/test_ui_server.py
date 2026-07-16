@@ -21,15 +21,17 @@ def client(tmp_path, monkeypatch):
     candles = bullish_candles()
     spot = float(candles[Timeframe.M5]["close"].iloc[-1])
     provider = FakeProvider(candles, spot, NOW.date())
+    cfg = CFG.model_copy(deep=True)  # runtime settings mutate the live config
     orch = Orchestrator(
-        CFG, provider=provider,
-        notifier=NotificationCenter(CFG.notify, [CollectingNotifier()]),
+        cfg, provider=provider,
+        notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
         data_dir=tmp_path,
     )
-    app = create_app(CFG, orchestrator=orch, run_loop=False)
+    app = create_app(cfg, orchestrator=orch, run_loop=False, data_dir=tmp_path)
     with TestClient(app) as c:
         c.provider = provider
         c.orch = orch
+        c.server = app.state.server
         yield c
 
 
@@ -95,6 +97,88 @@ class TestLearningAPI:
         w = d["weights"]["htf_trend"]
         assert w["effective"] == w["default"]      # nothing learned yet
         assert d["by_evidence"] == []
+
+
+class TestWatchlistAPI:
+    def add(self, client, text):
+        return client.post("/api/watchlist/add", json={"text": text}).json()
+
+    def test_quick_add_validates_and_uppercases(self, client):
+        r = self.add(client, "aapl")
+        assert r["added"] == ["AAPL"]
+        assert "Apple" in r["names"]["AAPL"]
+        assert client.get("/api/watchlist").json()["watchlist"] == ["SPY", "AAPL"]
+
+    def test_bulk_add_mixed_separators(self, client):
+        r = self.add(client, "TSLA, nvda\namd  META")
+        assert r["added"] == ["TSLA", "NVDA", "AMD", "META"]
+        assert r["invalid"] == [] and r["duplicates"] == []
+
+    def test_duplicates_and_invalid_reported_without_blocking(self, client):
+        client.server._live_symbol_check = lambda s: False   # directory only
+        r = self.add(client, "SPY, ZZZZZ, tsla")
+        assert r["added"] == ["TSLA"]          # valid one still added
+        assert r["duplicates"] == ["SPY"]
+        assert r["invalid"] == ["ZZZZZ"]
+
+    def test_remove_and_reorder_and_pin(self, client):
+        self.add(client, "AAPL TSLA")
+        assert client.post("/api/watchlist/remove",
+                           json={"symbol": "AAPL"}).status_code == 200
+        r = client.post("/api/watchlist/reorder",
+                        json={"symbols": ["TSLA", "SPY"]})
+        assert r.status_code == 200
+        assert client.get("/api/watchlist").json()["watchlist"] == ["TSLA", "SPY"]
+        client.post("/api/watchlist/pin", json={"symbol": "SPY", "pinned": True})
+        assert client.get("/api/watchlist").json()["pinned"] == ["SPY"]
+        # reorder with wrong membership is rejected
+        assert client.post("/api/watchlist/reorder",
+                           json={"symbols": ["TSLA"]}).status_code == 422
+
+    def test_favorites_and_presets(self, client):
+        self.add(client, "AAPL")
+        client.post("/api/watchlist/favorites", json={})
+        presets = client.get("/api/watchlist/presets").json()
+        assert presets["My Favorites"] == ["SPY", "AAPL"]
+        assert "Magnificent 7" in presets and "Meme Stocks" in presets
+
+    def test_symbol_search(self, client):
+        hits = client.get("/api/symbols/search", params={"q": "app"}).json()["results"]
+        assert {"APP", "APPF"} <= {h["symbol"] for h in hits}
+
+    def test_persists_to_settings_store(self, client):
+        self.add(client, "NVDA")
+        doc = client.server.runtime._doc
+        assert "NVDA" in doc["watchlist"]
+
+
+class TestModeAPI:
+    def test_switch_takes_effect_immediately(self, client):
+        r = client.post("/api/mode", json={"mode": "high_risk"}).json()
+        assert r["trading_mode"] == "high_risk"
+        assert client.orch.engine.gate._cfg.trading_mode == "high_risk"  # live object
+        s = client.get("/api/status").json()
+        assert s["trading_mode"] == "high_risk"
+
+    def test_custom_mode_applies_validated_values(self, client):
+        r = client.post("/api/mode", json={
+            "mode": "custom", "custom": {"min_confidence": 65,
+                                         "daily_trade_limit": 8}})
+        assert r.status_code == 200
+        s = client.get("/api/status").json()
+        assert s["trading_mode"] == "custom"
+        assert s["min_confidence"] == 65
+        assert s["risk_settings"]["daily_trade_limit"] == 8
+        # back to conservative restores the config baseline (25 in test CFG)
+        client.post("/api/mode", json={"mode": "conservative"})
+        s = client.get("/api/status").json()
+        assert s["min_confidence"] == 25
+
+    def test_bad_values_rejected_with_422(self, client):
+        r = client.post("/api/mode", json={
+            "mode": "custom", "custom": {"risk_per_trade_pct": 99}})
+        assert r.status_code == 422 and "error" in r.json()
+        assert client.post("/api/mode", json={"mode": "yolo"}).status_code == 422
 
 
 class TestWebSocket:

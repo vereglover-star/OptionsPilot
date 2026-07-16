@@ -1,4 +1,4 @@
-"""OptionsPilot CLI — `python -m optionspilot <command>`.
+"""OptionsPilot CLI  -  `python -m optionspilot <command>`.
 
 Commands:
   run                       start the live paper-trading loop
@@ -23,17 +23,23 @@ from optionspilot.core.logging_setup import setup_logging
 
 
 def _bootstrap(args):
+    from optionspilot.config.runtime import RuntimeSettings
+
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path if cfg_path.exists() else None)
     setup_logging(cfg.logging)
-    return cfg
+    # In-app choices (watchlist, trading mode, custom tuning) overlay the yaml;
+    # the baseline snapshot lets mode switches restore yaml values exactly.
+    runtime = RuntimeSettings(Path("data") / "settings.json", baseline=cfg)
+    runtime.apply(cfg)
+    return cfg, runtime
 
 
 def cmd_run(args) -> int:
     from optionspilot.orchestrator import Orchestrator
 
-    cfg = _bootstrap(args)
-    print(f"OptionsPilot {__version__} — PAPER TRADING (no real money)")
+    cfg, runtime = _bootstrap(args)
+    print(f"OptionsPilot {__version__}  -  PAPER TRADING (no real money)")
     print(f"watchlist: {cfg.data.watchlist} | min confidence: "
           f"{cfg.engine.min_confidence}% | scan every {cfg.engine.scan_interval_seconds}s")
     print("Ctrl+C to stop.\n")
@@ -44,12 +50,12 @@ def cmd_run(args) -> int:
 def cmd_scan(args) -> int:
     from optionspilot.orchestrator import Orchestrator
 
-    cfg = _bootstrap(args)
+    cfg, runtime = _bootstrap(args)
     orch = Orchestrator(cfg)
     summary = orch.run_cycle()
     print(json.dumps(summary, indent=2, default=str))
     if not orch.market_open(datetime.now(timezone.utc)):
-        print("\nnote: market is closed — entries are vetoed by trading hours.")
+        print("\nnote: market is closed  -  entries are vetoed by trading hours.")
     return 0
 
 
@@ -58,7 +64,7 @@ def cmd_status(args) -> int:
     from optionspilot.journal import TradeJournal
     from optionspilot.risk import RiskManager
 
-    cfg = _bootstrap(args)
+    cfg, runtime = _bootstrap(args)
     broker = PaperBroker(cfg.broker, Path("data") / "paper.db",
                          cfg.risk.starting_balance)
     acct = broker.get_account()
@@ -78,7 +84,7 @@ def cmd_status(args) -> int:
 def cmd_journal(args) -> int:
     from optionspilot.journal import TradeJournal
 
-    _bootstrap(args)
+    _bootstrap(args)[0]
     journal = TradeJournal(Path("data") / "journal.db")
     trades = journal.all()[-args.last:]
     for t in trades:
@@ -95,7 +101,7 @@ def cmd_backtest(args) -> int:
     from optionspilot.data import YFinanceProvider
     from optionspilot.journal import TradeJournal
 
-    cfg = _bootstrap(args)
+    cfg, runtime = _bootstrap(args)
     if args.min_confidence is not None:
         cfg = cfg.model_copy(deep=True)
         cfg.engine.min_confidence = args.min_confidence
@@ -122,18 +128,18 @@ def cmd_backtest(args) -> int:
 def cmd_ui(args) -> int:
     from optionspilot.ui.desktop import launch
 
-    cfg = _bootstrap(args)
-    print("OptionsPilot desktop — PAPER TRADING (no real money). Close the "
+    cfg, runtime = _bootstrap(args)
+    print("OptionsPilot desktop - PAPER TRADING (no real money). Close the "
           "window to stop; all state persists.")
-    launch(cfg)
+    launch(cfg, runtime)
     return 0
 
 
 def cmd_serve(args) -> int:
     from optionspilot.ui.server import serve
 
-    cfg = _bootstrap(args)
-    serve(cfg, port=args.port, run_loop=not args.no_loop)
+    cfg, runtime = _bootstrap(args)
+    serve(cfg, port=args.port, run_loop=not args.no_loop, runtime=runtime)
     return 0
 
 
@@ -141,7 +147,7 @@ def cmd_learn(args) -> int:
     from optionspilot.journal import TradeJournal
     from optionspilot.learning import LearningEngine, WeightStore
 
-    _bootstrap(args)
+    _bootstrap(args)[0]
     journal = TradeJournal(Path("data") / "journal.db")
     engine = LearningEngine(journal, min_sample=args.min_sample)
     weights, rationale = engine.recommend_weights(

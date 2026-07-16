@@ -27,6 +27,7 @@ if (Test-Path $dataDir) {
   --name OptionsPilot `
   --onedir `
   --add-data "optionspilot\ui\static;optionspilot\ui\static" `
+  --add-data "optionspilot\data_assets;optionspilot\data_assets" `
   --collect-all webview `
   --collect-submodules optionspilot `
   --hidden-import uvicorn.logging `
