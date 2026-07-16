@@ -10,12 +10,12 @@ is. This file is the flat, actionable checklist version.
       Coach tab empty state, manual round trip → coach review rendered with
       expandable detail, mode-axis orthogonality, zero console errors.
 - [x] **Commit V2-3** — committed 2026-07-16.
-- [ ] **Rebuild and smoke-test the exe** with V2-3 included
-      (`.\scripts\build_exe.ps1`, then launch and click through AI Mode →
-      Human Mode → place a manual trade → check the Coach tab).
-      Attempted 2026-07-16 but the build script correctly refused because
-      OptionsPilot.exe was running (the user's live session) — rerun after
-      closing the app.
+- [x] **Rebuild and smoke-test the exe** with V2-3 included — done
+      2026-07-16 after the user closed the running app: rebuilt via
+      `build_exe.ps1` (app data backed up/restored by the script), then
+      smoke-tested the packaged exe in serve mode against a scratch data
+      dir: AI→Human toggle, manual SPY round trip, scan → coach review
+      rendered in the Coach tab, zero console errors.
 - [x] **Update `docs/ROADMAP-V2.md`**: V2-3 checklist flipped to `[x]`.
 
 ## Medium Priority

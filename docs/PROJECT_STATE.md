@@ -27,10 +27,13 @@ the V2-3 commit itself).
   renders the review with working expandable detail rows; switching
   `trading_mode` does not flip `operating_mode`; zero browser console
   errors throughout. No bugs found — no code changes were needed.
-- The exe (`dist/OptionsPilot/OptionsPilot.exe`) still predates V2-3. A
-  rebuild was attempted this session but `build_exe.ps1` correctly refused
-  because OptionsPilot.exe was running (the user's live session was not
-  killed). **Rebuild + smoke-test is the remaining V2-3 follow-up.**
+- **The exe was rebuilt with V2-3 and smoke-tested this session** (after
+  the user closed their running instance). `build_exe.ps1` backed up and
+  restored the app's real `data/` as designed. The packaged app was
+  smoke-tested in serve mode against a scratch data directory: AI→Human
+  toggle, SPY manual round trip via the Trade tab, scan cycle → coach
+  review rendered in the Coach tab with correct `no_stop` tag, zero
+  console errors. V2-3 has no remaining follow-ups.
 
 ## Completed (phases 1–8, the original v1 roadmap — see `docs/ROADMAP.md`)
 
@@ -124,31 +127,25 @@ Deferred: stock/share positions (options only for now).
 ## Exact stopping point
 
 This session (2026-07-16) live-verified the V2-3 frontend in a real
-browser (no bugs found), updated all docs, and committed V2-3. The only
-V2-3 follow-up left undone is the exe rebuild + packaged-app smoke test —
-blocked this session because OptionsPilot.exe was running (the build script
-refuses to build over a running instance, and the running session was not
-killed).
+browser (no bugs found), updated all docs, committed V2-3, rebuilt the exe
+with V2-3 included, and smoke-tested the packaged app end-to-end. **V2-3 is
+fully done — code, tests, docs, commit, and packaged build.**
 
-## Next recommended task (in order)
+## Next recommended task
 
-1. **Rebuild the exe** (`.\scripts\build_exe.ps1`) once OptionsPilot.exe is
-   not running, then smoke-test the packaged app: launch it, flip AI Mode →
-   Human Mode, place a manual paper trade, check the Coach tab.
-2. **Then** decide with the user whether to start V2-4 (chart workspace)
-   per `ROADMAP-V2.md`, or pause feature work so the user can run the app
-   in its current state for a while (market-hours soak + accumulating paper
-   trades was the stated plan) — this is a scope decision, not a technical
-   one; ask if it isn't clear from the conversation.
+**Decide with the user** whether to start V2-4 (chart workspace) per
+`ROADMAP-V2.md`, or pause feature work so the user can run the app in its
+current state for a while (market-hours soak + accumulating paper trades
+was the stated plan). This is a scope decision, not a technical one — ask
+if it isn't clear from the conversation. Medium-priority hygiene items
+(`pyproject.toml` package-data fix, Pillow extra, `operating_mode` yaml
+comment) are available as small filler tasks either way — see `TODO.md`.
 
 ## Current priorities
 
-1. Exe rebuild + packaged smoke test (above) — small, mechanical, blocked
-   only on the app not being open.
-2. No other priorities are currently blocking.
+1. The V2-4-now-or-pause scope decision (user's call).
+2. No technical work is currently blocking.
 
 ## Blockers
 
-None technical. The build-over-running-instance refusal is by design, not a
-bug. The only open question is the V2-4-now-or-later scope decision noted
-above.
+None.

@@ -428,10 +428,10 @@ window instead of corrupting the shared account database.
    coverage. **If you touch `static/index.html`, manually verify
    in a browser** (see `PROJECT_STATE.md` for the exact verification steps
    used previously) since there's no test safety net for it.
-6. The packaged exe (`dist/OptionsPilot/OptionsPilot.exe`) predates V2-3 —
-   a rebuild (`.\scripts\build_exe.ps1`) was attempted after the V2-3
-   commit but correctly refused because the app was running at the time.
-   Rebuild + smoke-test after closing the app (see `TODO.md`).
+6. (resolved 2026-07-16) The packaged exe now includes V2-3 — rebuilt and
+   smoke-tested (mode toggle, manual round trip, coach review) after the
+   V2-3 commit. `build_exe.ps1` preserved the app's `data/` across the
+   rebuild as designed.
 
 ## Future considerations (beyond the current roadmap)
 

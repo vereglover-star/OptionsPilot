@@ -9,7 +9,8 @@ someone who doesn't want to read 12 commit bodies.
 *310 tests. Frontend live-verified in a real browser (mode toggle + persistence
 across reload, Coach tab empty state, full manual round trip → coach review
 rendered with expandable detail, mode-axis orthogonality) against a scratch
-data directory before committing.*
+data directory before committing. Exe rebuilt with V2-3 and the packaged
+app smoke-tested the same day.*
 
 - `EngineConfig.operating_mode`: `"ai"` (default, autonomous trading) or
   `"human"` (AI scans and advises only; never places an order). Instant,
