@@ -64,10 +64,24 @@ class RuntimeSettings:
             if self._doc.get("watchlist"):
                 cfg.data.watchlist = list(self._doc["watchlist"])
             mode = self._doc.get("trading_mode")
+            operating = self._doc.get("operating_mode")
+        if operating in ("ai", "human"):
+            cfg.engine.operating_mode = operating
         if mode:
             self._apply_mode(cfg, mode, self._doc.get("custom") or {})
-            log.info("runtime settings applied: mode=%s watchlist=%s",
-                     cfg.engine.trading_mode, cfg.data.watchlist)
+        if mode or operating:
+            log.info("runtime settings applied: mode=%s operating=%s watchlist=%s",
+                     cfg.engine.trading_mode, cfg.engine.operating_mode,
+                     cfg.data.watchlist)
+
+    def set_operating_mode(self, cfg: AppConfig, mode: str) -> None:
+        if mode not in ("ai", "human"):
+            raise ValueError(f"operating_mode must be 'ai' or 'human', got {mode!r}")
+        cfg.engine.operating_mode = mode
+        with self._lock:
+            self._doc["operating_mode"] = mode
+            self._save()
+        log.info("operating mode switched to %s", mode)
 
     # ── watchlist ────────────────────────────────────────────────────────────
 
@@ -132,7 +146,10 @@ class RuntimeSettings:
     def _apply_mode(self, cfg: AppConfig, mode: str, custom: dict) -> None:
         base_engine = self._baseline.engine.model_dump()
         base_risk = self._baseline.risk.model_dump()
-        engine_updates = {**base_engine, "trading_mode": mode}
+        engine_updates = {**base_engine, "trading_mode": mode,
+                          # operating_mode is orthogonal to the risk mode —
+                          # switching risk modes must never flip AI <-> Human
+                          "operating_mode": cfg.engine.operating_mode}
         risk_updates = dict(base_risk)
 
         if mode == "custom":

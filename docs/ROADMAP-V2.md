@@ -45,16 +45,16 @@ windowed (no console) build, app icon, shutdown audit.
 - [x] Fill realism documented (delayed data; per-cycle evaluation; pre-market
       zero-quote orders reject cleanly)
 
-### V2-3 — AI Mode vs Human Mode
-- [ ] `operating_mode: ai | human` — instant switch, persisted (runtime store)
-- [ ] Human Mode: engine still scans/advises, NEVER auto-trades
-- [ ] `TradeCoach`: deterministic post-trade review from the analysis stack —
+### V2-3 — AI Mode vs Human Mode (complete)
+- [x] `operating_mode: ai | human` — instant switch, persisted (runtime store)
+- [x] Human Mode: engine still scans/advises, NEVER auto-trades
+- [x] `TradeCoach`: deterministic post-trade review from the analysis stack —
       before (setup quality, trend/momentum/volume/IV/theta/strike/DTE,
       chased?), during (stop moved? averaged down? exited vs plan?), after
       (why it won/lost, what pros would do differently), score /100, EV
       estimate, mistake tags
-- [ ] Mistake taxonomy + per-trade tags persisted in the journal
-- [ ] Coaching profile: recurring mistakes, strengths/weaknesses, long-term stats
+- [x] Mistake taxonomy + per-trade tags persisted in the journal
+- [x] Coaching profile: recurring mistakes, strengths/weaknesses, long-term stats
 
 ### V2-4 — Chart workspace (TradingView-inspired)
 - [ ] Bundle lightweight-charts (Apache-2.0, offline in the exe)

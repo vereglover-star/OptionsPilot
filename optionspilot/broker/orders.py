@@ -221,6 +221,12 @@ class OrderManager:
     def working(self) -> list[WorkingOrder]:
         return list(self._orders.values())
 
+    def orders_for(self, contract_symbol: str) -> list[dict]:
+        """Every order (any status) ever placed on one contract — used by the
+        TradeCoach to judge stop/target discipline."""
+        return [o.to_dict() for o in self._load_all()
+                if o.contract.symbol == contract_symbol]
+
     def history(self, last: int = 100) -> list[dict]:
         rows = self._conn.execute(
             "SELECT id FROM orders WHERE status != 'working' "

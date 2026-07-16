@@ -239,6 +239,19 @@ class PaperBroker(Broker):
                  contract.symbol, quantity, fill_price, self._cash)
         return fill
 
+    def fills_for(self, contract_symbol: str) -> list[dict]:
+        """Full fill history for one contract — the raw material for
+        reconstructing manual round trips."""
+        rows = self._conn.execute(
+            "SELECT ts, side, quantity, price, commission, reason FROM fills "
+            "WHERE symbol=? ORDER BY id", (contract_symbol,),
+        ).fetchall()
+        return [
+            {"ts": ts, "side": side, "quantity": qty, "price": price,
+             "commission": commission, "reason": reason}
+            for ts, side, qty, price, commission, reason in rows
+        ]
+
     def record_equity_snapshot(self, ts: datetime) -> None:
         """Persist an equity point (minute resolution) for lifetime metrics
         like max drawdown and total-return charts."""

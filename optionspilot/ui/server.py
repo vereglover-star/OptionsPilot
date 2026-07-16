@@ -151,6 +151,7 @@ class UIServer:
                 "last_cycle_ts": self.last_summary.get("ts"),
                 "watchlist": self.cfg.data.watchlist,
                 "min_confidence": self.cfg.engine.min_confidence,
+                "operating_mode": self.cfg.engine.operating_mode,
                 "trading_mode": self.cfg.engine.trading_mode,
                 "high_risk_floor": self.cfg.engine.high_risk_floor,
                 "high_risk_min_rr_stretch": self.cfg.engine.high_risk_min_rr_stretch,
@@ -238,6 +239,10 @@ class UIServer:
                 trail_pct=float(payload.get("trail_pct") or 0),
                 spot=spot,
             )
+            if (event and event["event"] == "filled"
+                    and side == "buy_to_open"):
+                # track immediately so fast round trips still get coached
+                self.orch.register_manual_entry(contract.symbol)
         return {"order": order.to_dict(),
                 "event": event["event"] if event else "working"}
 
@@ -627,6 +632,28 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             "trading_mode": server.cfg.engine.trading_mode,
             "min_confidence": server.cfg.engine.min_confidence,
             "custom_settings": server.runtime.custom_settings(),
+        }
+
+    @app.post("/api/operating_mode")
+    def set_operating_mode(payload: dict):
+        try:
+            with server.lock:
+                server.runtime.set_operating_mode(
+                    server.cfg, str(payload.get("mode", "")))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"operating_mode": server.cfg.engine.operating_mode}
+
+    @app.get("/api/coach")
+    def coach_view():
+        from optionspilot.coach import CoachProfile
+
+        with server.lock:
+            reviews = server.orch.coach.load_all()
+        reviews.sort(key=lambda r: r.get("trade_id", ""), reverse=True)
+        return {
+            "profile": CoachProfile(reviews).build(),
+            "reviews": reviews[:50],
         }
 
     @app.post("/api/risk/reset_halt")

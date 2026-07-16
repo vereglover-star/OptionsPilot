@@ -88,6 +88,12 @@ class EngineConfig(_Section):
     trading_mode: str = "conservative"
     high_risk_floor: float = Field(60.0, ge=50, le=100)   # absolute confidence floor
     high_risk_min_rr_stretch: float = Field(2.0, gt=0)    # RR required below min_confidence
+    # Operating mode:
+    #   "ai"    — the engine trades the paper account autonomously (default).
+    #   "human" — YOU trade; the engine scans and advises but never enters,
+    #             and the TradeCoach reviews every trade you close. Existing
+    #             AI positions keep their stops/targets managed in both modes.
+    operating_mode: str = "ai"
     scan_interval_seconds: int = Field(60, ge=5)
     htf_trend_timeframes: list[str] = ["1d", "4h"]
     entry_timeframes: list[str] = ["15m", "5m"]
@@ -113,6 +119,13 @@ class EngineConfig(_Section):
         modes = ("conservative", "high_risk", "custom")
         if v not in modes:
             raise ValueError(f"trading_mode must be one of {modes}, got {v!r}")
+        return v
+
+    @field_validator("operating_mode")
+    @classmethod
+    def _known_operating_mode(cls, v: str) -> str:
+        if v not in ("ai", "human"):
+            raise ValueError(f"operating_mode must be 'ai' or 'human', got {v!r}")
         return v
 
     @field_validator("evidence_weights")

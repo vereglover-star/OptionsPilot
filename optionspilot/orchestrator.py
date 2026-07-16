@@ -108,6 +108,25 @@ class _TradeMeta:
         )
 
 
+class _JsonStore:
+    """Tiny persisted dict for manual-trade context snapshots."""
+
+    def __init__(self, path: Path):
+        self._path = path
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+    def load(self) -> dict:
+        if not self._path.exists():
+            return {}
+        try:
+            return json.loads(self._path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+
+    def save(self, doc: dict) -> None:
+        self._path.write_text(json.dumps(doc, indent=1), encoding="utf-8")
+
+
 class _MetaStore:
     def __init__(self, path: Path):
         self._path = path
@@ -153,6 +172,11 @@ class Orchestrator:
         self.orders = OrderManager(self.broker, data_dir / "orders.db")
         self._meta_store = _MetaStore(data_dir / "state" / "open_trades.json")
         self._metas = self._meta_store.load()
+        from optionspilot.coach import TradeCoach
+        self.coach = TradeCoach(data_dir / "coach")
+        self._manual_store = _JsonStore(data_dir / "state" / "manual_trades.json")
+        self._manual: dict[str, dict] = self._manual_store.load()
+        self._last_advice: dict[str, str] = {}
         self._timeframes = [Timeframe.from_string(s) for s in config.data.timeframes]
         self._entry_tf = Timeframe.from_string(config.engine.entry_timeframes[-1])
         self._last_halt_notified = ""
@@ -217,6 +241,7 @@ class Orchestrator:
 
         self._manage_positions(now, candles, summary)
         self._evaluate_orders(now, summary)
+        self._reconcile_manual(now, candles, summary)
         self._mark_and_update_risk(now)
         self._surface_halt()
         self._scan_for_entries(now, candles, summary)
@@ -383,6 +408,182 @@ class Orchestrator:
                     order["result"],
                 )
 
+    # ── Human Mode: manual-trade reconciliation + coaching ───────────────────
+
+    def register_manual_entry(self, contract_symbol: str) -> None:
+        """Called right after an immediate (market) manual fill so the round
+        trip is tracked even if it opens and closes between scan cycles.
+        Context is captured on the next cycle while the position is open."""
+        position = next(
+            (p for p in self.broker.get_positions()
+             if p.contract.symbol == contract_symbol and p.managed_by == "manual"),
+            None,
+        )
+        if position is None or contract_symbol in self._manual:
+            return
+        self._manual[contract_symbol] = {
+            "direction": position.direction.value,
+            "entry_ts": position.opened_at.isoformat(),
+            "entry_price": position.avg_price,
+            "quantity": position.quantity,
+            "equity_at_entry": self.broker.get_account().equity,
+            "entry_context": None,
+        }
+        self._manual_store.save(self._manual)
+
+    def _reconcile_manual(self, now, candles, summary) -> None:
+        open_manual = {p.contract.symbol: p
+                       for p in self.broker.get_positions()
+                       if p.managed_by == "manual"}
+        # track new entries / backfill missing context while still open
+        for symbol, position in open_manual.items():
+            if symbol not in self._manual:
+                self.register_manual_entry(symbol)
+            meta = self._manual.get(symbol)
+            if meta is not None and meta.get("entry_context") is None:
+                meta["entry_context"] = self._capture_context(position, candles)
+                self._manual_store.save(self._manual)
+        # closed round trips -> journal + coach review
+        for symbol in [s for s in self._manual if s not in open_manual]:
+            meta = self._manual.pop(symbol)
+            self._manual_store.save(self._manual)
+            try:
+                self._finalize_manual(symbol, meta, now, candles, summary)
+            except Exception as exc:  # noqa: BLE001 — never break the cycle
+                log.exception("manual trade finalize failed for %s: %s",
+                              symbol, exc)
+
+    def _capture_context(self, position: Position, candles) -> dict | None:
+        """Analysis snapshot for the coach: the engine's read plus contract
+        health, sampled on the scan cycle nearest the moment of interest."""
+        try:
+            underlying = position.contract.underlying
+            symbol_candles = candles.get(underlying) or self._fetch_candles(underlying)
+            decision = self.engine.evaluate(underlying, symbol_candles)
+            spot = self.provider.get_quote(underlying).last
+            view = decision.entry_view
+            live = self._lookup_contract(position)
+            contract = live or position.contract
+            if contract.delta == 0.0 and spot > 0:
+                from optionspilot.analysis.options_metrics import enrich_greeks
+                contract = enrich_greeks(contract, spot, utcnow().date())
+            htf = next(
+                (v.trend.value for tf, v in decision.views.items()
+                 if view is None or tf.minutes > view.timeframe.minutes),
+                "unknown",
+            )
+            now_et = utcnow().astimezone(ET)
+            return {
+                "captured_ts": utcnow().isoformat(),
+                "spot": spot,
+                "confidence": decision.signal.confidence if decision.signal else 0.0,
+                "direction": (decision.signal.direction.value
+                              if decision.signal else "unknown"),
+                "gate": decision.gate.to_dict() if decision.gate else {},
+                "htf_trend": htf,
+                "entry_tf": ({
+                    "rsi": None if view.rsi != view.rsi else round(view.rsi, 1),
+                    "adx": None if view.adx != view.adx else round(view.adx, 1),
+                    "rvol": None if view.rvol != view.rvol else round(view.rvol, 2),
+                    "pressure": (None if view.pressure != view.pressure
+                                 else round(view.pressure, 2)),
+                    "trend": view.trend.value,
+                    "consolidating": view.consolidating,
+                } if view is not None else {}),
+                "contract": {
+                    "dte": contract.dte(utcnow().date()),
+                    "delta": contract.delta,
+                    "iv": contract.implied_volatility,
+                    "spread_pct": (contract.spread_pct
+                                   if contract.mid > 0 else None),
+                },
+                "hour_et": now_et.hour,
+                "minute_et": now_et.minute,
+            }
+        except Exception as exc:  # noqa: BLE001 — context is best-effort
+            log.error("context capture failed for %s: %s",
+                      position.contract.symbol, exc)
+            return None
+
+    def _finalize_manual(self, symbol, meta, now, candles, summary) -> None:
+        fills = self.broker.fills_for(symbol)
+        sells = [f for f in fills if f["side"] == "sell_to_close"]
+        if not sells:
+            log.warning("manual %s closed but no sell fills found — skipping",
+                        symbol)
+            return
+        sold = sum(f["quantity"] for f in sells)
+        exit_price = sum(f["price"] * f["quantity"] for f in sells) / sold
+        commissions = sum(f["commission"] for f in fills)
+        entry_ts = datetime.fromisoformat(meta["entry_ts"])
+        exit_ts = datetime.fromisoformat(sells[-1]["ts"])
+        underlying = symbol[:-15] if len(symbol) > 15 else symbol
+
+        entry_context = meta.get("entry_context")
+        trade = TradeRecord(
+            id=f"{underlying}-M-{entry_ts:%Y%m%d-%H%M%S}",
+            symbol=underlying, contract_symbol=symbol,
+            direction=Direction(meta["direction"]), strategy="manual",
+            quantity=meta["quantity"],
+            entry_ts=entry_ts, entry_price=meta["entry_price"],
+            exit_ts=exit_ts, exit_price=exit_price,
+            commissions=commissions,
+            confidence=(entry_context or {}).get("confidence", 0.0),
+            entry_reasons=["manual trade (Human Mode)"],
+            exit_reason=sells[-1]["reason"] or "manual close",
+            market_conditions={
+                "mode": "manual",
+                "hour_et": str(entry_ts.astimezone(ET).hour),
+            },
+        )
+
+        last_loss = next(
+            (t for t in reversed(self.journal.all())
+             if t.pnl < 0 and t.exit_ts < entry_ts), None)
+        loss_minutes = ((entry_ts - last_loss.exit_ts).total_seconds() / 60
+                        if last_loss is not None else None)
+
+        review = self.coach.review(
+            trade,
+            entry_context=entry_context,
+            exit_context=self._capture_context_for_symbol(underlying, candles),
+            orders=self.orders.orders_for(symbol),
+            recent_loss_minutes_before_entry=loss_minutes,
+            equity_at_entry=meta.get("equity_at_entry", 0.0),
+        )
+        trade.mistakes = list(review.mistakes)
+        trade.lessons = list(review.improvements)
+        trade.market_conditions["coach_score"] = str(review.score)
+        trade.market_conditions["setup_quality"] = review.setup_quality
+        self.journal.record(trade)
+        self.risk.record_closed_trade(exit_ts, trade.pnl)
+        summary["closed"].append({"symbol": symbol, "pnl": trade.pnl,
+                                  "coach_score": review.score})
+        self.notifier.notify(
+            "trade_closed",
+            f"Coach review: {review.score}/100 — "
+            f"{trade.symbol} {review.verdict} {trade.pnl:+.2f}",
+            review.summary,
+        )
+
+    def _capture_context_for_symbol(self, underlying: str, candles) -> dict | None:
+        """Exit-time context: reuse the position-context capture on a synthetic
+        wrapper (only underlying analysis matters at exit)."""
+        try:
+            symbol_candles = candles.get(underlying) or self._fetch_candles(underlying)
+            decision = self.engine.evaluate(underlying, symbol_candles)
+            spot = self.provider.get_quote(underlying).last
+            return {
+                "captured_ts": utcnow().isoformat(),
+                "spot": spot,
+                "confidence": decision.signal.confidence if decision.signal else 0.0,
+                "direction": (decision.signal.direction.value
+                              if decision.signal else "unknown"),
+            }
+        except Exception as exc:  # noqa: BLE001
+            log.error("exit context capture failed for %s: %s", underlying, exc)
+            return None
+
     # ── marking / risk ───────────────────────────────────────────────────────
 
     def _mark_and_update_risk(self, now: datetime) -> None:
@@ -433,6 +634,13 @@ class Orchestrator:
             "confidence": decision.signal.confidence,
             **(decision.gate.to_dict() if decision.gate else {}),
         }
+        if self.cfg.engine.operating_mode == "human":
+            if decision.tradeable:
+                summary["skipped"][symbol] = (
+                    "Human Mode: the AI would take this trade — it's yours "
+                    "if you want it (Trade tab)")
+                self._advise_human(symbol, decision)
+            return
         if not decision.tradeable:
             if decision.gate is not None:
                 summary["skipped"][symbol] = decision.gate.reason
@@ -463,6 +671,22 @@ class Orchestrator:
             f"confidence {plan.signal.confidence:.0f}%\n"
             f"stop {plan.stop_underlying} | target {plan.target_underlying} "
             f"| RR {plan.risk_reward}\n" + "\n".join(plan.signal.reasons[:6]),
+        )
+
+    def _advise_human(self, symbol: str, decision) -> None:
+        """In Human Mode a tradeable signal becomes advice, never an order.
+        Notify once per symbol per bar so it doesn't spam every cycle."""
+        bar_id = decision.entry_view.ts.isoformat() if decision.entry_view else ""
+        if self._last_advice.get(symbol) == bar_id:
+            return
+        self._last_advice[symbol] = bar_id
+        self.notifier.notify(
+            "trade_opened",
+            f"AI signal (advice only): {symbol} "
+            f"{decision.signal.direction.value} "
+            f"{decision.signal.confidence:.0f}%",
+            "Human Mode is on — the AI will not trade this.\n"
+            + "\n".join(decision.signal.reasons[:5]),
         )
 
     def _register_meta(self, plan: TradePlan, quantity: int, fill: Fill,

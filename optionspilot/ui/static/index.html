@@ -172,6 +172,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <div class="logo">Options<span>Pilot</span></div>
   <button data-tab="dashboard" class="active">Dashboard</button>
   <button data-tab="trade">Trade</button>
+  <button data-tab="coach">Coach</button>
   <button data-tab="watchlist">Watchlist</button>
   <button data-tab="journal">Journal</button>
   <button data-tab="backtest">Backtest</button>
@@ -186,6 +187,10 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   <header>
     <h1 id="tab-title">Dashboard</h1>
     <span class="pill" id="market-pill">…</span>
+    <span class="seg" id="op-seg" title="Operating mode. AI Mode: the engine trades the paper account autonomously. Human Mode: YOU trade from the Trade tab — the AI scans and advises but never enters, and the coach reviews every trade you close. Existing positions keep their stops managed in both modes.">
+      <button data-op="ai">🤖 AI trades</button>
+      <button data-op="human">👤 You trade</button>
+    </span>
     <span class="seg" id="mode-seg" title="Trading mode — switches instantly, persists across restarts">
       <button data-mode="conservative">🟢 Conservative</button>
       <button data-mode="high_risk">🔴 High-Risk</button>
@@ -280,6 +285,33 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
         <h3 class="sub">Recent order history</h3>
         <div id="tk-history"><div class="empty">None yet.</div></div>
       </div>
+    </div>
+  </section>
+
+  <!-- COACH (Human Mode reviews + profile) -->
+  <section id="tab-coach" style="display:none">
+    <div class="cards" id="coach-cards"></div>
+    <div class="grid2">
+      <div class="panel">
+        <h2>Recurring mistakes — your personal coaching</h2>
+        <div id="coach-mistakes"><div class="empty">No reviewed trades yet.
+          Switch to <b>👤 You trade</b> and close a trade — every manual round
+          trip gets a full AI review here.</div></div>
+      </div>
+      <div class="panel">
+        <h2>Strengths & recommended exercises</h2>
+        <div id="coach-strengths"></div>
+        <h3 class="sub">Exercises</h3>
+        <div id="coach-exercises"><div class="empty">—</div></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Trade reviews (click a row for the full breakdown)</h2>
+      <div id="coach-reviews"><div class="empty">None yet.</div></div>
+      <div class="hint">Scores rate your <b>process</b>, not the outcome — a
+        disciplined loser scores higher than a reckless winner. Context is
+        sampled on the scan cycle nearest entry (delayed data); emotional tags
+        are inferred from observable behaviour, not mind-reading.</div>
     </div>
   </section>
 
@@ -421,6 +453,7 @@ document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
   $("tab-" + b.dataset.tab).style.display = "";
   $("tab-title").textContent = b.textContent;
   if (b.dataset.tab === "trade") loadTrade();
+  if (b.dataset.tab === "coach") loadCoach();
   if (b.dataset.tab === "watchlist") loadWatchlist();
   if (b.dataset.tab === "journal") loadJournal();
   if (b.dataset.tab === "learning") loadLearning();
@@ -440,6 +473,8 @@ function renderStatus(s) {
 
   const highRisk = s.trading_mode === "high_risk";
   renderMode(s);
+  document.querySelectorAll("#op-seg button").forEach(b =>
+    b.classList.toggle("active", b.dataset.op === s.operating_mode));
 
   const halted = s.risk.halted;
   $("halt-banner").style.display = halted ? "" : "none";
@@ -1063,6 +1098,78 @@ $("tk-form").onsubmit = async e => {
     : `order working: ${d.order.kind} ${d.order.contract} x${d.order.quantity} (${d.order.tif})`);
   await Promise.all([loadMetrics(), loadOrders()]);
 };
+
+/* ── operating mode (AI vs Human) + coach ─────────────────────────────── */
+document.querySelectorAll("#op-seg button").forEach(b => b.onclick = async () => {
+  const resp = await post("/api/operating_mode", {mode: b.dataset.op});
+  const d = await resp.json();
+  if (!resp.ok) { toast(d.error, false); return; }
+  toast(d.operating_mode === "human"
+    ? "👤 Human Mode: you trade, the AI advises and reviews — it will not enter positions"
+    : "🤖 AI Mode: the engine trades the paper account autonomously");
+  if (lastStatus) { lastStatus.operating_mode = d.operating_mode; renderStatus(lastStatus); }
+});
+
+async function loadCoach() {
+  const d = await (await fetch("/api/coach")).json();
+  const p = d.profile;
+  $("coach-cards").innerHTML = (p.trades_reviewed === 0 ? [
+    ["Trades reviewed", "0", ""],
+  ] : [
+    ["Trades reviewed", p.trades_reviewed, ""],
+    ["Avg process score", p.avg_score + "/100", ""],
+    ["Score trend", (p.score_trend >= 0 ? "+" : "") + p.score_trend,
+     cls(p.score_trend)],
+    ["Distinct mistakes", (p.recurring_mistakes || []).length, ""],
+  ]).map(([k, v, c]) =>
+    `<div class="card"><div class="k">${k}</div><div class="v small ${c}">${v}</div></div>`).join("");
+
+  if (p.trades_reviewed > 0 && (p.recurring_mistakes || []).length) {
+    $("coach-mistakes").innerHTML = p.recurring_mistakes.map(m =>
+      `<div class="notif risk_limit"><div class="t">${esc(m.label)}
+        <span class="hint" style="display:inline">— ${m.count}× (${(m.rate*100).toFixed(0)}% of trades)</span></div>
+        <div class="b">${esc(m.coaching)}</div></div>`).join("");
+  } else if (p.trades_reviewed > 0) {
+    $("coach-mistakes").innerHTML = `<div class="empty">No recurring mistakes yet — keep it up.</div>`;
+  }
+  $("coach-strengths").innerHTML = (p.top_strengths || []).length
+    ? p.top_strengths.map(s =>
+        `<div class="notif trade_closed"><div class="b">${esc(s.strength)}
+         <span class="hint" style="display:inline">×${s.count}</span></div></div>`).join("")
+    : `<div class="empty">—</div>`;
+  $("coach-exercises").innerHTML = (p.recommended_exercises || []).length
+    ? "<ol style='margin-left:18px; line-height:1.7'>" +
+      p.recommended_exercises.map(e => `<li>${esc(e)}</li>`).join("") + "</ol>"
+    : `<div class="empty">—</div>`;
+
+  $("coach-reviews").innerHTML = d.reviews.length === 0
+    ? `<div class="empty">None yet.</div>`
+    : `<table><tr><th>Trade</th><th class="num">Score</th><th>Verdict</th>
+       <th>Setup</th><th>Summary</th></tr>` +
+      d.reviews.map((r, i) => `
+        <tr class="expandable" data-i="${i}"><td>${esc(r.trade_id)}</td>
+          <td class="num" style="color:${r.score >= 70 ? "var(--good)" : r.score <= 40 ? "var(--bad)" : "var(--warn)"}"><b>${r.score}</b></td>
+          <td>${r.verdict}</td><td>${esc(r.setup_quality)}</td>
+          <td style="max-width:420px">${esc(r.summary)}</td></tr>
+        <tr style="display:none" id="rev-${i}"><td colspan="5"><div class="reasons">${
+          esc(reviewDetail(r))}</div></td></tr>`).join("") + "</table>";
+  document.querySelectorAll("#coach-reviews tr.expandable").forEach(tr =>
+    tr.onclick = () => { const row = $("rev-" + tr.dataset.i);
+                         row.style.display = row.style.display ? "" : "none"; });
+}
+
+function reviewDetail(r) {
+  const fmt = f => `${f.passed === null ? "·" : f.passed ? "✓" : "✗"} ${f.check}: ${f.detail}`;
+  return [
+    "BEFORE THE TRADE", ...(r.before || []).map(fmt), "",
+    "DURING THE TRADE", ...(r.during || []).map(fmt), "",
+    "AFTER THE TRADE", ...(r.after || []), "",
+    r.mistake_labels?.length ? "MISTAKES: " + r.mistake_labels.join("; ") : "MISTAKES: none",
+    r.strengths?.length ? "STRENGTHS: " + r.strengths.join("; ") : "",
+    "", ...(r.pro_notes || []).map(n => "PRO: " + n),
+    "", "EV: " + (r.ev_note || ""),
+  ].filter(x => x !== "").join("\n");
+}
 
 async function loadOrders() {
   const d = await (await fetch("/api/orders")).json();
