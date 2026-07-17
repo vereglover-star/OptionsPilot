@@ -5,8 +5,9 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-17 (full test suite run + live browser
-verification; see `PROJECT_STATE.md` for detail).
+**Last verified:** 2026-07-17 (`.\scripts\verify.ps1` — full test suite,
+HTML id references, doc consistency, `pip check`, and a headless-browser
+smoke check, all green; see `PROJECT_STATE.md` for detail).
 
 ---
 
@@ -39,6 +40,8 @@ V2-6 (journal/improvement dashboard) are not started.
 | V2-3 — AI Mode vs. Human Mode | `operating_mode` axis, manual-trade reconciliation loop, `TradeCoach` (process-scored reviews), Coach tab | Committed, live-verified, exe rebuilt |
 | Performance & polish pass | Scan cycle 14.9s → ~0.1s warm, non-blocking scans, brokerage-style UI redesign | Committed, stable |
 | V2-4 — Chart workspace | Vendored lightweight-charts, `/api/candles`, five-timeframe chart with indicator overlays/subpanes, drawing tools (level/trend/fib/zone/note), position/order trade lines, trade-from-chart | Committed, live-verified |
+| Documentation & AI framework | `PROJECT_STATUS.md`/`ROADMAP.md`/`ARCHITECTURE.md` (with diagrams)/`AI_CONTEXT.md`/`NEXT_SESSION.md`/`CONTRIBUTING.md` | Committed |
+| Developer scripts & automation | `dev`/`test`/`verify`/`docs`/`build`/`release`/`clean` `.ps1` entry points, `check_html_ids.py`, `check_docs.py`, `browser_check.py`, `bump_version.py` | Not yet committed (see "Exact stopping point" in `PROJECT_STATE.md`) |
 
 ## Features complete
 
@@ -69,13 +72,21 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. The most recent bug found and fixed in-session (2026-07-17): a halted paper account could still place a manual market buy because `UIServer.place_order` never called the risk preflight that existed but wasn't wired up — fixed and covered by `tests/test_ui_server.py::test_market_buy_respects_risk_halt` and the `TestManualEntry` suite in `tests/test_risk.py`.
+None open. Fixed in-session (2026-07-17, automation session): the
+`/favicon.ico` 404 (the one remaining browser console error from the prior
+session), found immediately by the new `scripts/browser_check.py`'s first
+real run. Fixed the same session before it: a halted paper account could
+still place a manual market buy because `UIServer.place_order` never
+called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. Scope decision for what's next: V2-5 (replay engine), V2-6 (journal/improvement dashboard), the deferred V2-4 workspace layout, or pausing feature work to accumulate paper-trading data — this is the user's call, not a technical blocker.
-2. Exe rebuild + smoke test — deliberately deferred until feature-complete (user's stated preference), not urgent.
-3. Hygiene backlog: see `TODO.md` (currently: serve a real favicon; consider browser-driven UI test coverage).
+1. **Commit this session's automation work** (`scripts/*`, `pyproject.toml`
+   extras, `docs/QUICK_START.md`, `docs/RELEASE_CHECKLIST.md`, the favicon
+   fix, and doc updates) — currently uncommitted working-tree changes.
+2. Scope decision for what's next: V2-5 (replay engine), V2-6 (journal/improvement dashboard), the deferred V2-4 workspace layout, or pausing feature work to accumulate paper-trading data — this is the user's call, not a technical blocker.
+3. Exe rebuild + smoke test — deliberately deferred until feature-complete (user's stated preference), not urgent.
+4. Hygiene backlog: see `TODO.md` (currently: deep per-flow browser regression tests, CI, linting — all recommended, none installed).
 
 ## Next milestone
 
@@ -83,8 +94,15 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**345 tests, 100% passing** (`.venv\Scripts\python -m pytest`, ~13s). No automated browser/UI test coverage exists for `static/index.html`; the highest-value frontend flows have been manually live-verified in-session (see `PROJECT_STATE.md`) but there is no regression suite for them.
+**345 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+is real but shallow: `scripts/check_html_ids.py` (static id-reference
+check) and `scripts/browser_check.py` (headless browser, every tab, zero
+console errors) both run automatically via `scripts/verify.ps1` — neither
+is deep per-flow regression coverage (see `TODO.md`).
 
 ## Last verified date
 
-**2026-07-17** — full pytest run (345/345), static `$("id")` reference check, and live verification in serve mode against scratch data directories including a real headless-browser drive of the Charts tab (Playwright + system Edge).
+**2026-07-17** — `.\scripts\verify.ps1` end to end: full pytest run
+(345/345), static `$("id")` reference check, documentation consistency
+check, `pip check`, and a headless-browser smoke check across all 9 tabs
+(Playwright + system Edge) with zero console errors.

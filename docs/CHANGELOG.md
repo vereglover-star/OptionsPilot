@@ -4,6 +4,95 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-17 — Developer automation: scripts/, browser checks, doc-consistency checks
+
+*345 tests (unchanged — no trading logic touched, per the session's explicit
+scope). A repository-wide review for repetitive manual developer tasks,
+turned into a `scripts/` automation layer with one clear responsibility per
+script.*
+
+- **`scripts/_common.ps1`**: shared bootstrap (`Ensure-Environment`) that
+  every other script dot-sources — creates `.venv` if missing, installs the
+  package editable with the requested extras, idempotent.
+- **`scripts/dev.ps1` / `test.ps1` / `verify.ps1` / `docs.ps1` / `build.ps1`
+  / `release.ps1` / `clean.ps1`**: start the app, run tests (with an
+  exit-code-derived `TESTS: PASS`/`FAIL` line that can't be fooled by the
+  documented terminal-output-swallowing trap), run every automated check in
+  one command, check documentation consistency alone, build the exe
+  (test-gated, wraps the untouched `build_exe.ps1`), run the full
+  release-readiness pipeline (never commits/tags/pushes — prints the exact
+  manual commands instead), and remove dev/build clutter without touching
+  `data/`/`logs/`.
+- **`scripts/check_html_ids.py`**: the static `index.html` `$("id")`
+  reference check, previously ad hoc, now committed.
+- **`scripts/check_docs.py`**: confirms every `docs/*.md` cross-reference
+  resolves, that "current state" docs' claimed test counts match a live
+  pytest count, and that `pyproject.toml`'s version agrees with
+  `optionspilot/__init__.py`'s. Caught a real stale example on its first
+  run (`CLAUDE.md`'s commit-message template hardcoded `"296 tests"`) —
+  fixed by making the example describe the process instead of a number.
+- **`scripts/browser_check.py`**: a committed, repeatable version of prior
+  sessions' ad hoc Playwright verification. Launches the app against a
+  scratch data directory, drives the system's installed Edge
+  (`channel="msedge"`, no download), visits every tab, fails on any
+  console error. Soft-skips if the new optional `[browser]` extra isn't
+  installed. Found a real bug on its first run: `/favicon.ico` 404ing was
+  the only console error — fixed by copying `assets/optionspilot.ico` into
+  `optionspilot/ui/static/favicon.ico` (already bundled everywhere
+  `ui/static/*` is) and serving it. Also found and fixed a bug in itself:
+  scratch temp directories weren't reliably cleaned up because a Windows
+  file handle can linger briefly past `subprocess.wait()` returning —
+  fixed with a bounded retry instead of silently swallowing the error.
+- **`scripts/bump_version.py`**: keeps `pyproject.toml` and
+  `optionspilot/__init__.py`'s version strings in sync — the same class of
+  drift `check_docs.py` guards against for test counts.
+- Two new optional `pyproject.toml` extras: `build` (`pyinstaller` —
+  previously installed ad hoc and undeclared anywhere, the same gap
+  `Pillow` had before an earlier session fixed it) and `browser`
+  (`playwright`).
+- New `docs/QUICK_START.md` (minimum steps to start productive work) and
+  `docs/RELEASE_CHECKLIST.md` (the exact release process, automated where
+  possible, explicit about what stays a manual, human-approved step).
+- `CONTRIBUTING.md`, `AI_CONTEXT.md`, `ARCHITECTURE.md`, `TODO.md`,
+  `PROJECT_STATUS.md`, `NEXT_SESSION.md`, `README.md`, and `CLAUDE.md` all
+  updated to reference the new scripts consistently rather than the old
+  raw commands, and to record the concrete lessons from building this
+  (PowerShell's `2>&1`-plus-`-Stop` native-stderr trap; Windows subprocess
+  file-handle timing) in `AI_CONTEXT.md` "Common mistakes to avoid."
+
+## 2026-07-17 — Documentation & AI development framework
+
+*345 tests (unchanged — a documentation-and-workflow session, no trading
+logic touched). Commit `1029fb0`.*
+
+- New `docs/PROJECT_STATUS.md`: a structured, dashboard-style snapshot
+  (version, milestones, features, known bugs/limitations, priorities, test
+  count) distinct from `PROJECT_STATE.md`'s session-by-session narrative.
+- Rewrote `docs/ROADMAP.md` into a unified Completed / In Progress /
+  Planned / Deferred / Long-term Vision structure, absorbing the stale
+  v1-only content it previously had; `docs/ROADMAP-V2.md` stays as the
+  detailed per-phase checklist it already was.
+- Expanded `docs/ARCHITECTURE.md`: an explicit directory tree, five Mermaid
+  diagrams (component map, AI-engine pipeline, risk-gate flowchart, cycle
+  sequence diagram, build pipeline), and dedicated sections for Charts,
+  WebSockets, Settings, and the build pipeline (including
+  `optionspilot_app.py`, previously undocumented).
+- New `docs/AI_CONTEXT.md`: the permanent-memory document — vision, design
+  philosophy, standards, future desktop/mobile plans, and a "Common
+  mistakes to avoid" section recording real incidents from this repo's
+  history so they don't repeat.
+- New `docs/NEXT_SESSION.md`: the concise session-handoff format (what was
+  completed, what's stable, what's next, what files matter, what not to
+  touch, known issues, a ready-to-paste first prompt).
+- New `docs/CONTRIBUTING.md`: coding/commit/testing/documentation
+  conventions, Definition of Done, pre-commit checklist, and a first pass
+  at automation recommendations (superseded/expanded by the automation
+  session above).
+- Fixed real staleness found during the audit: `README.md` claimed "Phase 1
+  of 8 complete" and 225 tests while omitting the Trade/Coach/Charts tabs
+  entirely; `CLAUDE.md` and `AI_HANDOFF.md`'s reading-order pointers
+  updated to route through the new files.
+
 ## 2026-07-17 — V2-4 finish: trade lines + fib/zone/note tools; manual entries risk-gated
 
 *345 tests. Completes the tractable remainder of the V2-4 drawing/overlay

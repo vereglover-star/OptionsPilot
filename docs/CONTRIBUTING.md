@@ -8,12 +8,44 @@ ground in more enforcement-oriented language). Where the two overlap,
 ## Getting set up
 
 ```powershell
+.\scripts\verify.ps1
+```
+
+One command: creates `.venv` if it doesn't exist, installs the package
+editable with the `dev`/`ui` extras, runs the full test suite, and checks
+the frontend and docs for drift. Should end in `VERIFY: PASS` before you
+change anything. See `docs/QUICK_START.md` for the shortest possible path
+from a fresh checkout to a running app, and the table below for what each
+script under `scripts/` does.
+
+If you'd rather do it by hand (or `scripts/verify.ps1` isn't available in
+your environment for some reason):
+
+```powershell
 cd optionspilot
 python -m venv .venv
 .venv\Scripts\pip install -e .[dev,ui]
 .venv\Scripts\pip install windows-toasts   # optional: desktop notifications
-.venv\Scripts\python -m pytest             # confirm 345/345 before changing anything
+.venv\Scripts\python -m pytest             # confirm the suite is green before changing anything
 ```
+
+### The developer scripts
+
+| Script | Responsibility |
+|---|---|
+| `scripts/dev.ps1` | Start the app for local development (`-Ui` for the desktop window, `-Loop` to also run the live scan loop) |
+| `scripts/test.ps1` | Run the test suite; pass-through args go straight to pytest |
+| `scripts/verify.ps1` | Run every automated check in one command — tests, HTML id references, doc consistency, `pip check`, and a headless-browser smoke check |
+| `scripts/docs.ps1` | Documentation consistency only (also runs as part of `verify.ps1`) |
+| `scripts/build.ps1` | Build the Windows exe — refuses to run on a red test suite unless `-SkipTests` is passed |
+| `scripts/release.ps1` | Full release-readiness pipeline + report (see `docs/RELEASE_CHECKLIST.md`) |
+| `scripts/clean.ps1` | Remove `__pycache__`/`.pytest_cache`/`*.egg-info` clutter (`-Dist` also removes PyInstaller output) |
+
+Each has one clear responsibility and composes with the others rather than
+duplicating logic (`verify.ps1` calls `test.ps1`; `build.ps1` calls
+`test.ps1` then the existing `scripts/build_exe.ps1`; `release.ps1` calls
+`verify.ps1` then `build.ps1`). All of them are safe to re-run — the
+environment bootstrap they share (`scripts/_common.ps1`) is idempotent.
 
 ## Coding conventions
 
@@ -80,10 +112,13 @@ files/classes. Mention the test count at the end of the body, e.g.
 
 ## Testing expectations
 
-- `.venv\Scripts\python -m pytest` — full suite, ~13s, must be 100% green
-  before considering work done.
-- `.venv\Scripts\python -m pytest tests\test_orders.py` — one module, for
-  fast iteration.
+- `.\scripts\test.ps1` — full suite, ~13s, must be 100% green before
+  considering work done. Prints an explicit `TESTS: PASS`/`TESTS: FAIL`
+  line derived from pytest's exit code, not from parsing its printed
+  summary — see the note on terminal output capture below.
+- `.\scripts\test.ps1 tests\test_orders.py` — one module, for fast
+  iteration. `.\scripts\test.ps1 -k manual_entry` also works (pass-through
+  args go straight to pytest).
 - One test file per module (`broker/orders.py` ↔ `tests/test_orders.py`),
   `class Test<Thing>` / `def test_<behavior>` structure.
 - New backend code needs new tests in the matching file. For anything
@@ -91,16 +126,22 @@ files/classes. Mention the test count at the end of the body, e.g.
   (empty positions, zero quantities, missing quotes, restart-persistence).
 - If a test fails and the reason isn't understood, investigate the root
   cause — never weaken or delete a test to make it pass.
-- **No automated frontend test suite exists.** For any `static/index.html`
-  change, the minimum bar is: (a) a static check that every `$("id")`
-  reference resolves to a real element, and (b) manual verification in an
-  actual browser — start the dev server
-  (`python -m optionspilot serve --port 8787 --no-loop`) and click through
-  the changed flow. See "Automation opportunities" below for a scripted
-  alternative that's been used successfully in this repo.
+- **`static/index.html` has a real but shallow automated safety net**:
+  `scripts/check_html_ids.py` (static — every `$("id")` reference resolves
+  to a real element) and `scripts/browser_check.py` (a real headless
+  browser visits every tab and fails on any console error) both run as
+  part of `scripts/verify.ps1`. Neither is deep per-flow regression
+  coverage (mode toggle, manual order placement, coach review rendering
+  specifically) — for any change to a specific flow, still verify it by
+  hand in a real browser (`.\scripts\dev.ps1`) before calling it done. See
+  `TODO.md` for the open opportunity to extend `browser_check.py` with
+  flow-specific coverage.
 - Terminal output capture can silently swallow pytest's final summary line
-  depending on the shell tool in use. Don't assume failure just because you
-  didn't see `N passed in X.XXs` — check for `F`/`E` markers first.
+  depending on the shell tool in use — this is exactly what
+  `scripts/test.ps1`'s explicit exit-code-based PASS/FAIL line exists to
+  defuse. If running pytest directly instead, don't assume failure just
+  because you didn't see `N passed in X.XXs` — check for `F`/`E` markers
+  first, or just use the script.
 
 ## Documentation requirements
 
@@ -132,11 +173,13 @@ Never rewrite `CHANGELOG.md`'s existing entries — append only.
 
 A change is done when, and only when, all of the following are true:
 
-- [ ] The full test suite passes (345+ tests, 100% green).
+- [ ] `.\scripts\verify.ps1` passes (tests, HTML id references, doc
+      consistency, `pip check`, browser smoke check — all in one command).
 - [ ] New tests exist for new behavior, especially boundary conditions on
       anything touching money/positions/risk.
 - [ ] If `static/index.html` changed: verified in a real (or scripted
-      headless) browser, zero new console errors.
+      headless) browser beyond what `browser_check.py`'s tab-navigation
+      smoke check covers — zero new console errors either way.
 - [ ] No trading-logic safety rule was weakened (see `CLAUDE.md` "The one
       rule that overrides everything else").
 - [ ] Every doc in "Documentation requirements" above that's affected has
@@ -153,65 +196,92 @@ Run through this before proposing or making a commit:
 
 1. `git status` **and** `git diff --stat` — confirm what's actually
    changed, don't trust either alone.
-2. `.venv\Scripts\python -m pytest` — full suite green.
+2. `.\scripts\verify.ps1` — the whole automated gate in one command (tests,
+   HTML id references, doc consistency, `pip check`, browser smoke check).
+   This subsumes "run the test suite" — no separate step needed.
 3. Read the full diff once, end to end, looking for: leftover debug prints
    or temporary logging, commented-out code, TODO markers that should have
    been resolved, placeholder/stub implementations, accidental changes to
    files unrelated to the task, generated artifacts that shouldn't be
    tracked (`dist/`, `build/`, `*.egg-info/`, `OptionsPilot.spec` — these
-   are already gitignored, but double-check nothing new slipped in).
+   are already gitignored, but double-check nothing new slipped in; `.\scripts\clean.ps1`
+   removes local dev clutter if you want a clean-room check).
 4. Confirm the documentation checklist above is satisfied.
 5. Draft the commit message per the convention above.
 6. Only stage and commit if explicitly asked to.
 
-## Automation opportunities (recommendations, not yet applied)
+## Automation: what's implemented vs. still just recommended
 
-Reviewed for repetitive developer tasks worth automating. Nothing in this
-section has been implemented — these are recommendations for the user to
-decide on, in keeping with "don't introduce unnecessary tooling." None of
-these are required for the project to keep working as it has.
+A 2026-07-17 session reviewed the repo for repetitive developer tasks and
+built a `scripts/` automation layer (see "The developer scripts" above) —
+this section records what actually got built, and, separately, what's
+still a recommendation the user hasn't decided on. Keep this distinction
+honest as things change: don't let "recommended" items silently start
+sounding implemented, or vice versa.
 
-- **Static `index.html` ID-reference check.** Already used ad hoc (a short
-  Python script grepping `id="..."` vs `$("...")` calls). Worth turning
-  into a real `scripts/check_html_ids.py` and wiring it into a pre-commit
-  or CI step — it's cheap, has already caught nothing but has real
-  precedent as a safety net, and needs no new dependency.
+### Implemented (2026-07-17)
+
+- **`scripts/check_html_ids.py`** — the static `index.html` ID-reference
+  check, previously an ad hoc one-off script, now committed and run by
+  `verify.ps1`/`docs.ps1` every time.
+- **`scripts/check_docs.py`** — documentation consistency: cross-referenced
+  doc files exist, "current state" docs' test-count claims match a live
+  pytest count, `pyproject.toml`'s version agrees with
+  `optionspilot/__init__.py`'s. Caught a real stale example in `CLAUDE.md`
+  on its first run (a commit-message template hardcoded `"296 tests"`).
+- **`scripts/browser_check.py`** — a committed, repeatable version of the
+  ad hoc Playwright verification from earlier sessions: launches the app
+  against a scratch data directory, drives the system's installed Edge
+  (`channel="msedge"`, no browser download), visits every tab, and fails
+  on any console error. Found a real bug on its first run (a missing
+  favicon, fixed the same session) and a real cleanup bug in itself
+  (leftover scratch directories from a Windows file-handle race, also
+  fixed the same session — see `AI_CONTEXT.md` "Common mistakes to
+  avoid"). This is a smoke check (does every tab load cleanly?), not deep
+  per-flow regression coverage — see `TODO.md` for the remaining
+  opportunity to extend it.
+- **`scripts/bump_version.py`** — keeps `pyproject.toml` and
+  `optionspilot/__init__.py`'s version strings from drifting apart, the
+  same class of bug `check_docs.py` guards against for test counts.
+- **The `dev.ps1`/`test.ps1`/`verify.ps1`/`docs.ps1`/`build.ps1`/
+  `release.ps1`/`clean.ps1` orchestration layer** itself, plus two new
+  optional `pyproject.toml` extras (`build` = `pyinstaller`, `browser` =
+  `playwright`) so `pyinstaller` — previously installed ad hoc and
+  undeclared anywhere, the same gap `Pillow` had before a prior session
+  fixed it — is now reproducible.
+
+### Still just recommended (not installed, real decisions for the user)
+
 - **A minimal CI workflow** (`.github/workflows/tests.yml`) running
-  `pip install -e .[dev,ui]` + `pytest` on push/PR. There's a `git remote`
-  pointing at GitHub already, so this is a low-cost addition whenever the
-  user wants basic build validation without relying on a human remembering
-  to run tests locally. Recommended scope: just the test suite — not
-  linting/formatting until those are actually adopted (see below), to
-  avoid a CI step that's red for reasons unrelated to correctness.
+  `scripts/verify.ps1` (or just the pytest suite) on push/PR. There's a
+  `git remote` pointing at GitHub already, so this is a low-cost addition
+  whenever the user wants basic build validation without relying on a
+  human remembering to run `verify.ps1` locally. Recommended scope: tests
+  + the doc/HTML checks — not the browser check (needs a real browser
+  binary in the CI image, more setup) and not linting/formatting until
+  those are actually adopted (see below), to avoid a CI step that's red
+  for reasons unrelated to correctness.
 - **Linting/formatting** (`ruff` is the natural single-tool choice — lint +
   format + import sort, one dependency, fast, zero-config-friendly). None
   is configured today; the codebase has stayed consistent by convention.
   Worth adopting only if the user wants it — introducing it retroactively
   on an existing, unlinted codebase means either a large reformatting diff
   or a lot of `# noqa`s, so this is a real decision, not a trivial add.
-- **Pre-commit hooks** (`pre-commit` framework) to run the pytest suite (or
-  a fast subset) and the HTML ID check automatically before every commit —
-  worth adding only after CI exists, so the two reinforce rather than
-  duplicate each other.
-- **Release/build automation**: `scripts/build_exe.ps1` already handles the
-  actual packaging well (backup/restore of `data/`, running-instance guard).
-  The remaining manual step is *deciding* to rebuild — that's a deliberate
-  human judgment call in this project (exe rebuilds happen last, on
-  purpose), so automating the trigger would work against the project's own
-  stated workflow. Not recommended.
-- **Playwright-based browser verification, made permanent.** A 2026-07-17
-  session installed `playwright` ad hoc into `.venv` and drove the system's
-  installed Edge (`channel="msedge"`, no browser download needed) to
-  verify the Charts tab — screenshots, console-error checking, and
-  interaction scripting all worked well. That precedent is worth
-  formalizing into a few committed `tests/browser/` scripts for the
-  highest-value flows (mode toggle, manual order placement, coach review
-  rendering) rather than writing throwaway scripts each time. This is the
-  single highest-leverage automation opportunity in the repo, since it's
-  the one form of testing that currently doesn't exist at all. Gotcha
-  worth preserving in whatever script is written: lightweight-charts
-  coalesces clicks faster than ~500ms apart as double-clicks, so scripted
-  two-point drawing-tool clicks need ≥700ms pacing.
+- **Pre-commit hooks** (`pre-commit` framework) to run `scripts/verify.ps1`
+  (or a fast subset of it) automatically before every commit — worth
+  adding only after CI exists, so the two reinforce rather than duplicate
+  each other.
+- **Deep per-flow browser regression tests** (mode toggle, manual order
+  placement, coach review rendering, each as its own scripted flow) beyond
+  `browser_check.py`'s tab-navigation smoke check — the single remaining
+  highest-leverage gap, since it's the one form of testing that still
+  doesn't exist at all for `static/index.html`.
+- **Automating the *decision* to rebuild the exe.** `scripts/build.ps1`
+  already automates the *mechanics* safely (test-gated, wraps the
+  data-preserving `build_exe.ps1`). Automating *when* a rebuild happens
+  (e.g. on every merge to main) would work against this project's own
+  stated workflow — exe rebuilds happen last, deliberately, as a human
+  judgment call. Not recommended.
 
 ## What was deliberately NOT recommended
 

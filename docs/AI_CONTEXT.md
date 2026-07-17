@@ -126,11 +126,15 @@ drift the way a `docs/` file might.
   this codebase has a strong existing pattern here (`test_orders.py`'s
   rejection tests, `test_coach.py`'s `TestMissingContext`, `test_risk.py`'s
   `TestManualEntry`).
-- **No automated frontend test coverage exists.** Any change to
-  `static/index.html` needs manual (or ad hoc scripted) verification in a
-  real browser before it's considered done — there is no regression net.
-- No CI is configured yet. Tests are run locally, on demand, before
-  committing.
+- **Frontend test coverage is real but shallow.** `scripts/check_html_ids.py`
+  (static — every `$("id")` resolves) and `scripts/browser_check.py` (a
+  real headless browser visits every tab, fails on any console error) both
+  run as part of `scripts/verify.ps1`. Neither is deep per-flow regression
+  coverage — any change to a specific flow (mode toggle, manual order
+  placement, coach review rendering) still needs manual verification in a
+  real browser (`scripts/dev.ps1`) before it's considered done.
+- No CI is configured yet. `scripts/verify.ps1` is the local equivalent —
+  run before committing.
 
 ## Documentation requirements
 
@@ -176,19 +180,26 @@ in the first place.
 
 ## Technical debt
 
-- No automated browser/UI test coverage for `static/index.html` — the
-  single biggest coverage gap in the project (see `CONTRIBUTING.md`
-  "Automation opportunities" for a concrete, low-cost path to closing part
-  of this).
+- **Frontend coverage is shallow, not absent** (see "Testing standards"
+  above) — `browser_check.py` proves every tab loads cleanly, not that any
+  specific interaction still works. Extending it with deep per-flow checks
+  is the single remaining highest-leverage gap; see `TODO.md`.
 - No linting, formatting, or type-checking tooling is configured
   (`pyproject.toml` has no `[tool.ruff]`/`[tool.black]`/`[tool.mypy]`
   section, no `.pre-commit-config.yaml`). The codebase is consistently
   styled by convention/discipline, not by tooling — this has held up so
-  far but is worth watching as the codebase grows.
+  far but is worth watching as the codebase grows. See `CONTRIBUTING.md`
+  "Automation: what's implemented vs. still just recommended" — this one
+  is still just recommended.
+- No CI is configured. `scripts/verify.ps1` exists specifically so a human
+  running it locally is (currently) the only gate — see the same
+  "Automation" section for the recommended, not-yet-applied CI scope.
 - `optionspilot_app.py`'s `OptionsPilot.spec` is PyInstaller-generated and
   gitignored, which is correct, but means the exact PyInstaller invocation
   lives only in `scripts/build_exe.ps1` — if that script and the spec ever
-  drift, there's no test catching it (only manual smoke-testing).
+  drift, there's no test catching it (only manual smoke-testing via
+  `scripts/build.ps1`, which wraps it but doesn't launch/exercise the
+  resulting exe).
 - See `TODO.md` for the live, itemized backlog — this section is the
   narrative context for *why* those items matter, not a duplicate list.
 
@@ -277,6 +288,27 @@ Lessons the project has actually hit, not hypothetical ones:
   Documentation (including this file's own history) can describe work that
   was written and tested but never actually committed. `git status`/
   `git log` are the only reliable source of truth for "is this committed."
+- **`$ErrorActionPreference = "Stop"` plus `2>&1` on a native command can
+  turn a benign stderr line into a fatal error.** Happened writing
+  `scripts/_common.ps1` on 2026-07-17: piping a script's own invocation
+  through `2>&1` (to combine stdout/stderr for a tool call) made
+  PowerShell wrap `pip`'s routine "a new version is available" notice as a
+  terminating `NativeCommandError`, even though `pip` itself exited 0. Not
+  a bug in the script — a bug in how it was invoked. Don't `2>&1` a
+  PowerShell script or native command unless you specifically need merged
+  streams; if a native call fails mysteriously under `-Stop`, try it
+  without any stderr redirection before assuming the command itself is
+  broken.
+- **A subprocess exiting doesn't mean its file handles are released yet on
+  Windows.** `scripts/browser_check.py`'s first real run left two scratch
+  temp directories behind despite an explicit `shutil.rmtree(..., 
+  ignore_errors=True)` in a `finally` block after `server.wait()`
+  returned — a SQLite or log file handle was still closing asynchronously.
+  Fixed with a short retry loop instead of swallowing the error silently.
+  **Lesson: `ignore_errors=True` (or bare `except: pass`) on cleanup code
+  hides exactly the kind of leak this note is about — prefer a bounded
+  retry with a visible warning on final failure**, especially for anything
+  spawning a child process on Windows.
 
 ## Current UI philosophy
 

@@ -20,7 +20,10 @@ see `docs/AI_CONTEXT.md` for the project's vision/philosophy/standards,
    yourself — documentation can go stale between sessions, and `git
    status` alone has previously reported "clean" while `git diff --stat`
    showed real uncommitted changes (see `docs/AI_CONTEXT.md` "Common
-   mistakes to avoid"). Verify before trusting either.
+   mistakes to avoid"). Verify before trusting either. Then run
+   `.\scripts\verify.ps1` once to confirm the environment and baseline are
+   actually green before you start changing anything (see
+   `docs/QUICK_START.md` if you need the minimal path to a working setup).
 5. Only read source files you actually need for the task at hand. The docs
    above exist specifically so you don't have to read the whole codebase to
    get oriented — `docs/ARCHITECTURE.md` (system design + diagrams) and
@@ -186,25 +189,36 @@ same session as the code change, before ending your turn.
 ## How testing should be performed
 
 ```powershell
-.venv\Scripts\python -m pytest          # full suite (fast, ~10s)
-.venv\Scripts\python -m pytest tests\test_orders.py   # one module
+.\scripts\test.ps1                    # full suite (fast, ~13s), explicit PASS/FAIL
+.\scripts\test.ps1 tests\test_orders.py   # one module
+.\scripts\verify.ps1                  # tests + HTML ids + docs + pip check + browser smoke
 ```
 
-- The full suite must pass (100% green — check `docs/PROJECT_STATUS.md` or
-  just run it for the current count, currently 345) before you consider
-  work done. If a test fails and you don't understand why, investigate the
-  root cause — don't weaken or delete the test to make it pass.
+`scripts/test.ps1`/`verify.ps1` are wrappers, not a different testing
+system — they ensure the venv/deps, run `pytest`, and print an explicit
+`TESTS: PASS`/`TESTS: FAIL` line derived from pytest's exit code (not from
+parsing its printed summary, which output capture has swallowed before —
+see "Known traps"). The raw command still works identically:
+`.venv\Scripts\python -m pytest`.
+
+- The full suite must pass (100% green — `docs/PROJECT_STATUS.md` has the
+  current count, or just run it) before you consider work done. If a test
+  fails and you don't understand why, investigate the root cause — don't
+  weaken or delete the test to make it pass.
 - New backend code needs new tests in the matching `tests/test_*.py` file,
   following the existing `class Test<Thing>` / `def test_<behavior>`
   structure already used throughout.
-- There is no automated frontend test suite. For UI changes, the minimum
-  bar is: (a) a static check that every `$("id")` reference in
-  `index.html` resolves to a real element (see the one-liner used in the
-  V2-3 documentation pass, reproducible with a short Python script grepping
-  `id="..."` vs `$("...")`), and (b) manual verification in an actual
-  browser — start the dev server
-  (`python -m optionspilot serve --port 8787 --no-loop`) and click through
-  the changed flow.
+- Frontend coverage is real but shallow: `scripts/check_html_ids.py`
+  (static — every `$("id")` reference resolves) and
+  `scripts/browser_check.py` (a real headless browser visits every tab,
+  fails on any console error) both run as part of `.\scripts\verify.ps1`.
+  Neither is deep per-flow coverage — for any change to a specific flow,
+  still verify it by hand in a real browser
+  (`.\scripts\dev.ps1`, or `python -m optionspilot serve --port 8787 --no-loop`
+  directly) before calling it done.
+- `.\scripts\build.ps1` runs the full test suite first and refuses to
+  invoke PyInstaller on a red suite — this is the enforcement mechanism
+  for the rule immediately below, not a separate rule.
 - Before rebuilding the exe, run the full test suite first — don't waste a
   multi-minute PyInstaller build on code that fails its own tests.
 
@@ -218,8 +232,9 @@ Pattern:
 <Prose paragraphs explaining WHAT was built and WHY, organized by
 sub-feature if the commit spans more than one (see 0ce001d for an example
 of a two-part commit body: "V2-1 (...): ..." then "V2-2 (...): ..."). Name
-the key new files/classes. Mention the test count at the end of the body,
-e.g. "296 tests.">
+the key new files/classes. Mention the current test count at the end of
+the body (run the suite to get it — don't guess or copy an old number).>
+
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 ```

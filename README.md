@@ -31,6 +31,15 @@ All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 
 ```powershell
 cd optionspilot
+.\scripts\verify.ps1
+```
+
+One command: creates `.venv`, installs everything, runs the full test
+suite, and checks the frontend/docs for drift. Should end in
+`VERIFY: PASS`. See [docs/QUICK_START.md](docs/QUICK_START.md) for the
+minimal path to a running app, or do it by hand:
+
+```powershell
 python -m venv .venv
 .venv\Scripts\pip install -e .[dev]
 .venv\Scripts\pip install windows-toasts   # optional: desktop notifications
@@ -40,6 +49,14 @@ python -m venv .venv
 ## Usage
 
 ### Desktop app
+
+```powershell
+.\scripts\dev.ps1 -Ui
+# or in a browser, with the live scan loop off by default:
+.\scripts\dev.ps1
+```
+
+By hand:
 
 ```powershell
 .venv\Scripts\pip install -e .[ui]
@@ -190,14 +207,17 @@ optionspilot/
   ui/            FastAPI backend, static dashboard (incl. Charts tab),
                  pywebview shell
   orchestrator.py  the live event loop
-scripts/         build_exe.ps1, soak.py, make_icon.py, fetch_symbols.py
+scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
+                 (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
+                 make_icon.py, fetch_symbols.py
 docs/            see "Documentation" below
 tests/           pytest suite (345 tests)
 ```
 
 ## Documentation
 
-Start with [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) if you're an AI assistant
+Start with [docs/QUICK_START.md](docs/QUICK_START.md) for the minimum
+steps to get running, or [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) if you're an AI assistant
 picking up this project, or [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) if
 you're a human contributor. The full set:
 
@@ -220,6 +240,8 @@ you're a human contributor. The full set:
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — dated, prose changelog by feature.
 - [docs/TODO.md](docs/TODO.md) — flat, actionable work queue.
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — coding conventions, commit
-  style, testing expectations, definition of done.
+  style, testing expectations, definition of done, the developer scripts.
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — the exact,
+  scripted process for shipping a release.
 - [CLAUDE.md](CLAUDE.md) — permanent instructions for AI coding sessions
   (safety rules, architecture rules, workflow) — read this first if you are one.

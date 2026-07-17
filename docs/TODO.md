@@ -43,23 +43,31 @@ is. This file is the flat, actionable checklist version.
 - [ ] Decide on and implement stock/share (non-option) manual positions —
       deferred from V2-2. Touches `broker/orders.py`, `PaperBroker`, the
       Trade tab chain/ticket UI (currently options-only).
-- [ ] Consider adding at least a handful of browser-driven UI tests
-      (Playwright or similar) for the highest-value flows (mode toggle,
-      manual order placement, coach review rendering) — there is currently
-      zero regression coverage for `static/index.html` beyond static
-      ID-reference checking. Groundwork exists: `playwright` was
-      pip-installed ad hoc into `.venv` on 2026-07-17 (driving the system
-      Edge via `channel="msedge"`, no browser download) and used to
-      live-verify the Charts tab; the throwaway driver scripts are in the
-      session scratchpad, not the repo. Gotcha worth keeping: pace
-      scripted chart clicks ≥700ms apart or lightweight-charts coalesces
-      them as double-clicks.
+- [x] **Browser smoke check committed** — done 2026-07-17:
+      `scripts/browser_check.py` (Playwright driving the system's Edge via
+      `channel="msedge"`, no browser download; soft-skips if the optional
+      `[browser]` extra isn't installed) launches the app against a scratch
+      data dir and visits every tab checking for zero console errors. Runs
+      automatically as part of `scripts/verify.ps1`. **Still open**: this
+      is tab-navigation-level smoke coverage, not deep per-flow regression
+      testing (mode toggle, manual order placement, coach review rendering
+      specifically) — extending `browser_check.py` (or adding sibling
+      scripts) with those specific flows remains a real opportunity. Gotcha
+      worth keeping if you do: lightweight-charts coalesces chart clicks
+      faster than ~500ms apart as double-clicks — pace scripted two-point
+      drawing-tool clicks ≥700ms apart.
+- [ ] Consider a minimal CI workflow (`.github/workflows/tests.yml`
+      running `scripts/verify.ps1` or just the pytest suite on push/PR) and
+      `ruff` for linting/formatting — recommended but not installed; see
+      `docs/CONTRIBUTING.md` "Automation opportunities" for the reasoning
+      on why each is a real decision, not a trivial add.
 
 ## Low Priority
 
-- [ ] Serve a favicon (`/favicon.ico` currently 404s in the browser — the
-      only console error on an otherwise clean page; `assets/optionspilot.ico`
-      already exists and could be routed).
+- [x] Serve a favicon — done 2026-07-17: `assets/optionspilot.ico` copied
+      to `optionspilot/ui/static/favicon.ico` (so it's bundled the same way
+      in dev, a wheel, and the exe) and served at `GET /favicon.ico`. Found
+      by the new `scripts/browser_check.py`'s first real run.
 
 - [ ] V2-4 groundwork: evaluate bundling `lightweight-charts` (Apache-2.0)
       into `optionspilot/ui/static/` (no CDN — must work fully offline

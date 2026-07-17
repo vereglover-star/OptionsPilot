@@ -519,9 +519,14 @@ summary.
 
 Optional extras (`pyproject.toml`): `dev` (`pytest`, `httpx` for FastAPI
 `TestClient`, `Pillow` for icon generation), `ui` (`fastapi`, `uvicorn[standard]`,
-`pywebview`), `notify` (`windows-toasts`, optional desktop notifications). No
-linting, formatting, or type-checking tooling is configured yet — see
-`CONTRIBUTING.md` "Automation opportunities."
+`pywebview`), `notify` (`windows-toasts`, optional desktop notifications),
+`build` (`pyinstaller` — previously installed ad hoc and undeclared
+anywhere, fixed 2026-07-17), `browser` (`playwright`, for
+`scripts/browser_check.py`'s headless smoke check — also previously ad
+hoc). `scripts/verify.ps1`/`dev.ps1`/`test.ps1`/`build.ps1` all install the
+extras they need automatically. No linting, formatting, or type-checking
+tooling is configured yet — see `CONTRIBUTING.md` "Automation: what's
+implemented vs. still just recommended."
 
 **Why not Electron or Tauri** (evaluated explicitly during V2-1 planning): the
 backend is inherently Python (pandas/numpy-heavy analysis engine) and would need
@@ -535,7 +540,10 @@ layouts become a real requirement (Tauri would be preferred over Electron then).
 
 ```mermaid
 flowchart LR
-    A[optionspilot_app.py<br/>PyInstaller entry point] --> B["scripts/build_exe.ps1"]
+    S["scripts/build.ps1<br/>(recommended entry point)"] --> T{tests green?}
+    T -->|no, no -SkipTests| X[abort - no build]
+    T -->|yes| A[optionspilot_app.py<br/>PyInstaller entry point]
+    A --> B["scripts/build_exe.ps1"]
     B --> C{running instance<br/>detected?}
     C -->|yes| D[refuse to build]
     C -->|no| E[back up dist/OptionsPilot/data/]
@@ -544,13 +552,21 @@ flowchart LR
     G --> H[dist/OptionsPilot/OptionsPilot.exe]
 ```
 
+- **`scripts/build.ps1`** is the recommended entry point (see
+  `CONTRIBUTING.md`): it runs the full test suite first and refuses to
+  invoke PyInstaller on a red suite (unless `-SkipTests` is passed
+  explicitly) — this is CLAUDE.md's pre-existing "run tests before a
+  multi-minute build" rule, now enforced automatically instead of relying
+  on someone remembering it. It changes nothing about the PyInstaller
+  invocation itself.
 - `optionspilot_app.py` is the actual PyInstaller entry point: double-clicking the
   exe with no arguments opens the desktop app (`ui`); any CLI arguments pass
   straight through to `optionspilot.__main__.main()` (e.g. `OptionsPilot.exe scan`,
   `OptionsPilot.exe serve --port 8787`). `multiprocessing.freeze_support()` is
   called first — required for a frozen Windows build.
-- `scripts/build_exe.ps1` refuses to build over a running instance (open SQLite
-  handles would corrupt) and explicitly backs up/restores `dist\OptionsPilot\data\`
+- `scripts/build_exe.ps1` (unchanged, wrapped but not modified by `build.ps1`)
+  refuses to build over a running instance (open SQLite handles would
+  corrupt) and explicitly backs up/restores `dist\OptionsPilot\data\`
   around the PyInstaller `--clean` wipe, so rebuilding never loses the user's real
   paper account, journal, or learned weights.
 - `OptionsPilot.spec` is PyInstaller-generated and gitignored — not hand-maintained.
@@ -605,5 +621,8 @@ flowchart LR
 - The trade coach infers behavioral tags (revenge trading, chased entry, etc.) from
   observable order/timing patterns, not literal intent — an honest approximation,
   documented in `coach/coach.py`'s module docstring.
-- No browser-driven UI test coverage exists (see `AI_HANDOFF.md` "Known
-  issues" for the current verification status of the newest UI surfaces).
+- Browser-driven UI test coverage is a smoke check, not deep regression
+  coverage: `scripts/browser_check.py` (§11) proves every tab loads with
+  zero console errors, not that any specific interaction (mode toggle,
+  order placement, coach review rendering) still behaves correctly — see
+  `CONTRIBUTING.md` "Automation" for the open opportunity to extend it.
