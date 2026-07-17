@@ -118,6 +118,27 @@ header h1 { font-size:var(--fs-xl); font-weight:650; margin-right:auto; }
 .grid2 { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:16px; }
 @media (max-width:1000px){ .grid2{grid-template-columns:minmax(0,1fr)} }
 
+/* dashboard: wide main column + narrow side rail */
+.dash-grid { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:16px;
+             align-items:start; }
+@media (max-width:1000px){ .dash-grid{grid-template-columns:minmax(0,1fr)} }
+.dash-empty { text-align:center; padding:26px 10px; color:var(--muted); }
+.dash-empty p { margin-bottom:12px; font-size:var(--fs-md); }
+.opp { display:flex; align-items:center; gap:10px; padding:9px 8px;
+       border-radius:var(--r-sm); cursor:pointer; transition:background var(--t-fast); }
+.opp:hover { background:var(--surface-2); }
+.opp + .opp { border-top:1px solid var(--grid); }
+.opp .sym { font-weight:700; width:52px; }
+.opp .conf { font-weight:650; font-variant-numeric:tabular-nums; margin-left:auto; }
+.opp .state { font-size:var(--fs-xs); color:var(--muted); }
+.opp .state.ok { color:var(--good); }
+.mover { display:flex; align-items:center; gap:10px; padding:8px; border-radius:var(--r-sm);
+         cursor:pointer; font-variant-numeric:tabular-nums; transition:background var(--t-fast); }
+.mover:hover { background:var(--surface-2); }
+.mover .sym { font-weight:700; width:52px; }
+.mover .px { color:var(--ink-2); margin-left:auto; }
+.mover .chg { width:72px; text-align:right; font-weight:650; }
+
 table { width:100%; border-collapse:collapse; font-size:var(--fs-md); }
 th { text-align:left; color:var(--muted); font-weight:500; padding:6px 8px; border-bottom:1px solid var(--grid); }
 td { padding:7px 8px; border-bottom:1px solid var(--grid); color:var(--ink-2); }
@@ -421,27 +442,42 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   <section id="tab-dashboard">
     <div class="hero" id="hero"></div>
     <div class="cards" id="cards"></div>
-    <div class="panel">
-      <h2>Equity — session history</h2>
-      <svg class="chart" id="equity-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
-      <div class="hint" id="equity-hint">Equity points accumulate as scan cycles run.</div>
-    </div>
-    <div class="grid2">
-      <div class="panel">
-        <h2>Watchlist — AI confidence</h2>
-        <div id="signals"></div>
-        <div class="hint">Yellow tick = required confidence for that symbol's setup
-        (fixed in Conservative Mode; adapts to setup quality in High-Risk Mode).
-        Hover a verdict line for the passed/failed confirmations.</div>
+    <div class="dash-grid">
+      <div class="dash-main">
+        <div class="panel">
+          <h2>Equity — session history</h2>
+          <svg class="chart" id="equity-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
+          <div class="dash-empty" id="equity-hint">
+            <p>Equity history builds as scan cycles run.</p>
+            <button class="btn" onclick="$('scan-btn').click()">Run a scan now</button>
+          </div>
+        </div>
+        <div class="panel">
+          <h2>Open positions</h2>
+          <div id="positions"></div>
+        </div>
+        <div class="panel">
+          <h2>Watchlist — AI confidence</h2>
+          <div id="signals"></div>
+          <div class="hint">Yellow tick = required confidence for that symbol's setup
+          (fixed in Conservative Mode; adapts to setup quality in High-Risk Mode).
+          Hover a verdict line for the passed/failed confirmations.</div>
+        </div>
       </div>
-      <div class="panel">
-        <h2>Notifications</h2>
-        <div id="notifs"><div class="empty">Nothing yet.</div></div>
+      <div class="dash-side">
+        <div class="panel">
+          <h2>AI opportunities</h2>
+          <div id="dash-opps"></div>
+        </div>
+        <div class="panel">
+          <h2>Watchlist movers</h2>
+          <div id="dash-movers"></div>
+        </div>
+        <div class="panel">
+          <h2>Notifications</h2>
+          <div id="notifs"><div class="empty">Nothing yet.</div></div>
+        </div>
       </div>
-    </div>
-    <div class="panel">
-      <h2>Open positions</h2>
-      <div id="positions"></div>
     </div>
   </section>
 
@@ -855,6 +891,44 @@ function renderStatus(s) {
   drawEquity($("equity-chart"), s.equity_history.map(([t, e]) => [new Date(t), e]),
              a.starting_balance);
   $("equity-hint").style.display = s.equity_history.length > 1 ? "none" : "";
+  $("equity-chart").style.display = s.equity_history.length > 1 ? "" : "none";
+
+  // AI opportunities: strongest current signals, tradeable first
+  const opps = Object.entries(s.signals || {})
+    .map(([sym, sig]) => ({ sym, ...sig }))
+    .sort((x, y) => (y.accepted - x.accepted) || (y.confidence - x.confidence))
+    .slice(0, 5);
+  setHTML("dash-opps", opps.length === 0
+    ? `<div class="dash-empty"><p>${s.last_cycle_ts
+        ? "No signals from the last scan — the AI found nothing worth flagging."
+        : "No scan has run yet."}</p>
+       <button class="btn" onclick="$('scan-btn').click()">Scan the watchlist</button></div>`
+    : opps.map(o => {
+        const need = o.min_confidence_required;
+        const state = o.accepted ? `<span class="state ok">✓ tradeable</span>`
+          : need == null ? `<span class="state">not tradeable</span>`
+          : `<span class="state">needs ${need.toFixed(0)}%</span>`;
+        return `<div class="opp" onclick="openChart('${o.sym}')"
+          title="open ${o.sym} chart">
+          <span class="sym">${o.sym}</span>
+          <span class="chip ${o.direction === "long" ? "long" : "short"}">${o.direction}</span>
+          ${state}<span class="conf">${o.confidence.toFixed(0)}%</span></div>`;
+      }).join(""));
+
+  // watchlist movers: biggest daily change first
+  const movers = (s.watchlist || [])
+    .map(sym => ({ sym, ...(s.quotes?.[sym] || {}) }))
+    .filter(q => q.change_pct != null)
+    .sort((x, y) => Math.abs(y.change_pct) - Math.abs(x.change_pct))
+    .slice(0, 6);
+  setHTML("dash-movers", movers.length === 0
+    ? `<div class="empty">Prices land after the first scan cycle.</div>`
+    : movers.map(q => `<div class="mover" onclick="openChart('${q.sym}')"
+        title="open ${q.sym} chart">
+        <span class="sym">${q.sym}</span>
+        <span class="px">${q.price.toFixed(2)}</span>
+        <span class="chg ${cls(q.change_pct)}">${q.change_pct >= 0 ? "▲" : "▼"} ${
+          Math.abs(q.change_pct).toFixed(2)}%</span></div>`).join(""));
 
   $("signals").innerHTML = s.watchlist.map(sym => {
     const sig = s.signals[sym];
@@ -886,9 +960,12 @@ function renderStatus(s) {
   }).join("");
 
   const posChanged = setHTML("positions", s.positions.length === 0
-    ? `<div class="empty">No open positions. ${highRisk
+    ? `<div class="dash-empty"><p>No open positions. ${highRisk
         ? "High-Risk Mode: threshold adapts to setup quality (floor " + s.high_risk_floor + "%)."
-        : "The engine only trades ≥ " + s.min_confidence + "% confidence."}</div>`
+        : "The engine only trades ≥ " + s.min_confidence + "% confidence."}</p>${
+        s.operating_mode === "human"
+          ? `<button class="btn" onclick="switchTab('trade')">Open the Trade tab</button>`
+          : `<button class="btn" onclick="$('scan-btn').click()">Scan for setups</button>`}</div>`
     : `<div class="pos-grid">` + s.positions.map((q, i) => {
         const plPct = q.avg_price ? (q.mark / q.avg_price - 1) * 100 : 0;
         return `<div class="pos-card">

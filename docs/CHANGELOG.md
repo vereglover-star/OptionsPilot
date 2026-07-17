@@ -4,7 +4,30 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-1: design system foundation — tokens, icon nav, responsive layout
+## [Uncommitted] 2026-07-17 — V3-2: dashboard redesign — trader-first layout, live side rail
+
+*351 tests (unchanged — presentation + one new derived view over existing
+status data; no new endpoints, no trading logic).*
+
+- **Two-column layout** (`.dash-grid`, 2:1): main column — equity curve,
+  open positions, the per-symbol AI-confidence meters; side rail — three
+  new glanceable panels. Collapses to one column below 1000px.
+- **AI opportunities** (new): the strongest current signals sorted
+  tradeable-first then by confidence, each with direction chip,
+  confidence %, and gate state ("✓ tradeable" / "needs N%") — click opens
+  that symbol's chart. Derived entirely from the existing status payload.
+- **Watchlist movers** (new): biggest daily changes first, price + colored
+  ▲/▼ change, click-through to the chart. Uses the per-cycle quote
+  snapshots the orchestrator already publishes.
+- **Empty states now teach and act**: equity ("Run a scan now" button),
+  positions (mode-aware: "Scan for setups" in AI Mode, "Open the Trade
+  tab" in Human Mode), opportunities ("Scan the watchlist"), movers.
+  Previously all four were inert one-line texts.
+- **Verified**: populated end-to-end by running a real scan cycle in the
+  scratch browser session (opportunities, movers, meters all live), plus
+  full suite + browser smoke check, zero console errors.
+
+## 2026-07-17 — V3-1: design system foundation — tokens, icon nav, responsive layout
 
 *351 tests (unchanged — presentation only). Second V3 milestone: the shared
 visual language every subsequent screen redesign builds on, plus a real
