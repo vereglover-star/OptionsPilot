@@ -234,11 +234,18 @@ class UIServer:
         symbol = symbol.upper()
         tf = Timeframe.from_string(timeframe)
         end = utcnow()
-        df = self.orch.provider.get_candles(
-            symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end)
+        start = end - timedelta(days=_WINDOW_DAYS[tf])
+        # display surface: prefer clearly-flagged stale bars over a blank
+        # chart when the live fetch fails (feature-detected so tests that
+        # inject bare fake providers keep working)
+        stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
+        if stale_ok is not None:
+            df, stale = stale_ok(symbol, tf, start, end)
+        else:
+            df, stale = self.orch.provider.get_candles(symbol, tf, start, end), False
         if df.empty:
             return {"symbol": symbol, "timeframe": timeframe, "candles": [],
-                    "indicators": {}}
+                    "indicators": {}, "stale": False}
 
         icfg = self.cfg.indicators
         close = df["close"]
@@ -273,7 +280,8 @@ class UIServer:
             for t, r in zip(times, df.itertuples(index=False))
         ]
         return {"symbol": symbol, "timeframe": timeframe,
-                "candles": candles, "indicators": series}
+                "candles": candles, "indicators": series, "stale": stale,
+                "as_of": times[-1] if stale else None}
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 

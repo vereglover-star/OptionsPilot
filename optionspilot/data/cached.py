@@ -49,6 +49,14 @@ CANDLE_TTL: dict[Timeframe, float] = {
 }
 DEFAULT_CANDLE_TTL = 60.0
 
+# An EMPTY fetch result is almost always a transient upstream failure
+# (yfinance returns an empty frame on rate limits and network hiccups,
+# indistinguishable from "no such data"). Caching it for the full TTL
+# poisons every retry for up to a minute — the root cause of the app
+# opening with blank charts (root-caused 2026-07-17). Cache empties just
+# long enough to stop a tight retry loop from hammering Yahoo.
+EMPTY_CANDLE_TTL = 3.0
+
 QUOTE_TTL = 5.0
 CHAIN_TTL = 30.0
 EXPIRATIONS_TTL = 3600.0
@@ -122,7 +130,11 @@ class CachedProvider(MarketDataProvider):
         fresh = self._fresh(ttl)
 
         def valid(entry: _Entry) -> bool:
-            # the cached frame must be fresh AND cover the requested window
+            # the cached frame must cover the requested window and be fresh —
+            # an empty (failed-fetch) frame only for EMPTY_CANDLE_TTL, so a
+            # transient upstream failure never poisons retries for the full TTL
+            if entry.value.empty:
+                return self._fresh(EMPTY_CANDLE_TTL)(entry)
             return fresh(entry) and entry.start is not None and entry.start <= start
 
         def fetch() -> pd.DataFrame:
@@ -135,7 +147,11 @@ class CachedProvider(MarketDataProvider):
                 df = self._warm_from_store(symbol, timeframe, start, end, ttl)
             if df is None:
                 df = self._inner.get_candles(symbol, timeframe, start, end)
-                if self._store is not None and not df.empty:
+                if df.empty:
+                    log.warning("empty candle fetch %s %s (upstream failure "
+                                "or no data) — cached for %.0fs only",
+                                symbol, timeframe, EMPTY_CANDLE_TTL)
+                elif self._store is not None:
                     try:
                         self._store.store(symbol, timeframe, df)
                     except Exception as exc:  # noqa: BLE001 — cache is best-effort
@@ -144,6 +160,35 @@ class CachedProvider(MarketDataProvider):
             return self._put(key, df, start=start)
 
         return _slice(self._memo(key, valid, fetch), start)
+
+    def get_candles_stale_ok(self, symbol: str, timeframe: Timeframe,
+                             start: datetime, end: datetime,
+                             ) -> tuple[pd.DataFrame, bool]:
+        """Candles for DISPLAY surfaces (the Charts tab): same as
+        `get_candles`, but when the live fetch fails/returns empty, fall
+        back to the newest data on disk regardless of age, flagged stale.
+
+        Returns `(frame, is_stale)`. The trading path must never use this —
+        the engine's fail-closed rule (empty data ⇒ skip the symbol) depends
+        on `get_candles` staying strict. A chart showing clearly-labeled
+        yesterday's bars is useful; a trade placed on them is not.
+        """
+        df = self.get_candles(symbol, timeframe, start, end)
+        if not df.empty:
+            return df, False
+        if self._store is not None:
+            try:
+                cached = self._store.load(symbol.upper(), timeframe, start, end)
+            except Exception as exc:  # noqa: BLE001 — fallback is best-effort
+                log.error("stale candle fallback failed %s %s: %s",
+                          symbol, timeframe, exc)
+                cached = pd.DataFrame()
+            if not cached.empty:
+                log.warning("serving stale cached candles for %s %s "
+                            "(last bar %s) — live fetch unavailable",
+                            symbol, timeframe, cached.index[-1])
+                return _slice(cached, start), True
+        return df, False
 
     def _warm_from_store(self, symbol, timeframe, start, end, ttl):
         try:
@@ -196,5 +241,5 @@ def _slice(df: pd.DataFrame, start: datetime) -> pd.DataFrame:
     return df[df.index >= start]
 
 
-__all__ = ["CachedProvider", "CANDLE_TTL", "QUOTE_TTL", "CHAIN_TTL",
-           "EXPIRATIONS_TTL"]
+__all__ = ["CachedProvider", "CANDLE_TTL", "EMPTY_CANDLE_TTL", "QUOTE_TTL",
+           "CHAIN_TTL", "EXPIRATIONS_TTL"]

@@ -305,6 +305,22 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   font-variant-numeric:tabular-nums; min-height:18px; margin-bottom:6px; padding-left:2px; }
 .chart-legend b { color:var(--ink-2); font-weight:600; }
 #ch-main { height:430px; position:relative; }
+#ch-overlay { position:absolute; inset:0; z-index:12; display:none;
+  flex-direction:column; align-items:center; justify-content:center; gap:12px;
+  background:var(--surface); text-align:center; padding:20px; }
+#ch-overlay.show { display:flex; }
+#ch-overlay .msg { color:var(--ink-2); font-size:13px; max-width:420px; line-height:1.5; }
+#ch-overlay .sym { font-size:15px; font-weight:650; color:var(--ink); }
+.ch-spinner { width:26px; height:26px; border-radius:50%;
+  border:2px solid var(--grid); border-top-color:var(--accent);
+  animation:chspin .7s linear infinite; }
+@keyframes chspin { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion:reduce){ .ch-spinner { animation:none; } }
+#ch-stale { display:none; align-items:center; gap:10px; font-size:12px;
+  color:var(--warn); background:var(--warn-soft); border:1px solid rgba(247,179,43,.35);
+  border-radius:var(--r-sm); padding:5px 10px; margin:6px 0 2px; }
+#ch-stale.show { display:flex; }
+#ch-stale .btn { padding:2px 10px; font-size:12px; }
 .subpane { height:130px; margin-top:6px; border-top:1px solid var(--grid); }
 .chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
   display:flex; flex-direction:column; }
@@ -412,8 +428,20 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
         <button class="btn" id="ch-trade" title="Open this symbol in the Trade tab">Trade →</button>
         <button class="btn" id="ch-full" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
       </div>
+      <div id="ch-stale" role="status">
+        <span id="ch-stale-msg"></span>
+        <button class="btn" id="ch-stale-retry">Retry live data</button>
+      </div>
       <div class="chart-legend" id="ch-legend"></div>
-      <div id="ch-main"></div>
+      <div id="ch-main">
+        <div id="ch-overlay" role="status" aria-live="polite">
+          <div class="ch-spinner" id="ch-overlay-spin"></div>
+          <div class="sym" id="ch-overlay-sym"></div>
+          <div class="msg" id="ch-overlay-msg"></div>
+          <button class="btn primary" id="ch-overlay-retry"
+                  style="display:none">Retry</button>
+        </div>
+      </div>
       <div id="ch-rsi" class="subpane" style="display:none"></div>
       <div id="ch-macd" class="subpane" style="display:none"></div>
       <div class="chart-hint">Scroll to zoom · drag to pan · double-click the time axis to reset ·
@@ -1287,9 +1315,10 @@ const CH = {
   main: null, candle: null, volume: null, overlays: {},
   rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
   macdLine: null, macdSig: null,
-  data: null, timeIndex: null, tool: null, pendingPoint: null, pendingNote: null,
+  data: null, dataKey: null, timeIndex: null, tool: null,
+  pendingPoint: null, pendingNote: null,
   priceLines: [], trendSeries: [], fibLines: [], rectSeries: [],
-  tradeLines: [], loading: false,
+  tradeLines: [], gen: 0,
 };
 const CH_COLORS = {
   up: "#00c46a", down: "#ff5252", grid: "#23262c", text: "#82868e",
@@ -1372,36 +1401,96 @@ function chSyncPane(pane) {
   link(CH.main, pane); link(pane, CH.main);
 }
 
+/* Chart canvas states: the canvas must NEVER sit silently blank.
+   - first load of a (symbol, tf): full overlay — spinner, then error+Retry
+     on failure.
+   - refresh of already-shown data: chart stays visible and zoomed; a
+     failure shows the stale banner instead of wiping the canvas.
+   - a stale payload (backend served disk-cached bars because the live
+     fetch failed) shows the banner with the last bar's date.
+   Every request carries a generation number; only the newest applies —
+   rapid symbol/timeframe switches can no longer be dropped or interleave. */
+function chOverlay(state, msg) {
+  const o = $("ch-overlay");
+  if (!state) { o.classList.remove("show"); return; }
+  o.classList.add("show");
+  $("ch-overlay-sym").textContent = `${CH.sym} · ${CH.tf.toUpperCase()}`;
+  $("ch-overlay-spin").style.display = state === "loading" ? "" : "none";
+  $("ch-overlay-retry").style.display = state === "error" ? "" : "none";
+  $("ch-overlay-msg").textContent = state === "loading" ? "Loading chart…"
+    : (msg || "Chart data is unavailable right now.");
+}
+function chStale(asOf) {
+  $("ch-stale").classList.toggle("show", asOf != null);
+  if (asOf != null) {
+    const when = new Date(asOf * 1000).toLocaleString(
+      [], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    $("ch-stale-msg").textContent =
+      `Live data unavailable — showing cached bars through ${when}.`;
+  }
+}
+
 async function loadChart(symbol) {
   if (symbol) CH.sym = String(symbol).toUpperCase();
   $("ch-symbol").value = CH.sym;
   chInit();
   chPaintControls();
-  if (CH.loading) return;
-  CH.loading = true;
-  $("ch-legend").innerHTML = `<span class="skel" style="width:280px; height:14px"></span>`;
+  const key = `${CH.sym}·${CH.tf}`;
+  const firstPaint = CH.dataKey !== key;      // nothing usable on screen yet
+  const gen = ++CH.gen;
+  if (firstPaint) {
+    chOverlay("loading");
+    chStale(null);
+    $("ch-legend").innerHTML =
+      `<span class="skel" style="width:280px; height:14px"></span>`;
+  }
+  let d;
   try {
-    const r = await fetch(`/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}`);
-    const d = await r.json();
-    if (d.error || !d.candles.length) {
-      toast(d.error || `no data for ${CH.sym}`, false);
-      $("ch-legend").textContent = d.error || `No data for ${CH.sym}.`;
-      return;
-    }
-    CH.data = d;
-    CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
-    localStorage.setItem("chSym", CH.sym);
-    localStorage.setItem("chTf", CH.tf);
-    CH.candle.setData(d.candles);
-    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
-      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
-    chApplyIndicators();
-    chRestoreDrawings();
-    chLoadTradeLines();
-    CH.main.timeScale().fitContent();
-    chLegend(null);
-  } finally { CH.loading = false; }
+    const r = await fetch(
+      `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}`);
+    d = await r.json();
+  } catch {
+    if (gen !== CH.gen) return;               // superseded by a newer request
+    if (firstPaint) chOverlay("error",
+      "Couldn't reach the data service. Check your connection and retry.");
+    else chStale(CH.data.candles[CH.data.candles.length - 1].time);
+    return;
+  }
+  if (gen !== CH.gen) return;
+  if (d.error || !d.candles || !d.candles.length) {
+    const msg = d.error
+      || `No data available for ${CH.sym} — the symbol may be invalid, `
+       + `or the data feed is temporarily down.`;
+    if (firstPaint) chOverlay("error", msg);
+    else { toast(msg, false);
+           chStale(CH.data.candles[CH.data.candles.length - 1].time); }
+    return;
+  }
+  CH.data = d;
+  CH.dataKey = key;
+  CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
+  localStorage.setItem("chSym", CH.sym);
+  localStorage.setItem("chTf", CH.tf);
+  CH.candle.setData(d.candles);
+  CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
+    color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
+  chApplyIndicators();
+  chRestoreDrawings();
+  chLoadTradeLines();
+  if (firstPaint) CH.main.timeScale().fitContent();  // refresh keeps the zoom
+  chOverlay(null);
+  chStale(d.stale ? d.as_of : null);
+  chLegend(null);
 }
+
+/* keep a visible chart current: refresh on a cadence matched to the
+   backend's candle TTLs, but only while the Charts tab is on screen */
+const CH_REFRESH_MS = 30000;
+setInterval(() => {
+  if (document.hidden || CH.dataKey === null) return;
+  if ($("tab-charts").style.display === "none") return;
+  loadChart();
+}, CH_REFRESH_MS);
 
 const chSeriesData = name => {
   const vals = CH.data.indicators[name];
@@ -1650,6 +1739,8 @@ $("ch-note-text").addEventListener("keydown", e => {
   if (e.key === "Escape") chSetTool(null);
 });
 $("ch-full").onclick = toggleChartFullscreen;
+$("ch-overlay-retry").onclick = () => loadChart();
+$("ch-stale-retry").onclick = () => loadChart();
 $("ch-trade").onclick = () => {
   $("tk-symbol").value = CH.sym;
   tkChain = null; tkExp = ""; tkSel = null;

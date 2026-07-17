@@ -4,7 +4,53 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — Developer automation: scripts/, browser checks, doc-consistency checks
+## [Uncommitted] 2026-07-17 — V3-0: chart reliability — root cause fixed, never-blank canvas
+
+*351 tests (+6). First milestone of the V3 product-quality sprint (branch
+`v3-ui`, planned in `ROADMAP-V3-UX.md`). The app could open with no usable
+chart; instrumented diagnosis (not guesswork) found a three-part root
+cause, each part fixed and separately verified.*
+
+- **Root cause 1 — negative-cache poisoning (`data/cached.py`)**: yfinance
+  returns an *empty frame* on transient failures (rate limits, hiccups) —
+  indistinguishable from "no data" — and `CachedProvider` memoized that
+  empty for the full timeframe TTL (up to 60s), so healthy retries kept
+  being served the failure. Proven with a controlled fake provider before
+  fixing. Empty results now expire in `EMPTY_CANDLE_TTL` (3s) — long
+  enough to stop a hammering loop, short enough that recovery is instant.
+  Good data keeps the full TTL.
+- **Root cause 2 — no stale fallback**: the SQLite candle cache was never
+  consulted when the live fetch failed, so disk full of yesterday's bars
+  still meant a blank chart. New `CachedProvider.get_candles_stale_ok()`
+  (display surfaces only) falls back to disk data of any age, flagged
+  `(frame, is_stale)`. The strict `get_candles` path is byte-for-byte
+  unchanged for the engine — fail-closed trading semantics preserved and
+  covered by a test asserting the strict path still returns empty in the
+  exact state where the stale path serves data. `/api/candles` now
+  reports `stale`/`as_of`, and the Charts tab shows a warning banner with
+  the last bar's date and a "Retry live data" button.
+- **Root cause 3 — frontend failure handling**: `loadChart()` had no
+  `catch` (a network error left a stuck skeleton and a blank canvas
+  forever), no retry affordance, and a `CH.loading` guard that silently
+  dropped symbol/timeframe switches issued mid-load. Rewritten around a
+  request generation counter: the newest request always wins, rapid
+  switches can't interleave or be dropped, every failure path lands in a
+  visible state — a loading overlay (spinner + symbol) on first paint, an
+  error overlay with a Retry button on failure, and for an
+  already-rendered chart a stale banner instead of wiping the canvas.
+- **Live refresh**: a visible chart now refreshes every 30s (cadence
+  matched to the backend candle TTLs), preserving zoom/pan (`fitContent`
+  only on symbol/timeframe change), pausing when the tab is hidden, and
+  doubling as an automatic retry after failures. Drawing/trade-line
+  restore paths were audited for idempotency under the refresh loop (both
+  already fully remove before re-adding — no series leaks).
+- **Verified**: full suite green (351), plus a 5-scenario Playwright
+  run in real Edge — first-load overlay→candles, rapid-switch race
+  (last click wins), invalid-symbol error overlay with working Retry,
+  recovery to a valid symbol, and a same-key refresh keeping the chart —
+  zero console errors.
+
+## 2026-07-17 — Developer automation: scripts/, browser checks, doc-consistency checks
 
 *345 tests (unchanged — no trading logic touched, per the session's explicit
 scope). A repository-wide review for repetitive manual developer tasks,
