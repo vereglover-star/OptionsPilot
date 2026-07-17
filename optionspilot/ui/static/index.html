@@ -220,6 +220,16 @@ tr.expandable:hover td { background:var(--surface-2); }
 .tk-est { display:flex; justify-content:space-between; padding:10px 2px 2px; border-top:1px solid var(--grid);
   font-size:var(--fs-base); }
 .tk-est b { font-variant-numeric:tabular-nums; }
+.tk-risk { font-size:var(--fs-sm); color:var(--muted); padding:0 2px;
+  font-variant-numeric:tabular-nums; }
+.tk-risk.hot { color:var(--warn); }
+.tk-quick { display:flex; gap:8px; justify-content:center; margin-top:10px; }
+.tk-pos { display:flex; align-items:center; gap:10px; padding:7px 8px;
+  border-radius:var(--r-sm); font-size:var(--fs-md); font-variant-numeric:tabular-nums; }
+.tk-pos:hover { background:var(--surface-2); }
+.tk-pos .sym { font-weight:700; }
+.tk-pos .pl { margin-left:auto; font-weight:650; }
+.tk-pos .btn { padding:3px 10px; font-size:var(--fs-sm); }
 
 /* expiration pills */
 .exp-pills { display:flex; gap:6px; overflow-x:auto; padding:2px 0 8px; scrollbar-width:thin; }
@@ -591,11 +601,16 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
               <input id="tk-trailpct" type="number" step="0.1" style="width:110px"></div>
             <div class="tk-est"><span>Estimated <span id="tk-est-kind">cost</span></span>
               <b id="tk-est">—</b></div>
+            <div class="tk-risk" id="tk-risk" style="display:none"></div>
             <button class="btn buy big" type="submit" id="tk-submit">Review order</button>
+            <div class="hint" style="margin-top:2px">Keys: <b>B</b>/<b>S</b> buy/sell ·
+              <b>+</b>/<b>−</b> contracts · <b>Enter</b> review</div>
           </div>
         </form>
         <div class="hint">Stop loss / take profit / trailing stop trigger on the <b>underlying</b>
           price; limit orders on the option premium. Day orders expire at 4:00 pm ET.</div>
+        <h3 class="sub">Open positions</h3>
+        <div id="tk-positions"><div class="empty">None.</div></div>
         <h3 class="sub">Working orders</h3>
         <div id="tk-working"><div class="empty">None.</div></div>
         <h3 class="sub">Recent order history</h3>
@@ -841,6 +856,17 @@ document.addEventListener("keydown", e => {
   if (e.key.toLowerCase() === "f" &&
       $("tab-charts").style.display !== "none") toggleChartFullscreen();
   if (e.key === "Escape" && CH.tool) chSetTool(null);
+  // order-entry keys — active only with the Trade tab open, a contract
+  // selected, and no modal showing
+  if ($("tab-trade").style.display !== "none" && tkSel &&
+      !$("confirm-overlay").classList.contains("show")) {
+    const k = e.key.toLowerCase();
+    if (k === "b") setSide("buy_to_open");
+    else if (k === "s") setSide("sell_to_close");
+    else if (e.key === "+" || e.key === "=") $("tk-qty-up").click();
+    else if (e.key === "-") $("tk-qty-dn").click();
+    else if (e.key === "Enter") { e.preventDefault(); $("tk-submit").click(); }
+  }
 });
 
 /* ── live status ──────────────────────────────────────────────────────── */
@@ -1013,6 +1039,9 @@ function renderStatus(s) {
     : s.notifications.map(n => `<div class="notif ${n.kind}">
         <span class="ts">${new Date(n.ts).toLocaleTimeString()}</span>
         <div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div></div>`).join("");
+
+  // keep the Trade tab's positions list live
+  if ($("tab-trade").style.display !== "none") renderTkPositions();
 
   // keep the watchlist tab live (quotes/confidence refresh each cycle)
   if (wl && $("tab-watchlist").style.display !== "none") {
@@ -1883,13 +1912,16 @@ const post = (url, body) => fetch(url, {method: "POST",
 
 async function loadTrade() {
   await Promise.all([loadMetrics(), loadOrders()]);
+  renderTkPositions();
   if (!tkChain) loadChain();
 }
 
+let lastMetrics = null;
 async function loadMetrics() {
   if (!$("acct-cards").__h) $("acct-cards").innerHTML =
     `<div class="card"><div class="skel" style="height:38px"></div></div>`.repeat(5);
   const m = await (await fetch("/api/account/metrics")).json();
+  lastMetrics = m;
   setHTML("acct-cards", [
     ["Buying power", fmt$(m.buying_power), ""],
     ["Portfolio value", fmt$(m.portfolio_value), ""],
@@ -1921,6 +1953,7 @@ async function loadChain() {
   renderExpPills();
   $("tk-spot").textContent = `${d.symbol} $${d.spot.toFixed(2)}`;
   renderChain(true);
+  if (!tkSel) hideTicket();   // placeholder gains the ATM quick-pick buttons
 }
 
 function renderExpPills() {
@@ -1977,7 +2010,28 @@ function renderChain(scrollToATM = false) {
 function hideTicket() {
   $("tk-form").style.display = "none";
   $("tk-selected").className = "empty";
-  $("tk-selected").textContent = "Click a chain row to select a contract.";
+  $("tk-selected").innerHTML = tkChain
+    ? `Click a chain row to select a contract — or jump straight to the money:
+       <div class="tk-quick">
+         <button class="btn" onclick="atmPick('call')">⚡ Nearest ATM call</button>
+         <button class="btn" onclick="atmPick('put')">⚡ Nearest ATM put</button>
+       </div>`
+    : "Load a chain to build an order.";
+}
+
+function atmPick(right) {
+  if (!tkChain) return;
+  if (right !== tkRight) {
+    tkRight = right;
+    document.querySelectorAll("#tk-right button").forEach(x =>
+      x.classList.toggle("active", x.dataset.right === right));
+    renderChain(true);
+  }
+  const rows = tkChain.chain.filter(r => r.right === right);
+  if (!rows.length) return;
+  const atm = rows.reduce((a, b) =>
+    Math.abs(b.strike - tkChain.spot) < Math.abs(a.strike - tkChain.spot) ? b : a);
+  selectContract(atm.strike);
 }
 
 function selectContract(strike) {
@@ -2007,9 +2061,61 @@ function updateEstimate() {
   const buying = tkSide === "buy_to_open";
   $("tk-est-kind").textContent = buying ? "cost" : "credit";
   $("tk-est").textContent = "≈ " + fmt$(est);
+  // risk context: order size as a share of buying power, warmed when it
+  // exceeds the configured per-trade risk budget (advisory — the backend
+  // gate is authoritative)
+  const risk = $("tk-risk");
+  const bp = lastMetrics?.buying_power;
+  if (buying && bp > 0) {
+    const pct = est / bp * 100;
+    const budget = lastStatus?.risk_settings?.risk_per_trade_pct;
+    risk.style.display = "";
+    risk.className = "tk-risk" + (budget != null && pct > budget ? " hot" : "");
+    risk.textContent = `≈ ${pct.toFixed(1)}% of buying power` +
+      (budget != null ? ` · risk budget ${budget}%/trade` : "");
+  } else risk.style.display = "none";
   const sub = $("tk-submit");
   sub.className = "btn big " + (buying ? "buy" : "sell");
   sub.textContent = `Review ${buying ? "buy" : "sell"} · ${qty} × ${tkChain.symbol} $${tkSel.strike} ${tkSel.right === "call" ? "C" : "P"}`;
+}
+
+function setSide(side) {
+  tkSide = side;
+  document.querySelectorAll("#tk-side-seg button").forEach(x =>
+    x.classList.toggle("active", x.dataset.side === side));
+  updateEstimate();
+}
+
+/* one-click close prep from the positions list: load the position's own
+   expiration chain, select its exact contract, arm sell-to-close */
+async function prefillClose(i) {
+  const p = (lastStatus?.positions || [])[i];
+  if (!p) return;
+  $("tk-symbol").value = p.underlying;
+  tkRight = p.right;
+  document.querySelectorAll("#tk-right button").forEach(x =>
+    x.classList.toggle("active", x.dataset.right === p.right));
+  tkExp = p.expiration; tkChain = null; tkSel = null;
+  await loadChain();
+  selectContract(p.strike);
+  if (tkSel) {
+    setSide("sell_to_close");
+    $("tk-qty").value = p.quantity;
+    updateEstimate();
+  }
+}
+
+function renderTkPositions() {
+  const ps = lastStatus?.positions || [];
+  setHTML("tk-positions", ps.length === 0
+    ? `<div class="empty">None.</div>`
+    : ps.map((p, i) => `<div class="tk-pos">
+        <span class="sym">${p.underlying}</span>
+        <span>$${p.strike} ${p.right === "call" ? "C" : "P"} × ${p.quantity}</span>
+        <span class="chip who">${p.managed_by === "manual" ? "You" : "AI"}</span>
+        <span class="pl ${cls(p.unrealized)}">${p.unrealized >= 0 ? "+" : ""}${fmt$(p.unrealized)}</span>
+        <button class="btn" onclick="prefillClose(${i})"
+          title="arm the ticket to close this position">Close…</button></div>`).join(""));
 }
 
 $("tk-load").onclick = e => { e.preventDefault(); tkExp = ""; loadChain(); };
@@ -2023,12 +2129,8 @@ document.querySelectorAll("#tk-right button").forEach(b => b.onclick = () => {
   tkSel = null; hideTicket();
   renderChain(true);
 });
-document.querySelectorAll("#tk-side-seg button").forEach(b => b.onclick = () => {
-  tkSide = b.dataset.side;
-  document.querySelectorAll("#tk-side-seg button").forEach(x =>
-    x.classList.toggle("active", x === b));
-  updateEstimate();
-});
+document.querySelectorAll("#tk-side-seg button").forEach(b =>
+  b.onclick = () => setSide(b.dataset.side));
 $("tk-qty-dn").onclick = () => { $("tk-qty").value = Math.max(1, +$("tk-qty").value - 1); updateEstimate(); };
 $("tk-qty-up").onclick = () => { $("tk-qty").value = +$("tk-qty").value + 1; updateEstimate(); };
 $("tk-qty").oninput = updateEstimate;
@@ -2087,9 +2189,7 @@ $("tk-form").onsubmit = async e => {
   if (d.event === "filled" && body.side === "buy_to_open") {
     // frictionless discipline: pre-arm the ticket as a protective stop for
     // the position just opened (the coach docks trades that never had one)
-    tkSide = "sell_to_close";
-    document.querySelectorAll("#tk-side-seg button").forEach(x =>
-      x.classList.toggle("active", x.dataset.side === "sell_to_close"));
+    setSide("sell_to_close");
     $("tk-kind").value = "stop_loss";
     $("tk-kind").onchange();
     setTimeout(() => { $("tk-stop").focus();

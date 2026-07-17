@@ -4,7 +4,35 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-2: dashboard redesign — trader-first layout, live side rail
+## [Uncommitted] 2026-07-17 — V3-3: trade screen — faster contract selection, risk context, order-entry keys
+
+*351 tests (unchanged — frontend only; all order placement still routes
+through the existing risk-gated `/api/orders` path).*
+
+- **ATM quick-picks**: the ticket placeholder is no longer inert text —
+  once a chain is loaded it offers "Nearest ATM call/put" buttons that
+  select the closest-to-the-money contract in one click (with the
+  Calls/Puts toggle following along).
+- **Risk context in the ticket**: below the estimated cost, a live line
+  shows the order as a % of buying power alongside the configured
+  per-trade risk budget, turning amber when the order exceeds it —
+  advisory only; the backend gate remains authoritative.
+- **Open positions on the Trade tab** (new): a compact live list (You/AI
+  chip, unrealized P/L) with a "Close…" action that loads the position's
+  own expiration chain, selects its exact contract, and arms the ticket
+  as sell-to-close with the position's quantity.
+- **Order-entry keyboard shortcuts**: with the Trade tab open and a
+  contract selected — B/S switch side, +/− step contracts, Enter opens
+  the review modal (Esc already closes it). Documented inline under the
+  ticket. Guarded against firing while typing in a field or while the
+  confirm modal is open.
+- **Verified** end-to-end in a real browser: chain load → ATM pick →
+  risk line → keyboard flow → Enter → confirm modal → a real submission
+  (correctly and *visibly* rejected by the manual-entry risk gate outside
+  trading hours — the gate's toast surfaced as designed) → close-prefill
+  flow. Full suite + browser smoke check green, zero console errors.
+
+## 2026-07-17 — V3-2: dashboard redesign — trader-first layout, live side rail
 
 *351 tests (unchanged — presentation + one new derived view over existing
 status data; no new endpoints, no trading logic).*
