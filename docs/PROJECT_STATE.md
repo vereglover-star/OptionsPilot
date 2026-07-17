@@ -3,9 +3,8 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-16, end of the performance-and-polish session
-(scan-cycle optimization, modern-brokerage UI redesign, non-blocking scans —
-no new features, per the user's explicit direction).
+**Last updated:** 2026-07-16, after the V2-4-core session (interactive
+chart workspace shipped on top of the same-day performance/polish pass).
 
 ## Verified facts about current state (checked this session)
 
@@ -135,31 +134,38 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-This session (2026-07-16, after the V2-3 commit) completed the
-performance-and-polish pass: profiled and optimized the scan cycle
-(CachedProvider, parallel fetch, analyzer memoization, non-blocking scan,
-1s change-detected WS), redesigned the frontend in a modern-brokerage
-style, added 25 tests (335 total), soak-tested, live-verified in a browser,
-and committed. **The exe has NOT been rebuilt with this pass yet** — that's
-the one mechanical follow-up (`.\scripts\build_exe.ps1` while the app is
-closed, then a quick packaged smoke test).
+2026-07-16 shipped, in order: the V2-3 commit, the performance/polish pass
+(scan 14.9s → ~0.1s warm, brokerage-style UI, non-blocking scans, 335
+tests), and then **the core of V2-4**: a Charts tab built on vendored
+lightweight-charts (candles/volume, EMA/VWAP/Bollinger overlays, synced
+RSI/MACD subpanes, OHLC legend, five timeframes, fullscreen, horizontal
+levels + trend lines persisted in localStorage, trade-from-chart, deep
+links from watchlist/dashboard/positions), fed by a new `/api/candles`
+endpoint whose indicators come from the same `analysis/` code the engine
+trades with. 338 tests, live-verified in a browser. Deferred from V2-4:
+the full three-panel workspace layout, fib/rectangle/note drawing tools,
+position/order lines on the chart, and multi-chart layouts (see
+`ROADMAP-V2.md` annotations). **The exe still predates all of today's
+UI work** — rebuild + smoke test when the app is closed (user explicitly
+deprioritized this until feature-complete).
 
 ## Next recommended task
 
-1. **Rebuild + smoke-test the exe** with the polish pass included (the
-   packaged app still runs the pre-polish build).
-2. **Decide with the user** whether to start V2-4 (chart workspace) per
-   `ROADMAP-V2.md`, or pause feature work so the user can run the app for a
-   while (market-hours soak + accumulating paper trades was the stated
-   plan). Medium-priority hygiene items (`pyproject.toml` package-data fix,
-   Pillow extra, `operating_mode` yaml comment) remain available as small
-   filler tasks — see `TODO.md`.
+1. **Finish V2-4's remaining scope** if the user wants it (three-panel
+   workspace layout, more drawing tools, position/order lines on the
+   chart), OR move to V2-5 (replay) / V2-6 (journal dashboard), OR pause
+   to accumulate live paper-trading data — user's call.
+2. Eventually: rebuild + smoke-test the exe (user wants this LAST, once
+   feature-complete — do not prioritize it).
+3. Hygiene backlog unchanged (`pyproject.toml` package-data, Pillow extra,
+   `operating_mode` yaml comment) — see `TODO.md`.
 
 ## Current priorities
 
-1. Exe rebuild + packaged smoke test with the polish pass (small,
-   mechanical, needs the app closed).
-2. The V2-4-now-or-pause scope decision (user's call).
+1. The what-next scope decision (finish V2-4 extras / V2-5 / V2-6 / pause
+   and trade) — user's call.
+2. Exe rebuild deliberately LAST (user's stated preference: packaging only
+   after feature-complete).
 
 ## Blockers
 

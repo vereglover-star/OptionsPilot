@@ -301,6 +301,8 @@ human`), but this isn't yet documented with an inline comment there the way
 | GET | `/api/journal` | Trade history + stats |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
+| GET | `/api/candles` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock) |
+| GET | `/static/lightweight-charts.js` | Vendored chart library (Apache-2.0, offline — the frontend's ONE bundled asset) |
 | GET | `/api/chain` | Option chain for a symbol/expiration (Greeks, liquidity) — manual trading ticket data |
 | GET/POST | `/api/orders`, `/api/orders/cancel` | Working manual orders: place/list/cancel |
 | GET | `/api/account/metrics` | Buying power, P/L windows, win rate, PF, max drawdown |
@@ -354,6 +356,10 @@ Core (`pyproject.toml`): `pandas`, `numpy`, `yfinance`, `pydantic>=2.7`,
 during V2-1; **should be added to a `dev` or `assets` extra**, see TODO).
 
 No JS package manager, no `package.json`, no build step for the frontend.
+One vendored JS asset: `ui/static/lightweight-charts.js` (TradingView
+Lightweight Charts 4.2.3, Apache-2.0) — committed to the repo, served
+locally, bundled into the exe by the existing `--add-data ui\static` line.
+Chart drawings persist in the webview's localStorage, not in `data/`.
 
 ## Build and run instructions
 

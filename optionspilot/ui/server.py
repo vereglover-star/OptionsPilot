@@ -219,6 +219,61 @@ class UIServer:
                 ][::-1],
             }
 
+    # ── chart workspace data ─────────────────────────────────────────────────
+
+    def candles_payload(self, symbol: str, timeframe: str) -> dict:
+        """OHLCV + indicator series for the Charts tab, computed by the SAME
+        analysis library the engine trades with (guaranteed visual parity).
+        Provider-only — no orchestrator state, so no lock is taken and chart
+        loads never contend with a running scan."""
+        from optionspilot.analysis import indicators as ind
+        from optionspilot.core.models import Timeframe
+        from optionspilot.orchestrator import _WINDOW_DAYS
+
+        symbol = symbol.upper()
+        tf = Timeframe.from_string(timeframe)
+        end = utcnow()
+        df = self.orch.provider.get_candles(
+            symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end)
+        if df.empty:
+            return {"symbol": symbol, "timeframe": timeframe, "candles": [],
+                    "indicators": {}}
+
+        icfg = self.cfg.indicators
+        close = df["close"]
+        series: dict[str, list] = {}
+
+        def col(name: str, s) -> None:
+            series[name] = [None if v != v else round(float(v), 4) for v in s]
+
+        if icfg.ema:
+            for period in icfg.ema_periods[:3]:
+                col(f"ema{period}", ind.ema(close, period))
+        if icfg.vwap and tf is not Timeframe.D1:
+            col("vwap", ind.vwap(df))
+        if icfg.bollinger:
+            bb = ind.bollinger(close)
+            col("bb_upper", bb["bb_upper"])
+            col("bb_lower", bb["bb_lower"])
+            col("bb_mid", bb["bb_mid"])
+        if icfg.rsi:
+            col("rsi", ind.rsi(close, icfg.rsi_period))
+        if icfg.macd:
+            m = ind.macd(close)
+            col("macd", m["macd"])
+            col("macd_signal", m["macd_signal"])
+            col("macd_hist", m["macd_hist"])
+
+        times = [int(ts.timestamp()) for ts in df.index]
+        candles = [
+            {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
+             "low": round(r.low, 4), "close": round(r.close, 4),
+             "volume": int(r.volume)}
+            for t, r in zip(times, df.itertuples(index=False))
+        ]
+        return {"symbol": symbol, "timeframe": timeframe,
+                "candles": candles, "indicators": series}
+
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
     def chain_payload(self, symbol: str, expiration: str = "") -> dict:
@@ -534,6 +589,21 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     @app.get("/")
     def index():
         return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/static/lightweight-charts.js")
+    def chart_lib():
+        # the one bundled JS asset (Apache-2.0, vendored — no CDN, offline-safe)
+        return FileResponse(STATIC_DIR / "lightweight-charts.js",
+                            media_type="application/javascript")
+
+    @app.get("/api/candles")
+    def candles_view(symbol: str, tf: str = "5m"):
+        try:
+            return server.candles_payload(symbol, tf)
+        except Exception as exc:  # noqa: BLE001 — surface as a clean 502
+            log.error("candles fetch failed: %s", exc)
+            return JSONResponse({"error": f"candles unavailable: {exc}"},
+                                status_code=502)
 
     @app.get("/api/status")
     def status():

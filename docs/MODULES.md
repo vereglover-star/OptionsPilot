@@ -178,6 +178,10 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   form. `/ws` pushes at 1s with change detection (full payload on change,
   heartbeat otherwise). Journal-derived views cache on
   `TradeJournal.revision`.
+  `/api/candles?symbol&tf` returns OHLCV + indicator series (EMA/VWAP/
+  Bollinger/RSI/MACD via `analysis/indicators.py`) for the Charts tab —
+  provider-only, no lock. `/static/lightweight-charts.js` serves the
+  vendored chart library (Apache-2.0, offline).
   Endpoints: `/api/status` (full dashboard payload), `/api/scan`,
   `/api/journal`, `/api/learning`, `/api/config`, `/api/chain` (option
   chain + greeks for the order ticket), `/api/orders` (GET list / POST
@@ -188,10 +192,14 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   `/api/backtest` (job slot, GET/POST), `/ws` (2s status push),
   `/webhook/tradingview`. All orchestrator access serialized through
   `UIServer.lock`.
-- `ui/static/index.html` — self-contained dark dashboard (no build step).
-  Tabs: Dashboard, Trade (manual paper trading), Coach, Watchlist, Journal,
-  Backtest, Learning, Settings. Header has both mode controls: the AI/Human
-  segmented toggle and the trading-mode segmented toggle.
+- `ui/static/index.html` — self-contained dark dashboard (no build step;
+  the one vendored asset is `lightweight-charts.js`). Tabs: Dashboard,
+  Charts (interactive candles/volume, EMA/VWAP/BB overlays, RSI/MACD
+  subpanes, drawings persisted in localStorage, fullscreen), Trade (manual
+  paper trading), Coach, Watchlist, Journal, Backtest, Learning, Settings.
+  Keyboard 1–9 switches tabs; F toggles chart fullscreen. Header has both
+  mode controls: the AI/Human segmented toggle and the trading-mode
+  segmented toggle.
 - `ui/desktop.py` — uvicorn thread + pywebview native window; single-
   instance guard (localhost port mutex); `--windowed` PyInstaller build has
   no console (see `core/logging_setup.py`'s `sys.stderr is None` check).

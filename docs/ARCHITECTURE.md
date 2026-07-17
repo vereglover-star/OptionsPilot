@@ -223,7 +223,10 @@ build step, no bundler), served locally and wrapped in a pywebview native window
 (`desktop.py`); packaged with PyInstaller (`--windowed`, no console) → normal
 Windows app with a single-instance guard. WebSocket pushes the full status payload
 every second when something changed (heartbeats otherwise). Tabs: Dashboard
-(portfolio hero, P&L, confidence meters, position cards),
+(portfolio hero, P&L, confidence meters, position cards), **Charts**
+(vendored lightweight-charts: candles/volume, EMA/VWAP/Bollinger overlays,
+synced RSI/MACD subpanes, drawings, fullscreen — data from `/api/candles`,
+indicators computed by the same `analysis/` code the engine trades with),
 **Trade** (account metrics, live option chain, order ticket, working orders —
 manual paper trading), **Coach** (process-score reviews, recurring mistakes,
 recommended exercises), Watchlist (quick-add/bulk-paste/presets/pin/reorder),
@@ -314,7 +317,7 @@ summary.
 | Storage        | SQLite + JSON files (stdlib) | Zero-ops, single-file, perfect for desktop app |
 | Validation     | pydantic v2                | Config + model validation, fail-fast |
 | API/UI backend | FastAPI + uvicorn          | Async, WebSocket support, well-documented |
-| Frontend       | Single static HTML/CSS/JS  | No build step, no bundler, works offline in the exe |
+| Frontend       | Single static HTML/CSS/JS  | No build step, no bundler, works offline in the exe (one vendored asset: lightweight-charts, Apache-2.0) |
 | Desktop shell  | pywebview (WebView2)       | Native window on Win11 without Electron weight |
 | Packaging      | PyInstaller (`--windowed`) | One-folder Windows executable, no console window |
 | Tests          | pytest                     | Standard; 335 tests as of the performance/polish pass |

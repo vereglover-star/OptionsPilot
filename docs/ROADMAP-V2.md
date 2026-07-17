@@ -56,17 +56,24 @@ windowed (no console) build, app icon, shutdown audit.
 - [x] Mistake taxonomy + per-trade tags persisted in the journal
 - [x] Coaching profile: recurring mistakes, strengths/weaknesses, long-term stats
 
-### V2-4 — Chart workspace (TradingView-inspired)
-- [ ] Bundle lightweight-charts (Apache-2.0, offline in the exe)
+### V2-4 — Chart workspace (TradingView-inspired) — CORE SHIPPED 2026-07-16
+- [x] Bundle lightweight-charts (Apache-2.0, vendored at
+      `ui/static/lightweight-charts.js`, offline in the exe)
 - [ ] Workspace layout: top bar (ticker search, live price, market status,
       timeframe selector, mode toggles, settings), right sidebar (watchlist,
       positions, orders, account, AI analysis), bottom panel (history,
       journal, coaching, performance, strategy tester)
-- [ ] Chart: candles, volume, zoom/pan/crosshair, multiple timeframes,
-      indicator overlays (EMA/VWAP/Bollinger/Supertrend), position/order lines
-- [ ] Drawing tools on an overlay: trendline, horizontal line, fib
-      retracement, rectangle, note — persisted per symbol
-- [ ] Trade-from-chart (order ticket prefilled)
+      *(deferred — the Charts tab has its own toolbar instead; the full
+      three-panel workspace remains open)*
+- [x] Chart: candles, volume, zoom/pan/crosshair + OHLC legend, five
+      timeframes, indicator overlays (EMA×3/VWAP/Bollinger) and synced
+      RSI/MACD subpanes, fullscreen (F) *(position/order lines on the chart
+      still open; Supertrend overlay not exposed)*
+- [x] Drawing tools: horizontal levels (persist per symbol) and trend lines
+      (persist per symbol+timeframe), one-click clear
+      *(fib retracement / rectangle / note still open)*
+- [x] Trade-from-chart (opens the order ticket with the symbol prefilled;
+      deep links from watchlist rows, dashboard meters, and position cards)
 
 ### V2-5 — Replay engine
 - [ ] Pick a historical day/session; future candles hidden server-side

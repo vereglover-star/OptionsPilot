@@ -5,9 +5,16 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **Rebuild and smoke-test the exe with the 2026-07-16 performance/
-      polish pass** (`.\scripts\build_exe.ps1` while the app is closed; the
-      packaged app still predates the redesign + scan optimizations).
+- [ ] **V2-4 remaining scope** (if the user wants it next): three-panel
+      workspace layout, fib/rectangle/note drawing tools, position/order
+      lines drawn on the chart, multi-chart layouts. Core shipped
+      2026-07-16 — see `ROADMAP-V2.md` for the per-item status.
+
+## Deferred by user decision
+
+- [ ] **Rebuild and smoke-test the exe** — the packaged app predates all
+      2026-07-16 UI/performance work. The user explicitly wants packaging
+      LAST, once feature-complete; don't prioritize it.
 
 - [x] **Live-verify the V2-3 frontend in a real browser** — done 2026-07-16
       against a scratch data dir: toggle switch + persistence across reload,

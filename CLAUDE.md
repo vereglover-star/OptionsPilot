@@ -63,12 +63,12 @@ that's really what they want before writing any code.
   trained model into the trading or coaching path without the user
   explicitly asking for that specific change.
 - **No frontend build step.** `ui/static/index.html` is one self-contained
-  file (inline `<style>`/`<script>`, no imports, no bundler, no
-  `package.json`). Keep it that way unless the user asks you to change the
-  frontend architecture (e.g. for V2-4's chart workspace, which may
-  reasonably need a bundled JS library like `lightweight-charts` — even
-  then, keep it dependency-free/offline-capable, no CDN references, no npm
-  build pipeline unless truly necessary).
+  file (inline `<style>`/`<script>`, no bundler, no `package.json`). The
+  single exception is the vendored `ui/static/lightweight-charts.js`
+  (Apache-2.0, added for V2-4's chart workspace) — committed to the repo,
+  served locally, offline-capable. Don't add CDN references, more vendored
+  libraries, or an npm build pipeline unless truly necessary and the user
+  agrees.
 - **Naming**: modules are one word/concept per file
   (`gate.py`, `orders.py`, `coach.py`), classes are the primary export
   (`TradeGate`, `OrderManager`, `TradeCoach`). Follow the existing pattern

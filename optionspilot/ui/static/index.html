@@ -17,6 +17,7 @@
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 * { box-sizing:border-box; margin:0; }
+:focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
 html { scrollbar-color:var(--surface-3) var(--page); }
 body { background:var(--page); color:var(--ink); font-size:14px; display:flex; min-height:100vh; }
 button { font-family:inherit; }
@@ -286,19 +287,43 @@ pre.cfg { background:var(--surface-2); border-radius:10px; padding:14px; overflo
 .hint { color:var(--muted); font-size:12px; margin-top:8px; }
 .empty { color:var(--muted); padding:14px 4px; }
 h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
+
+/* chart workspace */
+.chart-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.chart-bar input { background:var(--surface-2); border:1px solid var(--ring); color:var(--ink);
+  border-radius:var(--r-sm); padding:7px 10px; font-size:14px; font-weight:700; width:96px;
+  text-transform:uppercase; }
+.chart-bar input:focus { outline:none; border-color:var(--accent); }
+.ind-pills { display:inline-flex; gap:6px; flex-wrap:wrap; }
+.ind-pills button, .draw-tools button { all:unset; cursor:pointer; padding:5px 10px; border-radius:999px;
+  border:1px solid var(--grid); color:var(--muted); font-size:12px; transition:all var(--t-fast); }
+.ind-pills button:hover, .draw-tools button:hover { color:var(--ink); border-color:var(--accent); }
+.ind-pills button.active { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }
+.draw-tools { display:inline-flex; gap:6px; }
+.draw-tools button.active { background:var(--warn-soft); border-color:var(--warn); color:var(--warn); }
+.chart-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px;
+  font-variant-numeric:tabular-nums; min-height:18px; margin-bottom:6px; padding-left:2px; }
+.chart-legend b { color:var(--ink-2); font-weight:600; }
+#ch-main { height:430px; position:relative; }
+.subpane { height:130px; margin-top:6px; border-top:1px solid var(--grid); }
+.chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
+  display:flex; flex-direction:column; }
+.chart-panel.fullscreen #ch-main { flex:1; height:auto; }
+.chart-hint { color:var(--muted); font-size:11px; margin-top:6px; }
 </style>
 </head>
 <body data-palette="#3987e5">
 <nav>
   <div class="logo">Options<span>Pilot</span></div>
   <button data-tab="dashboard" class="active">Dashboard <span class="kbd">1</span></button>
-  <button data-tab="trade">Trade <span class="kbd">2</span></button>
-  <button data-tab="coach">Coach <span class="kbd">3</span></button>
-  <button data-tab="watchlist">Watchlist <span class="kbd">4</span></button>
-  <button data-tab="journal">Journal <span class="kbd">5</span></button>
-  <button data-tab="backtest">Backtest <span class="kbd">6</span></button>
-  <button data-tab="learning">Learning <span class="kbd">7</span></button>
-  <button data-tab="settings">Settings <span class="kbd">8</span></button>
+  <button data-tab="charts">Charts <span class="kbd">2</span></button>
+  <button data-tab="trade">Trade <span class="kbd">3</span></button>
+  <button data-tab="coach">Coach <span class="kbd">4</span></button>
+  <button data-tab="watchlist">Watchlist <span class="kbd">5</span></button>
+  <button data-tab="journal">Journal <span class="kbd">6</span></button>
+  <button data-tab="backtest">Backtest <span class="kbd">7</span></button>
+  <button data-tab="learning">Learning <span class="kbd">8</span></button>
+  <button data-tab="settings">Settings <span class="kbd">9</span></button>
   <div class="spacer"></div>
   <div style="padding:0 12px"><span class="badge">PAPER TRADING</span></div>
   <div class="ver" id="ver"></div>
@@ -351,6 +376,43 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
     <div class="panel">
       <h2>Open positions</h2>
       <div id="positions"></div>
+    </div>
+  </section>
+
+  <!-- CHARTS (interactive workspace) -->
+  <section id="tab-charts" style="display:none">
+    <div class="panel chart-panel" id="chart-panel">
+      <div class="chart-bar">
+        <input id="ch-symbol" value="SPY" spellcheck="false" aria-label="Chart symbol">
+        <span class="seg" id="ch-tfs" aria-label="Timeframe">
+          <button data-tf="5m">5m</button>
+          <button data-tf="15m">15m</button>
+          <button data-tf="1h">1h</button>
+          <button data-tf="4h">4h</button>
+          <button data-tf="1d" class="active">1D</button>
+        </span>
+        <span class="ind-pills" id="ch-inds" aria-label="Indicators">
+          <button data-ind="ema" class="active">EMA</button>
+          <button data-ind="vwap">VWAP</button>
+          <button data-ind="bb">Bollinger</button>
+          <button data-ind="rsi">RSI</button>
+          <button data-ind="macd">MACD</button>
+        </span>
+        <span class="draw-tools" id="ch-tools" aria-label="Drawing tools">
+          <button data-tool="hline" title="Horizontal line: click a price level">─ Level</button>
+          <button data-tool="trend" title="Trend line: click two points">╱ Trend</button>
+          <button data-tool="clear" title="Remove all drawings for this symbol">Clear</button>
+        </span>
+        <span style="margin-left:auto"></span>
+        <button class="btn" id="ch-trade" title="Open this symbol in the Trade tab">Trade →</button>
+        <button class="btn" id="ch-full" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
+      </div>
+      <div class="chart-legend" id="ch-legend"></div>
+      <div id="ch-main"></div>
+      <div id="ch-rsi" class="subpane" style="display:none"></div>
+      <div id="ch-macd" class="subpane" style="display:none"></div>
+      <div class="chart-hint">Scroll to zoom · drag to pan · double-click the time axis to reset ·
+        drawings save per symbol · F toggles fullscreen</div>
     </div>
   </section>
 
@@ -583,6 +645,7 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
   </div>
 </div>
 
+<script src="/static/lightweight-charts.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
@@ -637,6 +700,7 @@ function switchTab(name) {
   sec.style.display = "";
   sec.style.animation = "none"; void sec.offsetWidth; sec.style.animation = "";
   $("tab-title").textContent = b.textContent.replace(/\d$/, "").trim();
+  if (name === "charts") loadChart();
   if (name === "trade") loadTrade();
   if (name === "coach") loadCoach();
   if (name === "watchlist") loadWatchlist();
@@ -646,14 +710,16 @@ function switchTab(name) {
 }
 document.querySelectorAll("nav button").forEach(b =>
   b.onclick = () => switchTab(b.dataset.tab));
-const TAB_KEYS = ["dashboard", "trade", "coach", "watchlist", "journal",
-                  "backtest", "learning", "settings"];
+const TAB_KEYS = ["dashboard", "charts", "trade", "coach", "watchlist",
+                  "journal", "backtest", "learning", "settings"];
 document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target.tagName;
   if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
-  const i = "12345678".indexOf(e.key);
+  const i = "123456789".indexOf(e.key);
   if (i >= 0) switchTab(TAB_KEYS[i]);
+  if (e.key.toLowerCase() === "f" &&
+      $("tab-charts").style.display !== "none") toggleChartFullscreen();
 });
 
 /* ── live status ──────────────────────────────────────────────────────── */
@@ -727,7 +793,8 @@ function renderStatus(s) {
              `<b>${esc(sig.setup_quality)}</b> setup · ${need} · ${prob} · ` +
              `${esc(sig.reason || "")}</div>`;
     }
-    return `<div class="meter"><span class="sym">${sym}</span>
+    return `<div class="meter"><span class="sym" style="cursor:pointer"
+      title="open ${sym} chart" onclick="openChart('${sym}')">${sym}</span>
       <div class="bar"><div class="fill" style="width:${Math.min(conf,100)}%"></div>
         <div class="thresh" style="left:${required}%"></div></div>
       <span class="val">${sig ? conf.toFixed(1) + "% " + dir : "—"}</span>${skip}</div>${gate}`;
@@ -752,8 +819,10 @@ function renderStatus(s) {
             ${q.target ? `<span>Target <b>${q.target}</b></span>` : ""}</div>
           <div class="foot">
             <span class="chip ${q.direction}">${q.direction}</span>
+            <button class="btn" onclick="openChart('${q.underlying}')"
+              style="margin-left:auto; padding:4px 12px; font-size:12px">Chart</button>
             <button class="btn pos-close" data-i="${i}"
-              style="margin-left:auto; padding:4px 12px; font-size:12px">Close</button></div>
+              style="padding:4px 12px; font-size:12px">Close</button></div>
         </div>`;
       }).join("") + "</div>");
   if (posChanged) document.querySelectorAll(".pos-close").forEach(b => b.onclick = async () => {
@@ -1107,15 +1176,16 @@ function renderWL() {
     <div class="wl-row ${wlSel.has(r.sym) ? "sel" : ""}" data-sym="${r.sym}"
          ${draggable ? 'draggable="true"' : ""}>
       <span class="drag" title="${draggable ? "drag to reorder" : "switch to custom order to drag"}">${draggable ? "≡" : ""}</span>
-      <button class="pin ${r.pinned ? "on" : ""}" title="${r.pinned ? "unpin" : "pin to top"}">★</button>
-      <span class="sym">${r.sym}</span>
+      <button class="pin ${r.pinned ? "on" : ""}" aria-label="${r.pinned ? "unpin" : "pin to top"}" title="${r.pinned ? "unpin" : "pin to top"}">★</button>
+      <span class="sym" style="cursor:pointer" title="open ${r.sym} chart"
+        onclick="event.stopPropagation(); openChart('${r.sym}')">${r.sym}</span>
       <span class="name" title="${esc(r.name)}">${esc(r.name)}</span>
       <span class="col">${r.q.price != null ? "$" + r.q.price.toFixed(2) : "—"}</span>
       <span class="col ${cls(r.q.change_pct ?? 0)}">${r.q.change_pct != null ? (r.q.change_pct >= 0 ? "+" : "") + r.q.change_pct.toFixed(2) + "%" : "—"}</span>
       <span class="col">${compact(r.q.volume)}</span>
       <span class="col">${compact(r.mcap)}</span>
       <span class="col">${r.conf != null ? r.conf.toFixed(1) + "%" : "—"}</span>
-      <button class="rm" title="remove ${r.sym}">×</button>
+      <button class="rm" aria-label="remove ${r.sym}" title="remove ${r.sym}">×</button>
     </div>`).join("") ||
     `<div class="empty">Watchlist is empty — add a ticker above.</div>`;
   wireWLRows();
@@ -1201,6 +1271,281 @@ $("wl-list").addEventListener("keydown", e => {
     renderWL();
   }
 });
+
+/* ── chart workspace ──────────────────────────────────────────────────── */
+const CH = {
+  sym: localStorage.getItem("chSym") || "SPY",
+  tf: localStorage.getItem("chTf") || "1d",
+  inds: JSON.parse(localStorage.getItem("chInds") || '{"ema":true,"vwap":false,"bb":false,"rsi":false,"macd":false}'),
+  main: null, candle: null, volume: null, overlays: {},
+  rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
+  macdLine: null, macdSig: null,
+  data: null, timeIndex: null, tool: null, pendingPoint: null,
+  priceLines: [], trendSeries: [], loading: false,
+};
+const CH_COLORS = {
+  up: "#00c46a", down: "#ff5252", grid: "#23262c", text: "#82868e",
+  ema: ["#f7b32b", "#3d8bff", "#c084fc"], vwap: "#22d3ee",
+  bb: "rgba(148,163,184,.55)", volUp: "rgba(0,196,106,.35)",
+  volDn: "rgba(255,82,82,.35)", trend: "#f7b32b", hline: "#f7b32b",
+};
+const chOpts = extra => ({
+  autoSize: true,
+  layout: { background: { type: "solid", color: "transparent" },
+            textColor: CH_COLORS.text, fontSize: 11 },
+  grid: { vertLines: { color: CH_COLORS.grid }, horzLines: { color: CH_COLORS.grid } },
+  rightPriceScale: { borderColor: CH_COLORS.grid },
+  timeScale: { borderColor: CH_COLORS.grid, timeVisible: true, secondsVisible: false },
+  crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  ...extra,
+});
+
+function chInit() {
+  if (CH.main) return;
+  CH.main = LightweightCharts.createChart($("ch-main"), chOpts({}));
+  CH.candle = CH.main.addCandlestickSeries({
+    upColor: CH_COLORS.up, downColor: CH_COLORS.down, borderVisible: false,
+    wickUpColor: CH_COLORS.up, wickDownColor: CH_COLORS.down,
+  });
+  CH.volume = CH.main.addHistogramSeries({
+    priceScaleId: "vol", priceFormat: { type: "volume" },
+    lastValueVisible: false, priceLineVisible: false,
+  });
+  CH.main.priceScale("vol").applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
+  const overlay = color => CH.main.addLineSeries({
+    color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false,
+    crosshairMarkerVisible: false,
+  });
+  CH.overlays = {
+    ema0: overlay(CH_COLORS.ema[0]), ema1: overlay(CH_COLORS.ema[1]),
+    ema2: overlay(CH_COLORS.ema[2]), vwap: overlay(CH_COLORS.vwap),
+    bb_upper: overlay(CH_COLORS.bb), bb_lower: overlay(CH_COLORS.bb),
+    bb_mid: overlay(CH_COLORS.bb),
+  };
+  CH.main.subscribeCrosshairMove(chLegend);
+  CH.main.subscribeClick(chClick);
+}
+
+function chInitPane(which) {
+  if (which === "rsi" && !CH.rsiChart) {
+    CH.rsiChart = LightweightCharts.createChart($("ch-rsi"), chOpts({
+      rightPriceScale: { borderColor: CH_COLORS.grid },
+    }));
+    CH.rsiLine = CH.rsiChart.addLineSeries({ color: CH_COLORS.vwap, lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: true });
+    CH.rsiLine.createPriceLine({ price: 70, color: CH_COLORS.grid, lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
+    CH.rsiLine.createPriceLine({ price: 30, color: CH_COLORS.grid, lineWidth: 1,
+      lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false });
+    chSyncPane(CH.rsiChart);
+  }
+  if (which === "macd" && !CH.macdChart) {
+    CH.macdChart = LightweightCharts.createChart($("ch-macd"), chOpts({}));
+    CH.macdHist = CH.macdChart.addHistogramSeries({ priceLineVisible: false,
+      lastValueVisible: false });
+    CH.macdLine = CH.macdChart.addLineSeries({ color: CH_COLORS.ema[1], lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: false });
+    CH.macdSig = CH.macdChart.addLineSeries({ color: CH_COLORS.ema[0], lineWidth: 1,
+      priceLineVisible: false, lastValueVisible: false });
+    chSyncPane(CH.macdChart);
+  }
+}
+
+let _syncing = false;
+function chSyncPane(pane) {
+  // two-way visible-range lock between the main chart and a subpane
+  const link = (a, b) => a.timeScale().subscribeVisibleLogicalRangeChange(r => {
+    if (_syncing || r === null) return;
+    _syncing = true; b.timeScale().setVisibleLogicalRange(r); _syncing = false;
+  });
+  link(CH.main, pane); link(pane, CH.main);
+}
+
+async function loadChart(symbol) {
+  if (symbol) CH.sym = String(symbol).toUpperCase();
+  $("ch-symbol").value = CH.sym;
+  chInit();
+  chPaintControls();
+  if (CH.loading) return;
+  CH.loading = true;
+  $("ch-legend").innerHTML = `<span class="skel" style="width:280px; height:14px"></span>`;
+  try {
+    const r = await fetch(`/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}`);
+    const d = await r.json();
+    if (d.error || !d.candles.length) {
+      toast(d.error || `no data for ${CH.sym}`, false);
+      $("ch-legend").textContent = d.error || `No data for ${CH.sym}.`;
+      return;
+    }
+    CH.data = d;
+    CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
+    localStorage.setItem("chSym", CH.sym);
+    localStorage.setItem("chTf", CH.tf);
+    CH.candle.setData(d.candles);
+    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
+      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
+    chApplyIndicators();
+    chRestoreDrawings();
+    CH.main.timeScale().fitContent();
+    chLegend(null);
+  } finally { CH.loading = false; }
+}
+
+const chSeriesData = name => {
+  const vals = CH.data.indicators[name];
+  if (!vals) return [];
+  const out = [];
+  for (let i = 0; i < vals.length; i++)
+    if (vals[i] !== null) out.push({ time: CH.data.candles[i].time, value: vals[i] });
+  return out;
+};
+
+function chApplyIndicators() {
+  const ind = CH.inds, names = Object.keys(CH.data.indicators);
+  const emaNames = names.filter(n => n.startsWith("ema")).slice(0, 3);
+  emaNames.forEach((n, i) => CH.overlays["ema" + i].setData(ind.ema ? chSeriesData(n) : []));
+  CH.overlays.vwap.setData(ind.vwap ? chSeriesData("vwap") : []);
+  for (const b of ["bb_upper", "bb_lower", "bb_mid"])
+    CH.overlays[b].setData(ind.bb ? chSeriesData(b) : []);
+  $("ch-rsi").style.display = ind.rsi ? "" : "none";
+  $("ch-macd").style.display = ind.macd ? "" : "none";
+  if (ind.rsi) { chInitPane("rsi"); CH.rsiLine.setData(chSeriesData("rsi")); }
+  if (ind.macd) {
+    chInitPane("macd");
+    CH.macdHist.setData(chSeriesData("macd_hist").map(p => ({ ...p,
+      color: p.value >= 0 ? CH_COLORS.volUp : CH_COLORS.volDn })));
+    CH.macdLine.setData(chSeriesData("macd"));
+    CH.macdSig.setData(chSeriesData("macd_signal"));
+  }
+}
+
+function chLegend(param) {
+  if (!CH.data) return;
+  const cs = CH.data.candles;
+  let i = cs.length - 1;
+  if (param && param.time !== undefined && CH.timeIndex.has(param.time))
+    i = CH.timeIndex.get(param.time);
+  const c = cs[i], prev = cs[i - 1] || c;
+  const chg = (c.close / prev.close - 1) * 100;
+  const bits = [
+    `<b>${CH.sym}</b> · ${CH.tf.toUpperCase()}`,
+    `O <b>${c.open}</b>`, `H <b>${c.high}</b>`, `L <b>${c.low}</b>`,
+    `C <b class="${cls(chg)}">${c.close}</b>`,
+    `<span class="${cls(chg)}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span>`,
+    `Vol <b>${compact(c.volume)}</b>`,
+  ];
+  const at = name => { const v = CH.data.indicators[name]?.[i]; return v == null ? null : v; };
+  if (CH.inds.ema) {
+    const emaNames = Object.keys(CH.data.indicators).filter(n => n.startsWith("ema")).slice(0, 3);
+    for (const n of emaNames) { const v = at(n); if (v !== null)
+      bits.push(`${n.toUpperCase()} <b>${v.toFixed(2)}</b>`); }
+  }
+  if (CH.inds.vwap) { const v = at("vwap"); if (v !== null) bits.push(`VWAP <b>${v.toFixed(2)}</b>`); }
+  if (CH.inds.rsi) { const v = at("rsi"); if (v !== null) bits.push(`RSI <b>${v.toFixed(1)}</b>`); }
+  $("ch-legend").innerHTML = bits.map(b => `<span>${b}</span>`).join("");
+}
+
+/* drawings: horizontal levels persist per symbol; trend lines per symbol+tf */
+const chDrawKey = () => `chDraw:${CH.sym}`;
+const chLoadDraw = () => JSON.parse(localStorage.getItem(chDrawKey()) ||
+                                    '{"hlines":[],"trends":{}}');
+const chSaveDraw = d => localStorage.setItem(chDrawKey(), JSON.stringify(d));
+
+function chRestoreDrawings() {
+  for (const pl of CH.priceLines) CH.candle.removePriceLine(pl);
+  for (const s of CH.trendSeries) CH.main.removeSeries(s);
+  CH.priceLines = []; CH.trendSeries = [];
+  const d = chLoadDraw();
+  for (const price of d.hlines) CH.priceLines.push(chMakeHline(price));
+  for (const t of (d.trends[CH.tf] || [])) CH.trendSeries.push(chMakeTrend(t));
+}
+
+const chMakeHline = price => CH.candle.createPriceLine({
+  price, color: CH_COLORS.hline, lineWidth: 1,
+  lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
+});
+function chMakeTrend(t) {
+  const s = CH.main.addLineSeries({ color: CH_COLORS.trend, lineWidth: 1,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  s.setData([{ time: t.t1, value: t.p1 }, { time: t.t2, value: t.p2 }]);
+  return s;
+}
+
+function chClick(param) {
+  if (!CH.tool || !param.point || !CH.data) return;
+  const price = CH.candle.coordinateToPrice(param.point.y);
+  if (price === null) return;
+  const d = chLoadDraw();
+  if (CH.tool === "hline") {
+    d.hlines.push(+price.toFixed(2));
+    chSaveDraw(d);
+    CH.priceLines.push(chMakeHline(+price.toFixed(2)));
+    chSetTool(null);
+  } else if (CH.tool === "trend") {
+    let time = param.time;
+    if (time === undefined)
+      time = CH.main.timeScale().coordinateToTime(param.point.x);
+    if (time === null || time === undefined) return;   // clicked outside data
+    if (!CH.pendingPoint) { CH.pendingPoint = { t1: time, p1: +price.toFixed(2) }; return; }
+    if (time === CH.pendingPoint.t1) return;      // need two distinct bars
+    const t = { ...CH.pendingPoint, t2: time, p2: +price.toFixed(2) };
+    if (t.t2 < t.t1) { [t.t1, t.t2] = [t.t2, t.t1]; [t.p1, t.p2] = [t.p2, t.p1]; }
+    (d.trends[CH.tf] = d.trends[CH.tf] || []).push(t);
+    chSaveDraw(d);
+    CH.trendSeries.push(chMakeTrend(t));
+    CH.pendingPoint = null;
+    chSetTool(null);
+  }
+}
+
+function chSetTool(tool) {
+  CH.tool = tool; CH.pendingPoint = null;
+  document.querySelectorAll("#ch-tools button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tool === tool));
+  $("ch-main").style.cursor = tool ? "crosshair" : "";
+}
+
+function chPaintControls() {
+  document.querySelectorAll("#ch-tfs button").forEach(b =>
+    b.classList.toggle("active", b.dataset.tf === CH.tf));
+  document.querySelectorAll("#ch-inds button").forEach(b =>
+    b.classList.toggle("active", !!CH.inds[b.dataset.ind]));
+  $("ch-trade").textContent = `Trade ${CH.sym} →`;
+}
+
+function toggleChartFullscreen() {
+  $("chart-panel").classList.toggle("fullscreen");
+}
+
+document.querySelectorAll("#ch-tfs button").forEach(b => b.onclick = () => {
+  CH.tf = b.dataset.tf; chPaintControls(); loadChart();
+});
+document.querySelectorAll("#ch-inds button").forEach(b => b.onclick = () => {
+  CH.inds[b.dataset.ind] = !CH.inds[b.dataset.ind];
+  localStorage.setItem("chInds", JSON.stringify(CH.inds));
+  chPaintControls();
+  if (CH.data) chApplyIndicators();
+});
+document.querySelectorAll("#ch-tools button").forEach(b => b.onclick = () => {
+  if (b.dataset.tool === "clear") {
+    localStorage.removeItem(chDrawKey());
+    chRestoreDrawings();
+    toast(`drawings cleared for ${CH.sym}`);
+    return;
+  }
+  chSetTool(CH.tool === b.dataset.tool ? null : b.dataset.tool);
+});
+$("ch-symbol").addEventListener("keydown", e => {
+  if (e.key === "Enter") { e.preventDefault(); loadChart($("ch-symbol").value.trim()); }
+});
+$("ch-full").onclick = toggleChartFullscreen;
+$("ch-trade").onclick = () => {
+  $("tk-symbol").value = CH.sym;
+  tkChain = null; tkExp = ""; tkSel = null;
+  switchTab("trade");
+  loadChain();
+};
+function openChart(symbol) { switchTab("charts"); loadChart(symbol); }
 
 /* ── manual trading (Trade tab) ───────────────────────────────────────── */
 let tkChain = null, tkSel = null, tkRight = "call", tkSide = "buy_to_open";
@@ -1410,6 +1755,17 @@ $("tk-form").onsubmit = async e => {
   toast(d.event === "filled"
     ? `✓ filled: ${d.order.result}`
     : `order working: ${d.order.kind} ${d.order.contract} x${d.order.quantity} (${d.order.tif})`);
+  if (d.event === "filled" && body.side === "buy_to_open") {
+    // frictionless discipline: pre-arm the ticket as a protective stop for
+    // the position just opened (the coach docks trades that never had one)
+    tkSide = "sell_to_close";
+    document.querySelectorAll("#tk-side-seg button").forEach(x =>
+      x.classList.toggle("active", x.dataset.side === "sell_to_close"));
+    $("tk-kind").value = "stop_loss";
+    $("tk-kind").onchange();
+    setTimeout(() => { $("tk-stop").focus();
+      toast("✓ filled — ticket pre-armed as a stop-loss: set the underlying level and place it"); }, 1200);
+  }
   await Promise.all([loadMetrics(), loadOrders()]);
 };
 
@@ -1496,7 +1852,7 @@ async function loadOrders() {
       d.working.map(o => `<tr><td>${o.kind}</td><td>${o.contract}</td>
         <td class="num">${o.quantity}</td><td>${o.tif}</td>
         <td class="num">${o.limit_price ?? o.stop_level ?? o.trail_stop_at ?? "—"}</td>
-        <td><button class="rm" data-id="${o.id}" title="cancel">×</button></td></tr>`
+        <td><button class="rm" data-id="${o.id}" aria-label="cancel order" title="cancel">×</button></td></tr>`
       ).join("") + "</table>";
   document.querySelectorAll("#tk-working .rm").forEach(b => b.onclick = async () => {
     const resp = await post("/api/orders/cancel", {id: b.dataset.id});

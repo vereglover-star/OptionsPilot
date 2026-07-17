@@ -4,6 +4,32 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-07-16 — V2-4 core: interactive chart workspace
+
+*338 tests. The Charts tab ships the core of the V2-4 roadmap phase.*
+
+- Vendored TradingView's lightweight-charts 4.2.3 (Apache-2.0) at
+  `ui/static/lightweight-charts.js` — served locally, fully offline, no
+  CDN, bundled into the exe by the existing `--add-data ui\static` line.
+- New `GET /api/candles?symbol&tf`: OHLCV plus indicator series (EMA×3,
+  VWAP, Bollinger, RSI, MACD) computed by the SAME `analysis/` functions
+  the engine trades with — what you see charted is exactly what the scorer
+  saw. Provider-only (no orchestrator lock), so chart loads never contend
+  with a running scan; ~8ms warm through the CachedProvider.
+- New Charts tab (keyboard: 2): candlestick + volume chart with zoom/pan/
+  crosshair and an OHLC+change+volume+indicator legend, five timeframes
+  (5m–1D), indicator pills (EMA/VWAP/Bollinger overlays, RSI and MACD as
+  height-synced subpanes), fullscreen (F), and drawing tools — horizontal
+  levels persisted per symbol, trend lines persisted per symbol+timeframe,
+  one-click clear.
+- Trade-from-chart plus deep links everywhere: watchlist symbols, dashboard
+  confidence meters, and position cards all open the chart; "Trade →" jumps
+  to the ticket with the symbol loaded.
+- Workflow: after a market buy fills, the ticket pre-arms itself as a
+  protective stop-loss (side/type preset, level focused) — the single most
+  common coach finding (`no_stop`) is now one keystroke to avoid.
+- Accessibility: visible focus rings, aria-labels on icon-only controls.
+
 ## 2026-07-16 — Performance & polish pass (no new features)
 
 *335 tests. Scan cycle profiled and optimized end-to-end; Trade tab and
