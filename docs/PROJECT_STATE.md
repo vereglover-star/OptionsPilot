@@ -3,10 +3,13 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-17, after the V2-4-finish session (drawing
-tools + trade lines on the chart, manual-entry risk gating completed,
-hygiene backlog cleared). The session's work was prepared as one commit —
-as always, trust `git log`, not this file, for whether it landed.
+**Last updated:** 2026-07-17, after the **V3 UI sprint session** (chart
+reliability root-caused and fixed, design system, and redesigns of every
+tab — seven commits `7176843`…`79138da` on branch **`v3-ui`**, kept off
+`main` pending the user's review). Three earlier sessions also landed
+this date: V2-4 finish (`50c75aa`), the docs/AI framework (`1029fb0`),
+and developer automation (`7373c51`). As always, trust `git log`, not
+this file, for whether anything landed.
 
 ## Verified facts about current state (checked 2026-07-17)
 
@@ -121,9 +124,21 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-2026-07-17 finished V2-4's tractable remainder and completed the
-manual-risk-gating work found uncommitted (and unwired) from 2026-07-16.
-The whole changeset ships as one commit:
+**2026-07-17, end of the V3 UI sprint (branch `v3-ui`, seven commits,
+each browser-verified before committing — see `NEXT_SESSION.md` for the
+per-milestone list and `CHANGELOG.md` for detail).** Key facts a next
+session needs: the chart blank-canvas bug is fixed at the root
+(empty-fetch cache poisoning in `CachedProvider` + missing stale
+fallback + uncaught frontend failures + a mid-load switch race); the
+engine's strict fail-closed candle path is deliberately unchanged; 351
+tests pass; `scripts/verify.ps1` ran clean as the session's closing
+action. The branch is **not merged** — that's the user's call. The
+order-ticket *fill* path (post-fill stop-loss pre-arm) still needs one
+market-hours manual pass; everything else was verified live, including
+the risk gate visibly rejecting an after-hours order (correct behavior).
+
+Earlier the same date, the V2-4-finish session ended as follows (kept
+for the record):
 
 - **Chart trade lines**: `loadChart` draws labeled price lines for the
   charted symbol — position entry (`entry_spot`, newly exposed in the
@@ -162,16 +177,21 @@ test deliberately LAST (user's stated preference), when the app is closed.
 
 ## Next recommended task
 
-1. V2-5 (replay engine) or V2-6 (journal dashboard), or the V2-4
-   three-panel workspace layout, or pause to accumulate paper-trading
-   data — user's call.
-2. Eventually: rebuild + smoke-test the exe (LAST, once feature-complete).
+1. User review of the `v3-ui` branch → merge decision. Don't build on
+   the branch until then.
+2. If V3 continues: the remaining `ROADMAP-V3-UX.md` items (H5
+   notification center, N2 chart↔chain links, N4 toast stacking).
+3. Then the standing scope decision: V2-5 (replay engine), V2-6 (journal
+   dashboard), the V2-4 three-panel workspace layout, or pause to
+   accumulate paper-trading data — user's call.
+4. Eventually: rebuild + smoke-test the exe (LAST, once the branch state
+   settles).
 
 ## Current priorities
 
-1. The what-next scope decision (V2-5 / V2-6 / workspace layout / pause
-   and trade) — user's call.
-2. Exe rebuild deliberately LAST.
+1. `v3-ui` review/merge — user's call.
+2. The what-next scope decision after that.
+3. Exe rebuild deliberately LAST.
 
 ## Blockers
 

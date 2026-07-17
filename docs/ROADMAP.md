@@ -64,14 +64,27 @@ symbol+timeframe in localStorage), position/order price lines on the
 chart, and trade-from-chart deep links. **The three-panel workspace layout
 and multi-chart layouts are explicitly deferred** — see "Deferred" below.
 
+### V3 product-quality sprint, milestones 0–6 (2026-07-17, branch `v3-ui`)
+
+A UX/reliability sprint, not a feature sprint — scoped by the full audit in
+`ROADMAP-V3-UX.md`. Chart reliability root-caused and fixed (never-blank
+canvas, stale-data fallback for display only, 30s zoom-preserving
+refresh), a design-token system + responsive icon-rail nav, and redesigns
+of Dashboard, Trade (ATM quick-picks, risk context, order-entry keys),
+Settings (structured cards replace the JSON dump), the four analytics
+tabs, and an accessibility pass. Seven commits, each browser-verified.
+**On `v3-ui`, awaiting user review — not merged to `main`.**
+
 ---
 
 ## In Progress
 
-Nothing is actively in progress between sessions — each V2 phase has
-shipped as a complete, tested, documented unit before the next began (the
-project's stated discipline; see `CLAUDE.md`). The next phase to pick up is
-an open scope decision — see "Planned."
+**The `v3-ui` branch is awaiting the user's review/merge decision.**
+Remaining audit items deliberately not built (see `ROADMAP-V3-UX.md`):
+notification center with persistence (H5), chart↔chain cross-links (N2),
+toast stacking (N4), and everything under "Long-term ideas." Beyond that,
+nothing is actively in progress — each phase ships as a complete, tested,
+documented unit before the next begins (see `CLAUDE.md`).
 
 ---
 

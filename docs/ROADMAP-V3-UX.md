@@ -1,10 +1,13 @@
 # ROADMAP-V3-UX.md — UX & workflow audit, V3 planning
 
-**Status: planning document. Nothing in this file has been implemented.**
-No product code changed as part of producing this audit — per instruction,
-this session did not touch trading logic, docs automation, or build
-tooling. This is the deliverable itself: an audit + a roadmap to get
-explicit approval on before any V3 work starts.
+**Status (updated 2026-07-17, end of the V3 sprint): largely implemented
+on branch `v3-ui`** — the sprint shipped C1/C2/C3, H1/H2/H3/H4 (spacing
+scale defined, adopted incrementally), N1, N3, and the chart-reliability
+work that superseded the audit's C3 with a full root-cause fix. **Still
+open:** H5 (notification center with persistence), N2 (chart↔chain
+cross-links), N4 (toast stacking), and everything under "Long-term
+ideas." The original audit text below is preserved unchanged as the
+rationale record.
 
 **Date:** 2026-07-17. **Scope:** full visual + code audit of
 `optionspilot/ui/static/index.html` (the entire frontend — one file,

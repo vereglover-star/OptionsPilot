@@ -303,7 +303,7 @@ with an inline comment there since 2026-07-16, matching `trading_mode`.
 | GET | `/api/journal` | Trade history + stats |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
-| GET | `/api/candles` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock) |
+| GET | `/api/candles` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock). Since V3-0 the payload also carries `stale`/`as_of`: when the live fetch fails, disk-cached bars of any age are served flagged stale (display-only fallback — the engine's strict `get_candles` path is unchanged) |
 | GET | `/static/lightweight-charts.js` | Vendored chart library (Apache-2.0, offline — the frontend's ONE bundled asset) |
 | GET | `/api/chain` | Option chain for a symbol/expiration (Greeks, liquidity) — manual trading ticket data |
 | GET/POST | `/api/orders`, `/api/orders/cancel` | Working manual orders: place/list/cancel |
@@ -379,7 +379,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (345 tests as of this writing, all passing)
+# Tests (351 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -426,7 +426,7 @@ window instead of corrupting the shared account database.
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (345 tests cover this
+   exercises the FastAPI layer via `TestClient` (351 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

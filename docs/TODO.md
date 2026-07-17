@@ -55,7 +55,17 @@ is. This file is the flat, actionable checklist version.
       scripts) with those specific flows remains a real opportunity. Gotcha
       worth keeping if you do: lightweight-charts coalesces chart clicks
       faster than ~500ms apart as double-clicks — pace scripted two-point
-      drawing-tool clicks ≥700ms apart.
+      drawing-tool clicks ≥700ms apart. **Update 2026-07-17 (V3 session):**
+      per-flow Playwright scripts now exist and were used to verify every
+      V3 milestone (chart failure states/races, the full order-ticket flow,
+      settings search, a real backtest run, the `?` overlay) — but they
+      live in the session scratchpad, not the repo. Promoting them into
+      `scripts/` as committed regression checks is now the concrete version
+      of this item.
+- [ ] One market-hours manual pass over the Trade tab's *fill* path (fill →
+      stop-loss pre-arm → position row → close-prefill) — the V3 session
+      verified everything up to the risk gate's after-hours rejection, but
+      no real fill could occur with the market closed.
 - [ ] Consider a minimal CI workflow (`.github/workflows/tests.yml`
       running `scripts/verify.ps1` or just the pytest suite on push/PR) and
       `ruff` for linting/formatting — recommended but not installed; see
