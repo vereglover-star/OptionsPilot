@@ -4,7 +4,36 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-0: chart reliability — root cause fixed, never-blank canvas
+## [Uncommitted] 2026-07-17 — V3-1: design system foundation — tokens, icon nav, responsive layout
+
+*351 tests (unchanged — presentation only). Second V3 milestone: the shared
+visual language every subsequent screen redesign builds on, plus a real
+layout-overflow bug found and fixed by the new narrow-viewport check.*
+
+- **Design tokens** (`:root`): a nine-step type scale (`--fs-xs`…
+  `--fs-hero`) replacing ~75 ad hoc pixel font sizes (13 distinct values
+  consolidated to 9 with sub-pixel-class visual drift); a spacing scale
+  (`--sp-1`…`--sp-6`); three elevation levels (`--sh-1` resting cards,
+  `--sh-2` popovers, `--sh-3` modal/toast) now applied to panels, cards,
+  the autocomplete popover, the confirm modal, and toasts; `--r-pill`.
+- **Icon navigation**: nine hand-authored inline SVG stroke icons
+  (offline-safe, `currentColor`, no icon font or CDN) added to the nav
+  rail alongside the labels.
+- **Responsive collapse**: below 1180px the sidebar becomes a 56px icon
+  rail (tooltips carry the labels, the logo shrinks to "OP", the PAPER
+  TRADING badge turns vertical) — the header pills now fit on one row at
+  1024px instead of wrapping and clipping.
+- **Real bug fixed — flex/grid min-width blowout**: `main` is a flex item,
+  and its implicit `min-width:auto` let the option-chain table push the
+  whole layout wider than the viewport at ≤1280px (header clipped off
+  screen rather than wrapping — pre-existing, exposed by the first
+  narrow-viewport screenshot of the Trade tab). Fixed with `min-width:0`
+  on `main` and `minmax(0,1fr)` grid columns; wide tables now scroll
+  inside their own panel, never the page.
+- **Verified**: 351 tests, HTML id check, browser smoke check (9 tabs,
+  zero console errors), plus before/after screenshots at 1024/1280/1600px.
+
+## 2026-07-17 — V3-0: chart reliability — root cause fixed, never-blank canvas
 
 *351 tests (+6). First milestone of the V3 product-quality sprint (branch
 `v3-ui`, planned in `ROADMAP-V3-UX.md`). The app could open with no usable
