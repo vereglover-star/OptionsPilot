@@ -4,6 +4,59 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-07-16 — Performance & polish pass (no new features)
+
+*335 tests. Scan cycle profiled and optimized end-to-end; Trade tab and
+dashboard redesigned in a modern-brokerage style; UI never blocks during
+scans. Soak: warm cycles 0.1s, zero heap growth.*
+
+**Performance (measured 5-symbol watchlist):**
+- Profiled the cycle first: 83% of the old 14.9s was 25 *serial* candle
+  fetches gated by the provider's 0.5s self-throttle; the rest was
+  re-running the full analysis suite on unchanged frames.
+- New `data/cached.py` `CachedProvider`: timeframe-aware candle TTLs,
+  5s quote / 30s chain / 1h expirations memos, concurrent-request dedup,
+  write-through to the SQLite `CandleCache` (`data/cache.db`) for warm
+  restarts. Wraps `YFinanceProvider` by default; fake test providers
+  bypass it.
+- `Orchestrator.fetch_watchlist_candles()`: all (symbol × timeframe) pairs
+  fetch in parallel (8 workers) with a per-symbol progress callback;
+  `run_cycle(candles=...)` accepts the prefetched frames. Provider throttle
+  lowered 0.5s → 0.15s (request count is now tiny).
+- `MultiTimeframeAnalyzer` memoizes one view per (symbol, timeframe) on a
+  data fingerprint — unchanged frames skip the entire indicator/pattern/
+  smart-money rebuild. `candlesticks.detect_all` computes shared bar
+  geometry once instead of per-detector. `evaluate()` ~495ms → ~76ms cold,
+  ~0ms warm.
+- Cycle time: 14.9s → 4.5s cold, **~0.1s warm** (the "Scan now" case).
+- `/api/scan` is now non-blocking by default: the cycle runs on a
+  background thread, candle fetching happens OUTSIDE the orchestrator
+  lock, and progress (`scan.done/total`) streams over `/ws`; watchlist
+  quotes tick in per-symbol while the scan runs. `{"wait": true}` keeps
+  the old synchronous behavior for scripts/tests.
+- `/ws` pushes at 1s with change detection — full payload only when
+  something changed, else a tiny heartbeat the frontend ignores. Journal
+  reads for the status payload are cached by a new `TradeJournal.revision`
+  counter instead of rescanning SQLite every push.
+- Startup: yfinance import deferred to first use; core import time
+  ~3.1s → ~0.9s.
+
+**UI/UX (single-file, no-build architecture unchanged):**
+- Modern brokerage restyle: refreshed dark palette and type scale, tabular
+  numerals everywhere, hover/press transitions, tab-switch animation,
+  reduced-motion support.
+- Dashboard: portfolio-value hero with today's P/L; open positions as
+  cards (big colored P/L, qty/avg/mark/stop/target, Close with a
+  confirmation dialog).
+- Trade tab redesign: horizontal expiration pills with DTE labels, sticky-
+  header chain with colored bid/ask and an inline spot-price row marker
+  (auto-scrolled into view), selected-contract card with large mid price,
+  Buy/Sell segmented control, quantity stepper, live estimated cost/credit,
+  and a full order-confirmation modal before anything is placed.
+- Skeleton loaders on chain/journal/coach/learning/metrics; DOM writes
+  diffed (`setHTML`) so unchanged sections never re-render; keyboard
+  shortcuts 1–8 switch tabs.
+
 ## 2026-07-16 — V2-3: AI Mode vs Human Mode
 
 *310 tests. Frontend live-verified in a real browser (mode toggle + persistence

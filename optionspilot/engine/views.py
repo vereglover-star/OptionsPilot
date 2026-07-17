@@ -30,6 +30,19 @@ from optionspilot.config.settings import AppConfig
 from optionspilot.core.models import Timeframe
 
 MIN_BARS = 40           # below this, a timeframe is skipped rather than guessed at
+
+
+def _fingerprint(df: pd.DataFrame) -> tuple:
+    """Cheap, collision-resistant identity of an analysis window: bounds,
+    length, the forming bar's OHLCV, and full-column checksums (catches
+    upstream revisions of interior bars)."""
+    last = df.iloc[-1]
+    return (
+        len(df), df.index[0], df.index[-1],
+        float(last["open"]), float(last["high"]), float(last["low"]),
+        float(last["close"]), float(last["volume"]),
+        float(df["close"].sum()), float(df["volume"].sum()),
+    )
 RECENT_GRAB_BARS = 10   # liquidity grabs older than this are stale context
 ANALYSIS_WINDOW = 400   # analyze only the trailing N bars: recent structure is
                         # what the scorer consumes, and this bounds per-scan cost
@@ -74,20 +87,38 @@ class TimeframeView:
 class MultiTimeframeAnalyzer:
     def __init__(self, config: AppConfig):
         self._cfg = config
+        # Memoized views: one slot per (key, timeframe). Rebuilding a view is
+        # the single most expensive computation per scan (~100ms x symbols x
+        # timeframes), and between cycles most frames are byte-identical —
+        # a 4h or daily frame only changes a few times per session. The
+        # fingerprint covers window bounds, length, and OHLCV of the forming
+        # bar plus column checksums, so any data change (including upstream
+        # revisions of mid-frame bars) forces a rebuild. Output is identical
+        # to an uncached run — this is a cache, not an approximation.
+        self._memo: dict[tuple[str, Timeframe], tuple[tuple, TimeframeView]] = {}
 
     def analyze(
-        self, candles_by_tf: dict[Timeframe, pd.DataFrame]
+        self, candles_by_tf: dict[Timeframe, pd.DataFrame], key: str = ""
     ) -> dict[Timeframe, TimeframeView]:
-        return {
-            tf: self._build_view(tf, df)
-            for tf, df in candles_by_tf.items()
-            if len(df) >= MIN_BARS
-        }
+        views: dict[Timeframe, TimeframeView] = {}
+        for tf, df in candles_by_tf.items():
+            if len(df) < MIN_BARS:
+                continue
+            if len(df) > ANALYSIS_WINDOW:
+                df = df.tail(ANALYSIS_WINDOW)
+            fp = _fingerprint(df)
+            slot = (key, tf)
+            hit = self._memo.get(slot)
+            if hit is not None and hit[0] == fp:
+                views[tf] = hit[1]
+            else:
+                view = self._build_view(tf, df)
+                self._memo[slot] = (fp, view)
+                views[tf] = view
+        return views
 
     def _build_view(self, tf: Timeframe, df: pd.DataFrame) -> TimeframeView:
         icfg = self._cfg.indicators
-        if len(df) > ANALYSIS_WINDOW:
-            df = df.tail(ANALYSIS_WINDOW)
         close = df["close"]
         last_close = float(close.iloc[-1])
         atr_val = float(ind.atr(df, icfg.atr_period).iloc[-1])

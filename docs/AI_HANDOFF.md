@@ -74,7 +74,8 @@ build step — `optionspilot/ui/static/index.html` is a single self-contained
 HTML file with inline `<style>` and `<script>` (no React/Vue/bundler, no
 `npm`). It talks to the backend exclusively via `fetch()` to `/api/*` REST
 endpoints plus one WebSocket (`/ws`) that pushes the full status payload
-every 2 seconds.
+every second when the payload changed (a tiny heartbeat otherwise, which
+the frontend ignores — no re-render).
 
 ## Backend architecture
 
@@ -117,7 +118,10 @@ __main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / l
 Called every `engine.scan_interval_seconds` (default 60) while the market is
 open, or on demand via `/api/scan`:
 
-1. Fetch fresh candles for every watchlist symbol, all configured timeframes.
+1. Fetch candles for every watchlist symbol × timeframe — in parallel,
+   through the `CachedProvider` (timeframe-aware TTLs, so most cycles only
+   refetch the entry timeframe and daily bars). In the UI server this phase
+   runs OUTSIDE the orchestrator lock, so status reads never block on it.
 2. **Manage AI positions**: `PositionManager.review()` checks stop/target/
    CHoCH-invalidation/partial-exit for positions where `managed_by == "ai"`.
    It explicitly ignores `managed_by == "manual"` positions (V2-3 change).
@@ -292,8 +296,8 @@ human`), but this isn't yet documented with an inline comment there the way
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Serves `static/index.html` |
-| GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes) — also pushed every 2s over `/ws` |
-| POST | `/api/scan` | Run one cycle now |
+| GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes, scan progress) — also pushed over `/ws` |
+| POST | `/api/scan` | Run one cycle: non-blocking by default (background thread; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous |
 | GET | `/api/journal` | Trade history + stats |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
@@ -307,7 +311,7 @@ human`), but this isn't yet documented with an inline comment there the way
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
-| WS | `/ws` | Pushes `status_payload()` every 2s |
+| WS | `/ws` | 1s cadence with change detection: full `status_payload()` when something changed, tiny heartbeat otherwise |
 
 All mutating endpoints acquire `UIServer.lock` (an `RLock`) — the
 orchestrator is not thread-safe, and this lock serializes the background
@@ -317,6 +321,7 @@ cycle-loop thread against API request threads.
 
 Everything is **SQLite + JSON files**, no external database, no ORM:
 - `data/paper.db` — account, positions, fills (PaperBroker)
+- `data/cache.db` — candle cache (CachedProvider write-through; safe to delete)
 - `data/orders.db` — working + historical manual orders
 - `data/journal.db` — trade records
 - `data/settings.json` — runtime-mutable settings (watchlist, modes)
@@ -366,7 +371,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (310 tests as of this writing, all passing)
+# Tests (335 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -421,7 +426,7 @@ window instead of corrupting the shared account database.
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (310 tests cover this
+   exercises the FastAPI layer via `TestClient` (335 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

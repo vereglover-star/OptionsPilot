@@ -54,6 +54,48 @@ class TestAnalyzer:
         assert math.isnan(v.rsi) and v.above_vwap is None
 
 
+class TestViewMemo:
+    """analyze() memoizes per (key, timeframe) on a data fingerprint — same
+    frame returns the identical view object; any data change rebuilds."""
+
+    def test_unchanged_frame_returns_cached_view(self):
+        analyzer = MultiTimeframeAnalyzer(CFG)
+        df = uptrend_5m()
+        v1 = analyzer.analyze({Timeframe.M5: df}, key="SPY")[Timeframe.M5]
+        v2 = analyzer.analyze({Timeframe.M5: df.copy()}, key="SPY")[Timeframe.M5]
+        assert v1 is v2
+
+    def test_changed_last_close_rebuilds(self):
+        analyzer = MultiTimeframeAnalyzer(CFG)
+        df = uptrend_5m()
+        v1 = analyzer.analyze({Timeframe.M5: df}, key="SPY")[Timeframe.M5]
+        moved = df.copy()
+        moved.iloc[-1, moved.columns.get_loc("close")] += 1.0
+        v2 = analyzer.analyze({Timeframe.M5: moved}, key="SPY")[Timeframe.M5]
+        assert v1 is not v2
+        assert v2.close == float(moved["close"].iloc[-1])
+
+    def test_interior_bar_revision_rebuilds(self):
+        analyzer = MultiTimeframeAnalyzer(CFG)
+        df = uptrend_5m()
+        v1 = analyzer.analyze({Timeframe.M5: df}, key="SPY")[Timeframe.M5]
+        revised = df.copy()
+        revised.iloc[10, revised.columns.get_loc("close")] += 5.0
+        v2 = analyzer.analyze({Timeframe.M5: revised}, key="SPY")[Timeframe.M5]
+        assert v1 is not v2
+
+    def test_keys_do_not_collide(self):
+        analyzer = MultiTimeframeAnalyzer(CFG)
+        df = uptrend_5m()
+        v_spy = analyzer.analyze({Timeframe.M5: df}, key="SPY")[Timeframe.M5]
+        other = df.copy()
+        other.iloc[-1, other.columns.get_loc("close")] += 2.0
+        v_qqq = analyzer.analyze({Timeframe.M5: other}, key="QQQ")[Timeframe.M5]
+        # SPY's cache slot is untouched by QQQ's different data
+        again = analyzer.analyze({Timeframe.M5: df}, key="SPY")[Timeframe.M5]
+        assert again is v_spy and v_qqq is not v_spy
+
+
 class TestDecisionEngine:
     def test_bullish_market_produces_long_signal(self):
         engine = DecisionEngine(CFG)

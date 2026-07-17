@@ -34,6 +34,12 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   (enforced by `base.validate_candles`).
 - `YFinanceProvider` — free delayed data; 4h resampled from 1h.
 - `CandleCache` — SQLite upsert cache keyed (symbol, timeframe, ts).
+- `CachedProvider` (`cached.py`) — caching/dedup layer over any provider:
+  per-timeframe candle TTLs (`CANDLE_TTL`), 5s quote / 30s chain / 1h
+  expirations memos, in-flight request dedup, write-through to
+  `CandleCache` (`data/cache.db`) for warm restarts. The orchestrator
+  wraps `YFinanceProvider` in this by default; injected test providers
+  bypass it. `invalidate_quotes()` drops quote/chain memos on demand.
 - `symbols.py` — `is_known(symbol)`, `search(query)` (autocomplete), backed by
   the bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers).
 - `presets.py` — static preset watchlists (`PRESETS: dict[str, list[str]]`).
@@ -55,8 +61,11 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   `expected_move`, `enrich_greeks`.
 
 ## Engine (`optionspilot/engine/`)
-- `MultiTimeframeAnalyzer.analyze({tf: candles})` → `{tf: TimeframeView}`
-  (skips timeframes with < 40 bars; respects indicator enable flags).
+- `MultiTimeframeAnalyzer.analyze({tf: candles}, key=symbol)` →
+  `{tf: TimeframeView}` (skips timeframes with < 40 bars; respects
+  indicator enable flags). Views are memoized per (key, timeframe) on a
+  data fingerprint — an unchanged frame returns the cached view, so
+  repeat scans only recompute timeframes whose bars actually changed.
 - `ConfluenceScorer.score(views)` → `ScoreResult(direction, confidence, net,
   evidence)`. 15 evidence types, LONG-perspective scores in [-1,1], weighted
   mean → confidence = |mean|·100, damped 25% in consolidation.
@@ -137,6 +146,10 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   BS-priced chains; `BacktestReport` → JSON + HTML with all metrics.
 
 ## Orchestrator (`orchestrator.py`) & Notify (`notify/`)
+- `Orchestrator.fetch_watchlist_candles(symbols, on_symbol=None)` — parallel
+  (symbol × timeframe) candle fetch (8 workers), provider-only (safe to call
+  WITHOUT the UI lock); fires `on_symbol` per completed symbol for
+  progressive display. `run_cycle(now, candles=...)` accepts the result.
 - `Orchestrator.run_cycle()` — fetch → manage AI positions → evaluate manual
   orders (`_evaluate_orders`) → reconcile manual round trips + coach
   (`_reconcile_manual`) → mark/risk → halt surfacing → scan entries
@@ -160,6 +173,11 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
 
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop, runtime)` — FastAPI app.
+  `/api/scan` is non-blocking by default (background cycle; progress in the
+  status payload's `scan` field); POST `{"wait": true}` for the synchronous
+  form. `/ws` pushes at 1s with change detection (full payload on change,
+  heartbeat otherwise). Journal-derived views cache on
+  `TradeJournal.revision`.
   Endpoints: `/api/status` (full dashboard payload), `/api/scan`,
   `/api/journal`, `/api/learning`, `/api/config`, `/api/chain` (option
   chain + greeks for the order ticket), `/api/orders` (GET list / POST

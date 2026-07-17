@@ -1,4 +1,4 @@
-from datetime import timedelta
+﻿from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +13,7 @@ from optionspilot.core.models import Timeframe
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
-    # Freeze both clocks inside the trading window (Friday 11:00 ET) —
+    # Freeze both clocks inside the trading window (Friday 11:00 ET) â€”
     # /api/scan and the P&L day/week windows use wall time, and tests must
     # not depend on when they are run.
     monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
@@ -58,7 +58,7 @@ class TestStatusAPI:
 
 class TestScanAPI:
     def test_scan_opens_position_and_status_reflects_it(self, client):
-        summary = client.post("/api/scan").json()
+        summary = client.post("/api/scan", json={"wait": True}).json()
         assert len(summary["opened"]) == 1
         s = client.get("/api/status").json()
         assert len(s["positions"]) == 1
@@ -68,11 +68,29 @@ class TestScanAPI:
         assert any(n["kind"] == "trade_opened" for n in s["notifications"])
         assert len(s["equity_history"]) == 1
 
+    def test_default_scan_is_non_blocking_with_progress(self, client):
+        import time as _t
+        out = client.post("/api/scan").json()
+        assert out["state"] == "started"
+        # the background cycle completes quickly with the fake provider
+        for _ in range(100):
+            s = client.get("/api/status").json()
+            if not s["scan"]["running"] and s["positions"]:
+                break
+            _t.sleep(0.02)
+        assert len(s["positions"]) == 1
+        assert s["scan"]["running"] is False
+        assert s["scan"]["total"] == 1 and s["scan"]["done"] == 1
+
+    def test_scan_state_present_when_idle(self, client):
+        s = client.get("/api/status").json()
+        assert s["scan"] == {"running": False, "done": 0, "total": 0}
+
     def test_journal_endpoint_after_round_trip(self, client):
-        client.post("/api/scan")
+        client.post("/api/scan", json={"wait": True})
         position = client.orch.broker.get_positions()[0]
         client.provider.spot = position.stop_current - 1.0
-        client.post("/api/scan")
+        client.post("/api/scan", json={"wait": True})
         d = client.get("/api/journal").json()
         assert d["stats"]["trades"] == 1
         t = d["trades"][0]
@@ -234,10 +252,10 @@ class TestManualTradingAPI:
         assert len(working) == 1 and working[0]["kind"] == "stop_loss"
         # underlying tanks; the next cycle fires the stop
         client.provider.spot = d["spot"] - 3.0
-        client.post("/api/scan")
+        client.post("/api/scan", json={"wait": True})
         assert client.get("/api/orders").json()["working"] == []
         # the manual position is stopped out (the AI is free to open its own
-        # afterwards in the same cycle — that's unrelated to this order)
+        # afterwards in the same cycle â€” that's unrelated to this order)
         positions = client.get("/api/status").json()["positions"]
         assert all(p["contract"] != manual_contract for p in positions)
         hist = client.get("/api/orders").json()["history"]

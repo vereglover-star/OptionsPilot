@@ -69,7 +69,11 @@ live-broker implementation to enable even if the flags are set.
 - `MarketDataProvider` (abstract): `get_candles(symbol, timeframe, start, end)`,
   `get_quote(symbol)`, `get_option_chain(symbol, expiration)`.
 - `YFinanceProvider`: free provider used in v1. Delayed/EOD-quality data — fine for
-  paper trading and backtesting. Rate-limited and cached.
+  paper trading and backtesting. Rate-limited (0.15s between requests).
+- `CachedProvider`: the caching/deduplicating layer the orchestrator wraps around
+  the real provider — timeframe-aware candle TTLs, short quote/chain/expiration
+  memos, in-flight request dedup, SQLite write-through for warm restarts. This is
+  why a manual "Scan now" right after a cycle completes in ~0.1s.
 - `CandleCache`: SQLite-backed cache so backtests and repeated scans don't re-download.
 - `symbols.py` + bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers):
   offline ticker validation and autocomplete search for the watchlist manager.
@@ -218,7 +222,8 @@ FastAPI backend (`server.py`) + single self-contained HTML/CSS/JS dashboard (no
 build step, no bundler), served locally and wrapped in a pywebview native window
 (`desktop.py`); packaged with PyInstaller (`--windowed`, no console) → normal
 Windows app with a single-instance guard. WebSocket pushes the full status payload
-every 2 seconds. Tabs: Dashboard (equity, P&L, confidence meters, positions),
+every second when something changed (heartbeats otherwise). Tabs: Dashboard
+(portfolio hero, P&L, confidence meters, position cards),
 **Trade** (account metrics, live option chain, order ticket, working orders —
 manual paper trading), **Coach** (process-score reviews, recurring mistakes,
 recommended exercises), Watchlist (quick-add/bulk-paste/presets/pin/reorder),
@@ -312,7 +317,7 @@ summary.
 | Frontend       | Single static HTML/CSS/JS  | No build step, no bundler, works offline in the exe |
 | Desktop shell  | pywebview (WebView2)       | Native window on Win11 without Electron weight |
 | Packaging      | PyInstaller (`--windowed`) | One-folder Windows executable, no console window |
-| Tests          | pytest                     | Standard; 310 tests as of the V2-3 session |
+| Tests          | pytest                     | Standard; 335 tests as of the performance/polish pass |
 
 **Why not Electron or Tauri** (evaluated explicitly during V2-1 planning): the
 backend is inherently Python (pandas/numpy-heavy analysis engine) and would need

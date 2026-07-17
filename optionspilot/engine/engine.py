@@ -54,7 +54,7 @@ class DecisionEngine:
     def evaluate(
         self, symbol: str, candles_by_tf: dict[Timeframe, pd.DataFrame]
     ) -> EngineDecision:
-        views = self.analyzer.analyze(candles_by_tf)
+        views = self.analyzer.analyze(candles_by_tf, key=symbol)
         result = self.scorer.score(views)
         entry_view = next(
             (views[Timeframe.from_string(s)] for s in self._cfg.engine.entry_timeframes

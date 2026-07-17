@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import time as _time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -38,7 +39,7 @@ from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import (
     Direction, Fill, Position, Timeframe, TradePlan, TradeRecord, utcnow,
 )
-from optionspilot.data import MarketDataProvider, YFinanceProvider
+from optionspilot.data import CachedProvider, MarketDataProvider, YFinanceProvider
 from optionspilot.engine import DecisionEngine
 from optionspilot.journal import TradeJournal
 from optionspilot.learning import WeightStore
@@ -158,7 +159,9 @@ class Orchestrator:
     ):
         self.cfg = config
         data_dir = Path(data_dir)
-        self.provider = provider or YFinanceProvider()
+        self.provider = provider or CachedProvider(
+            YFinanceProvider(), data_dir / "cache.db"
+        )
         self.broker = broker or create_broker(
             config, data_dir / "paper.db", config.risk.starting_balance
         )
@@ -228,13 +231,17 @@ class Orchestrator:
         et = now.astimezone(ET)
         return et.weekday() < 5 and MARKET_OPEN <= et.time() < MARKET_CLOSE
 
-    def run_cycle(self, now: datetime | None = None) -> dict:
+    def run_cycle(self, now: datetime | None = None,
+                  candles: dict[str, dict[Timeframe, pd.DataFrame]] | None = None,
+                  ) -> dict:
         now = now or utcnow()
         summary: dict = {"ts": now.isoformat(), "opened": [], "closed": [],
                          "signals": {}, "skipped": {}}
-        candles = {
-            sym: self._fetch_candles(sym) for sym in self.cfg.data.watchlist
-        }
+        if candles is None:
+            candles = self.fetch_watchlist_candles(self.cfg.data.watchlist)
+        else:  # prefetched frames may omit symbols added mid-flight
+            candles = {sym: candles.get(sym) or self._fetch_candles(sym)
+                       for sym in self.cfg.data.watchlist}
         summary["quotes"] = {
             sym: self._quote_snapshot(tfs) for sym, tfs in candles.items()
         }
@@ -285,18 +292,53 @@ class Orchestrator:
 
     # ── data ─────────────────────────────────────────────────────────────────
 
-    def _fetch_candles(self, symbol: str) -> dict[Timeframe, pd.DataFrame]:
-        out = {}
-        end = utcnow()
-        for tf in self._timeframes:
-            try:
-                out[tf] = self.provider.get_candles(
-                    symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.error("candle fetch failed %s %s: %s", symbol, tf, exc)
-                out[tf] = pd.DataFrame()
+    def fetch_watchlist_candles(
+        self,
+        symbols: list[str],
+        on_symbol=None,
+        max_workers: int = 8,
+    ) -> dict[str, dict[Timeframe, pd.DataFrame]]:
+        """Fetch candles for every (symbol, timeframe) pair in parallel.
+
+        Pure data acquisition — touches only the provider (which must be
+        thread-safe), never broker/risk/journal state, so callers may run it
+        WITHOUT holding the orchestrator lock and keep the UI responsive.
+        `on_symbol(symbol, frames)` fires as each symbol completes, enabling
+        progressive display while the rest are still downloading.
+        """
+        out: dict[str, dict[Timeframe, pd.DataFrame]] = {s: {} for s in symbols}
+        jobs = [(sym, tf) for sym in symbols for tf in self._timeframes]
+        if not jobs:
+            return out
+        remaining = {sym: len(self._timeframes) for sym in symbols}
+        with ThreadPoolExecutor(
+            max_workers=min(max_workers, len(jobs)), thread_name_prefix="fetch"
+        ) as pool:
+            futures = {pool.submit(self._fetch_one, sym, tf): (sym, tf)
+                       for sym, tf in jobs}
+            for future in as_completed(futures):
+                sym, tf = futures[future]
+                out[sym][tf] = future.result()   # _fetch_one never raises
+                remaining[sym] -= 1
+                if remaining[sym] == 0 and on_symbol is not None:
+                    try:
+                        on_symbol(sym, out[sym])
+                    except Exception as exc:  # noqa: BLE001 — progress is advisory
+                        log.error("scan progress callback failed: %s", exc)
         return out
+
+    def _fetch_one(self, symbol: str, tf: Timeframe) -> pd.DataFrame:
+        end = utcnow()
+        try:
+            return self.provider.get_candles(
+                symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.error("candle fetch failed %s %s: %s", symbol, tf, exc)
+            return pd.DataFrame()
+
+    def _fetch_candles(self, symbol: str) -> dict[Timeframe, pd.DataFrame]:
+        return {tf: self._fetch_one(symbol, tf) for tf in self._timeframes}
 
     # ── position management ──────────────────────────────────────────────────
 

@@ -5,6 +5,10 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [ ] **Rebuild and smoke-test the exe with the 2026-07-16 performance/
+      polish pass** (`.\scripts\build_exe.ps1` while the app is closed; the
+      packaged app still predates the redesign + scan optimizations).
+
 - [x] **Live-verify the V2-3 frontend in a real browser** — done 2026-07-16
       against a scratch data dir: toggle switch + persistence across reload,
       Coach tab empty state, manual round trip → coach review rendered with

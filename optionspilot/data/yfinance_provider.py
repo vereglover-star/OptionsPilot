@@ -1,4 +1,4 @@
-"""Yahoo Finance data provider (free, no API key).
+﻿"""Yahoo Finance data provider (free, no API key).
 
 Known limitations, accepted for v1 paper trading (see ARCHITECTURE.md §5):
   - Quotes are delayed (~15 min for most US equities).
@@ -10,15 +10,27 @@ Known limitations, accepted for v1 paper trading (see ARCHITECTURE.md §5):
 
 from __future__ import annotations
 
+import importlib
 import threading
 import time as _time
 from datetime import date, datetime
 
 import pandas as pd
-import yfinance as yf
 
 from optionspilot.core.models import OptionContract, OptionRight, Quote, Timeframe, utcnow
 from optionspilot.data.base import MarketDataProvider, validate_candles
+
+# yfinance costs ~0.3s to import and drags in its whole scraping stack; defer
+# it to the first actual data request so app startup (and every CLI command
+# that never fetches) stays fast.
+yf = None
+
+
+def _yf():
+    global yf
+    if yf is None:
+        yf = importlib.import_module("yfinance")
+    return yf
 
 _YF_INTERVAL = {
     Timeframe.M1: "1m",
@@ -33,7 +45,10 @@ _YF_INTERVAL = {
 class YFinanceProvider(MarketDataProvider):
     name = "yfinance"
 
-    def __init__(self, min_request_interval: float = 0.5):
+    # 0.15s between requests is well inside Yahoo's tolerance for the small
+    # request counts the CachedProvider lets through (was 0.5s when every scan
+    # cycle re-fetched all symbols x all timeframes serially).
+    def __init__(self, min_request_interval: float = 0.15):
         self._min_interval = min_request_interval
         self._last_request = 0.0
         self._lock = threading.Lock()
@@ -49,7 +64,7 @@ class YFinanceProvider(MarketDataProvider):
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> pd.DataFrame:
         self._throttle()
-        raw = yf.Ticker(symbol).history(
+        raw = _yf().Ticker(symbol).history(
             start=start, end=end,
             interval=_YF_INTERVAL[timeframe],
             auto_adjust=False, actions=False,
@@ -69,7 +84,7 @@ class YFinanceProvider(MarketDataProvider):
 
     def get_quote(self, symbol: str) -> Quote:
         self._throttle()
-        info = yf.Ticker(symbol).fast_info
+        info = _yf().Ticker(symbol).fast_info
         last = float(info["last_price"])
         # Yahoo bid/ask are often stale or zero outside market hours; fall back
         # to a synthetic quote around last so downstream math stays sane.
@@ -84,7 +99,7 @@ class YFinanceProvider(MarketDataProvider):
         Broker/data ABC — callers must feature-detect)."""
         self._throttle()
         try:
-            cap = yf.Ticker(symbol).fast_info["market_cap"]
+            cap = _yf().Ticker(symbol).fast_info["market_cap"]
             return float(cap) if cap else None
         except Exception:  # noqa: BLE001 — sorting metadata is never critical
             return None
@@ -93,12 +108,12 @@ class YFinanceProvider(MarketDataProvider):
         self._throttle()
         return sorted(
             datetime.strptime(s, "%Y-%m-%d").date()
-            for s in yf.Ticker(symbol).options
+            for s in _yf().Ticker(symbol).options
         )
 
     def get_option_chain(self, symbol: str, expiration: date) -> list[OptionContract]:
         self._throttle()
-        chain = yf.Ticker(symbol).option_chain(expiration.strftime("%Y-%m-%d"))
+        chain = _yf().Ticker(symbol).option_chain(expiration.strftime("%Y-%m-%d"))
         out: list[OptionContract] = []
         for frame, right in ((chain.calls, OptionRight.CALL), (chain.puts, OptionRight.PUT)):
             for row in frame.itertuples(index=False):

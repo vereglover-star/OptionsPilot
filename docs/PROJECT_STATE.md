@@ -3,9 +3,9 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-16, end of the V2-3 verification-and-commit
-session (live browser verification of the V2-3 frontend, doc updates, and
-the V2-3 commit itself).
+**Last updated:** 2026-07-16, end of the performance-and-polish session
+(scan-cycle optimization, modern-brokerage UI redesign, non-blocking scans —
+no new features, per the user's explicit direction).
 
 ## Verified facts about current state (checked this session)
 
@@ -14,8 +14,17 @@ the V2-3 commit itself).
   Coach tab), both new test files, and the full doc set (`CLAUDE.md`,
   `docs/AI_HANDOFF.md`, `docs/PROJECT_STATE.md`, `docs/TODO.md`,
   `docs/CHANGELOG.md`). Run `git log --oneline -5` to see it.
-- Full test suite: **310 tests, 100% passing** (rerun this session before
-  committing; zero `F`/`E` markers).
+- Full test suite: **335 tests, 100% passing** (310 from V2-3 plus 25 new
+  ones covering the CachedProvider, analyzer memoization, parallel fetch,
+  and the non-blocking scan endpoint).
+- **Performance pass (2026-07-16, after the V2-3 commit) is done and
+  live-verified**: scan cycle 14.9s → 4.5s cold / ~0.1s warm (measured);
+  soak 4 cycles, warm 0.1s/cycle, −0.1MB heap growth, PASS. The UI was
+  redesigned (brokerage-style Trade tab, position cards, order-confirmation
+  modal, skeletons, keyboard shortcuts 1–8, non-blocking Scan with live
+  progress) and verified in a real browser against a scratch data dir —
+  every tab rendered, zero console errors. See `CHANGELOG.md` for the full
+  itemized list.
 - **The V2-3 frontend was live-verified in a real browser this session**,
   against a scratch data directory (so the user's real paper account was
   untouched). Verified: AI/Human toggle switches, persists to
@@ -126,25 +135,31 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-This session (2026-07-16) live-verified the V2-3 frontend in a real
-browser (no bugs found), updated all docs, committed V2-3, rebuilt the exe
-with V2-3 included, and smoke-tested the packaged app end-to-end. **V2-3 is
-fully done — code, tests, docs, commit, and packaged build.**
+This session (2026-07-16, after the V2-3 commit) completed the
+performance-and-polish pass: profiled and optimized the scan cycle
+(CachedProvider, parallel fetch, analyzer memoization, non-blocking scan,
+1s change-detected WS), redesigned the frontend in a modern-brokerage
+style, added 25 tests (335 total), soak-tested, live-verified in a browser,
+and committed. **The exe has NOT been rebuilt with this pass yet** — that's
+the one mechanical follow-up (`.\scripts\build_exe.ps1` while the app is
+closed, then a quick packaged smoke test).
 
 ## Next recommended task
 
-**Decide with the user** whether to start V2-4 (chart workspace) per
-`ROADMAP-V2.md`, or pause feature work so the user can run the app in its
-current state for a while (market-hours soak + accumulating paper trades
-was the stated plan). This is a scope decision, not a technical one — ask
-if it isn't clear from the conversation. Medium-priority hygiene items
-(`pyproject.toml` package-data fix, Pillow extra, `operating_mode` yaml
-comment) are available as small filler tasks either way — see `TODO.md`.
+1. **Rebuild + smoke-test the exe** with the polish pass included (the
+   packaged app still runs the pre-polish build).
+2. **Decide with the user** whether to start V2-4 (chart workspace) per
+   `ROADMAP-V2.md`, or pause feature work so the user can run the app for a
+   while (market-hours soak + accumulating paper trades was the stated
+   plan). Medium-priority hygiene items (`pyproject.toml` package-data fix,
+   Pillow extra, `operating_mode` yaml comment) remain available as small
+   filler tasks — see `TODO.md`.
 
 ## Current priorities
 
-1. The V2-4-now-or-pause scope decision (user's call).
-2. No technical work is currently blocking.
+1. Exe rebuild + packaged smoke test with the polish pass (small,
+   mechanical, needs the app closed).
+2. The V2-4-now-or-pause scope decision (user's call).
 
 ## Blockers
 

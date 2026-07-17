@@ -3,7 +3,8 @@
 Each detector returns a boolean Series aligned to the candle index; True on the
 bar that *completes* the pattern (so multi-bar patterns fire on their last bar
 and can be acted on without lookahead). `detect_all` bundles every pattern into
-one DataFrame for the engine.
+one DataFrame for the engine, computing the shared bar geometry (body, range,
+wicks) once instead of once per detector.
 
 Patterns here are purely geometric. Context (trend location, volume, structure)
 is the ConfluenceScorer's job — a hammer in a downtrend and a hammer mid-range
@@ -26,13 +27,21 @@ def _parts(df: pd.DataFrame):
 
 
 def doji(df: pd.DataFrame, max_body_frac: float = 0.1) -> pd.Series:
-    o, h, l, c, body, rng, *_ = _parts(df)
+    return _doji(_parts(df), max_body_frac)
+
+
+def _doji(parts, max_body_frac: float = 0.1) -> pd.Series:
+    o, h, l, c, body, rng, *_ = parts
     return ((rng > 0) & (body <= max_body_frac * rng)).rename("doji")
 
 
 def hammer(df: pd.DataFrame) -> pd.Series:
     """Long lower wick, small body near the top, negligible upper wick."""
-    o, h, l, c, body, rng, upper, lower = _parts(df)
+    return _hammer(_parts(df))
+
+
+def _hammer(parts) -> pd.Series:
+    o, h, l, c, body, rng, upper, lower = parts
     return (
         (rng > 0)
         & (body <= 0.35 * rng)
@@ -43,7 +52,11 @@ def hammer(df: pd.DataFrame) -> pd.Series:
 
 
 def shooting_star(df: pd.DataFrame) -> pd.Series:
-    o, h, l, c, body, rng, upper, lower = _parts(df)
+    return _shooting_star(_parts(df))
+
+
+def _shooting_star(parts) -> pd.Series:
+    o, h, l, c, body, rng, upper, lower = parts
     return (
         (rng > 0)
         & (body <= 0.35 * rng)
@@ -54,7 +67,11 @@ def shooting_star(df: pd.DataFrame) -> pd.Series:
 
 
 def marubozu(df: pd.DataFrame, min_body_frac: float = 0.9) -> pd.DataFrame:
-    o, h, l, c, body, rng, *_ = _parts(df)
+    return _marubozu(_parts(df), min_body_frac)
+
+
+def _marubozu(parts, min_body_frac: float = 0.9) -> pd.DataFrame:
+    o, h, l, c, body, rng, *_ = parts
     full = (rng > 0) & (body >= min_body_frac * rng)
     return pd.DataFrame({
         "bullish_marubozu": full & (c > o),
@@ -63,7 +80,11 @@ def marubozu(df: pd.DataFrame, min_body_frac: float = 0.9) -> pd.DataFrame:
 
 
 def engulfing(df: pd.DataFrame) -> pd.DataFrame:
-    o, h, l, c, body, rng, *_ = _parts(df)
+    return _engulfing(_parts(df))
+
+
+def _engulfing(parts) -> pd.DataFrame:
+    o, h, l, c, body, rng, *_ = parts
     po, pc, pbody = o.shift(), c.shift(), body.shift()
     bull = (
         (pc < po)                    # previous bearish
@@ -80,10 +101,10 @@ def engulfing(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame({"bullish_engulfing": bull, "bearish_engulfing": bear})
 
 
-def _star(df: pd.DataFrame, bullish: bool) -> pd.Series:
+def _star(parts, bullish: bool) -> pd.Series:
     """Morning star (bullish=True) / evening star: strong bar, small pause bar,
     strong reversal bar closing beyond the midpoint of bar 1's body."""
-    o, h, l, c, body, rng, *_ = _parts(df)
+    o, h, l, c, body, rng, *_ = parts
     o1, c1, body1, rng1 = o.shift(2), c.shift(2), body.shift(2), rng.shift(2)
     body2 = body.shift(1)
     mid1 = (o1 + c1) / 2
@@ -95,11 +116,11 @@ def _star(df: pd.DataFrame, bullish: bool) -> pd.Series:
 
 
 def morning_star(df: pd.DataFrame) -> pd.Series:
-    return _star(df, bullish=True).rename("morning_star")
+    return _star(_parts(df), bullish=True).rename("morning_star")
 
 
 def evening_star(df: pd.DataFrame) -> pd.Series:
-    return _star(df, bullish=False).rename("evening_star")
+    return _star(_parts(df), bullish=False).rename("evening_star")
 
 
 def inside_bar(df: pd.DataFrame) -> pd.Series:
@@ -112,8 +133,8 @@ def outside_bar(df: pd.DataFrame) -> pd.Series:
             ).rename("outside_bar")
 
 
-def _three_soldiers_or_crows(df: pd.DataFrame, bullish: bool) -> pd.Series:
-    o, h, l, c, body, rng, *_ = _parts(df)
+def _three_soldiers_or_crows(parts, bullish: bool) -> pd.Series:
+    o, h, l, c, body, rng, *_ = parts
     solid = (rng > 0) & (body >= 0.5 * rng)
     if bullish:
         direction = c > o
@@ -131,22 +152,30 @@ def _three_soldiers_or_crows(df: pd.DataFrame, bullish: bool) -> pd.Series:
 
 
 def three_white_soldiers(df: pd.DataFrame) -> pd.Series:
-    return _three_soldiers_or_crows(df, bullish=True).rename("three_white_soldiers")
+    return _three_soldiers_or_crows(_parts(df), bullish=True
+                                    ).rename("three_white_soldiers")
 
 
 def three_black_crows(df: pd.DataFrame) -> pd.Series:
-    return _three_soldiers_or_crows(df, bullish=False).rename("three_black_crows")
+    return _three_soldiers_or_crows(_parts(df), bullish=False
+                                    ).rename("three_black_crows")
 
 
 def detect_all(df: pd.DataFrame) -> pd.DataFrame:
-    """All patterns as one boolean DataFrame, NaN-safe, aligned to df.index."""
+    """All patterns as one boolean DataFrame, NaN-safe, aligned to df.index.
+    Shares one `_parts` computation across every detector."""
+    parts = _parts(df)
     out = pd.concat(
         [
-            doji(df), hammer(df), shooting_star(df),
-            marubozu(df), engulfing(df),
-            morning_star(df), evening_star(df),
+            _doji(parts), _hammer(parts), _shooting_star(parts),
+            _marubozu(parts), _engulfing(parts),
+            _star(parts, bullish=True).rename("morning_star"),
+            _star(parts, bullish=False).rename("evening_star"),
             inside_bar(df), outside_bar(df),
-            three_white_soldiers(df), three_black_crows(df),
+            _three_soldiers_or_crows(parts, bullish=True
+                                     ).rename("three_white_soldiers"),
+            _three_soldiers_or_crows(parts, bullish=False
+                                     ).rename("three_black_crows"),
         ],
         axis=1,
     )

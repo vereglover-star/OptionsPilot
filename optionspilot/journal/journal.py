@@ -51,6 +51,9 @@ class TradeJournal:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.executescript(_SCHEMA)
         self._conn.commit()
+        # Bumped on every write so read-heavy callers (the UI status payload
+        # every 2s) can cache derived views and only recompute on change.
+        self.revision = 0
 
     def record(self, trade: TradeRecord) -> None:
         self._conn.execute(
@@ -70,6 +73,7 @@ class TradeJournal:
             ),
         )
         self._conn.commit()
+        self.revision += 1
         log.info("journaled %s: %s %s pnl %+.2f (%s)",
                  trade.id, trade.direction.value, trade.contract_symbol,
                  trade.pnl, trade.exit_reason)
@@ -128,6 +132,7 @@ class TradeJournal:
             (json.dumps(trade.mistakes), json.dumps(trade.lessons), trade_id),
         )
         self._conn.commit()
+        self.revision += 1
 
     def stats(self) -> dict:
         trades = self.all()

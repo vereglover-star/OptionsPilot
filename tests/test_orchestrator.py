@@ -190,6 +190,33 @@ class TestExtras:
         after_hours = datetime(2026, 7, 10, 21, 0, tzinfo=timezone.utc)  # 17:00 ET
         assert not Orchestrator.market_open(after_hours)
 
+    def test_parallel_fetch_returns_all_frames_and_reports_progress(self, rig):
+        orch, provider, sink, _ = rig
+        seen = []
+        out = orch.fetch_watchlist_candles(
+            ["SPY", "QQQ"], on_symbol=lambda s, frames: seen.append(s))
+        assert set(out) == {"SPY", "QQQ"}
+        for frames in out.values():
+            assert set(frames) == {Timeframe.H1, Timeframe.M5}
+            assert not frames[Timeframe.M5].empty
+        assert sorted(seen) == ["QQQ", "SPY"]   # one callback per symbol
+
+    def test_run_cycle_accepts_prefetched_candles(self, rig):
+        orch, provider, sink, _ = rig
+        prefetched = orch.fetch_watchlist_candles(["SPY"])
+        provider._candles = {}   # any further fetch would now KeyError
+        summary = orch.run_cycle(NOW, candles=prefetched)
+        assert len(summary["opened"]) == 1
+
+    def test_fetch_failure_yields_empty_frame_not_crash(self, rig):
+        orch, provider, sink, _ = rig
+
+        def boom(*a, **k):
+            raise ConnectionError("network down")
+        provider.get_candles = boom
+        out = orch.fetch_watchlist_candles(["SPY"])
+        assert out["SPY"][Timeframe.M5].empty
+
     def test_large_move_notified_and_deduped(self, rig):
         orch, provider, sink, _ = rig
         df5 = orch.provider._candles[Timeframe.M5]

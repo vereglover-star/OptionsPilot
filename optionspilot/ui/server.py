@@ -62,6 +62,13 @@ class UIServer:
         self._stop = threading.Event()
         self._bt_lock = threading.Lock()
         self.backtest_job: dict = {"state": "idle"}
+        # Scan pipeline: candle fetching runs OUTSIDE self.lock (it only
+        # touches the thread-safe provider), so status reads and the UI stay
+        # responsive during a scan. _cycle_lock serializes whole cycles so the
+        # background loop and a manual scan can never interleave.
+        self._cycle_lock = threading.Lock()
+        self.scan_state: dict = {"running": False, "done": 0, "total": 0}
+        self._journal_cache: tuple[int, list] | None = None
         self._meta_path = data_dir / "state" / "symbol_meta.json"
         self._symbol_meta: dict[str, dict] = self._load_meta()
         self._kick_meta_refresh(self.cfg.data.watchlist)
@@ -96,13 +103,50 @@ class UIServer:
             )
 
     def run_cycle_now(self) -> dict:
+        """One full cycle: parallel candle prefetch (no orchestrator lock, with
+        live progress for the UI), then the stateful cycle under the lock."""
+        with self._cycle_lock:
+            symbols = list(self.cfg.data.watchlist)
+            self.scan_state = {"running": True, "done": 0, "total": len(symbols)}
+            try:
+                candles = self.orch.fetch_watchlist_candles(
+                    symbols, on_symbol=self._on_symbol_fetched)
+                with self.lock:
+                    summary = self.orch.run_cycle(candles=candles)
+                    self.last_summary = summary
+                    equity = self.orch.broker.get_account().equity
+                    self.equity_history.append((summary["ts"], equity))
+                    del self.equity_history[:-MAX_EQUITY_POINTS]
+                    return summary
+            finally:
+                self.scan_state = {"running": False,
+                                   "done": len(symbols), "total": len(symbols)}
+
+    def _on_symbol_fetched(self, symbol: str, frames: dict) -> None:
+        """Progressive scan feedback: as each symbol's candles land, publish
+        its fresh quote so watchlist prices tick in while the scan runs."""
+        quote = self.orch._quote_snapshot(frames)
         with self.lock:
-            summary = self.orch.run_cycle()
-            self.last_summary = summary
-            equity = self.orch.broker.get_account().equity
-            self.equity_history.append((summary["ts"], equity))
-            del self.equity_history[:-MAX_EQUITY_POINTS]
-            return summary
+            state = dict(self.scan_state)
+            state["done"] = state.get("done", 0) + 1
+            self.scan_state = state
+            if quote:
+                self.last_summary.setdefault("quotes", {})[symbol] = quote
+
+    def request_scan(self) -> dict:
+        """Non-blocking manual scan: start a cycle in the background (unless
+        one is already running) and return immediately. Progress is surfaced
+        in every status payload / WS push as `scan`."""
+        if not self.scan_state.get("running") and not self._cycle_lock.locked():
+            threading.Thread(target=self._background_scan,
+                             daemon=True, name="manual-scan").start()
+        return {"state": "started", "scan": self.scan_state}
+
+    def _background_scan(self) -> None:
+        try:
+            self.run_cycle_now()
+        except Exception as exc:  # noqa: BLE001 — surfaced via logs/status
+            log.exception("manual scan failed: %s", exc)
 
     # ── payloads ─────────────────────────────────────────────────────────────
 
@@ -135,6 +179,7 @@ class UIServer:
             return {
                 "version": __version__,
                 "ts": utcnow().isoformat(),
+                "scan": dict(self.scan_state),
                 "market_open": orch.market_open(utcnow()),
                 "paper": True,
                 "account": {
@@ -250,7 +295,7 @@ class UIServer:
         with self.lock:
             broker = self.orch.broker
             acct = broker.get_account()
-            trades = self.orch.journal.all()
+            trades = self._all_trades()
             marks = (broker.current_marks()
                      if hasattr(broker, "current_marks") else {})
             unrealized = sum(
@@ -394,11 +439,22 @@ class UIServer:
             self._meta_path.write_text(
                 json.dumps(self._symbol_meta, indent=1), encoding="utf-8")
 
+    def _all_trades(self) -> list:
+        """Journal rows cached by revision — the status payload is pushed every
+        2s per client and must not rescan SQLite when nothing changed. Call
+        under self.lock."""
+        journal = self.orch.journal
+        cache = self._journal_cache
+        if cache is None or cache[0] != journal.revision:
+            cache = (journal.revision, journal.all())
+            self._journal_cache = cache
+        return cache[1]
+
     def _setup_history(self) -> dict:
         """Measured win rate per setup quality from the journal — the honest
         'estimated probability of success' (n/a until enough history exists)."""
         buckets: dict[str, list[bool]] = {}
-        for t in self.orch.journal.all():
+        for t in self._all_trades():
             quality = t.market_conditions.get("setup_quality")
             if quality:
                 buckets.setdefault(quality, []).append(t.is_win)
@@ -412,14 +468,14 @@ class UIServer:
         week_start = day_start - timedelta(days=now_et.weekday())
         month_start = day_start.replace(day=1)
         with self.lock:
-            def pnl_since(start):
-                return round(sum(
-                    t.pnl for t in self.orch.journal.query(start=start)), 2)
-            return {
-                "today": pnl_since(day_start),
-                "week": pnl_since(week_start),
-                "month": pnl_since(month_start),
-            }
+            trades = self._all_trades()
+        def pnl_since(start):
+            return round(sum(t.pnl for t in trades if t.entry_ts >= start), 2)
+        return {
+            "today": pnl_since(day_start),
+            "week": pnl_since(week_start),
+            "month": pnl_since(month_start),
+        }
 
     # ── backtest job ─────────────────────────────────────────────────────────
 
@@ -484,13 +540,18 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         return server.status_payload()
 
     @app.post("/api/scan")
-    def scan():
-        return server.run_cycle_now()
+    def scan(payload: dict | None = None):
+        # Default: non-blocking — kick off a background cycle and let the UI
+        # follow progress via /ws `scan` state. `{"wait": true}` runs the
+        # cycle synchronously (tests, scripts, curl).
+        if payload and payload.get("wait"):
+            return server.run_cycle_now()
+        return server.request_scan()
 
     @app.get("/api/journal")
     def journal(last: int = 50):
         with server.lock:
-            trades = server.orch.journal.all()[-last:]
+            trades = server._all_trades()[-last:]
             stats = server.orch.journal.stats()
         return {
             "stats": stats,
@@ -700,11 +761,24 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
+        # 1s cadence with change detection: full payload only when something
+        # actually changed, otherwise a tiny heartbeat — the frontend skips
+        # re-rendering entirely on heartbeats.
         await socket.accept()
+        last_digest = ""
         try:
             while True:
-                await socket.send_json(server.status_payload())
-                await asyncio.sleep(2.0)
+                payload = server.status_payload()
+                digest = json.dumps(
+                    {k: v for k, v in payload.items() if k != "ts"},
+                    sort_keys=True, default=str)
+                if digest != last_digest:
+                    last_digest = digest
+                    await socket.send_json(payload)
+                else:
+                    await socket.send_json({"ts": payload["ts"],
+                                            "heartbeat": True})
+                await asyncio.sleep(1.0)
         except (WebSocketDisconnect, RuntimeError):
             return
 
