@@ -1,9 +1,12 @@
-# AI_HANDOFF.md — Read this first if you are a new Claude Code session
+# AI_HANDOFF.md — complete technical orientation
 
-This document is a complete orientation to OptionsPilot for an AI assistant
-that has never seen this codebase before. Read this, then `PROJECT_STATE.md`
-(what's done / what's next), then `ARCHITECTURE.md` (how it fits together) —
-you should not need to read source files just to get oriented.
+This document is a complete technical orientation to OptionsPilot for an AI
+assistant that has never seen this codebase before. If you haven't already,
+read `AI_CONTEXT.md` first (vision/philosophy/standards); read this
+document second; then `NEXT_SESSION.md` (what to do right now) and
+`ARCHITECTURE.md` (how it fits together, with diagrams) — you should not
+need to read source files just to get oriented. This is the full reading
+order `CLAUDE.md`'s "Before you do anything" section specifies.
 
 ## What this project is
 

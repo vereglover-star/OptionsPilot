@@ -2,19 +2,30 @@
 
 This file is permanent guidance for any Claude Code session touching this
 repository. Read it before making changes. It does not replace `docs/` —
-see `docs/AI_HANDOFF.md` for architecture orientation and
-`docs/PROJECT_STATE.md` for what to do next.
+see `docs/AI_CONTEXT.md` for the project's vision/philosophy/standards,
+`docs/AI_HANDOFF.md` for technical architecture orientation, and
+`docs/NEXT_SESSION.md` for what to do next.
 
 ## Before you do anything
 
-1. Read `docs/AI_HANDOFF.md` in full.
-2. Read `docs/PROJECT_STATE.md` to find out exactly where the last session
-   stopped and what's recommended next.
-3. Run `git log --oneline -10` and `git status` yourself — documentation
-   can go stale between sessions; verify before trusting it.
-4. Only read source files you actually need for the task at hand. The docs
+1. Read `docs/AI_CONTEXT.md` — vision, design philosophy, standards, and
+   the curated list of things never to change without careful review.
+2. Read `docs/AI_HANDOFF.md` in full — complete technical orientation
+   (endpoints, storage layout, exact behavioral contracts).
+3. Read `docs/NEXT_SESSION.md` to find out exactly where the last session
+   stopped and what's recommended next. `docs/PROJECT_STATE.md` has the
+   full narrative if more detail is needed; `docs/PROJECT_STATUS.md` has a
+   structured snapshot (test count, milestones, known bugs).
+4. Run `git log --oneline -10` and `git status` **and** `git diff --stat`
+   yourself — documentation can go stale between sessions, and `git
+   status` alone has previously reported "clean" while `git diff --stat`
+   showed real uncommitted changes (see `docs/AI_CONTEXT.md` "Common
+   mistakes to avoid"). Verify before trusting either.
+5. Only read source files you actually need for the task at hand. The docs
    above exist specifically so you don't have to read the whole codebase to
-   get oriented.
+   get oriented — `docs/ARCHITECTURE.md` (system design + diagrams) and
+   `docs/MODULES.md` (per-module API map) are the reference to reach for
+   once you know which area a task touches.
 
 ## The one rule that overrides everything else
 
@@ -142,7 +153,9 @@ that's really what they want before writing any code.
 
 ## How documentation should be updated
 
-After finishing a feature or a phase:
+After finishing a feature or a phase (full checklist and rationale in
+`docs/CONTRIBUTING.md` "Documentation requirements" — this is the short
+version):
 1. Update `docs/CHANGELOG.md` — append a new dated (or `[Uncommitted]`)
    section following the existing format (what was built, in prose, at the
    level of detail the existing entries use — not a raw diff summary).
@@ -150,15 +163,22 @@ After finishing a feature or a phase:
    progress" to "completed", update "exact stopping point" and "next
    recommended task" to reflect new reality. This file goes stale fastest;
    keep it honest.
-3. Update `docs/TODO.md` — check off or remove completed items, add any new
+3. Update `docs/PROJECT_STATUS.md` — the structured fields that changed
+   (test count, completed milestones, known bugs, current priorities).
+4. Rewrite `docs/NEXT_SESSION.md` to reflect the new handoff state — it
+   should never be more than one session stale.
+5. Update `docs/TODO.md` — check off or remove completed items, add any new
    ones discovered while building.
-4. Update `docs/ROADMAP-V2.md`'s checklist for the relevant phase.
-5. If you touched a module described in `docs/MODULES.md` or
+6. Update `docs/ROADMAP.md` and, for V2-scope work, `docs/ROADMAP-V2.md`'s
+   checklist for the relevant phase.
+7. If you touched a module described in `docs/MODULES.md` or
    `docs/ARCHITECTURE.md`, update those sections too — don't let them drift.
-6. If you touched `docs/AI_HANDOFF.md`-covered ground (new API endpoints,
+8. If you touched `docs/AI_HANDOFF.md`-covered ground (new API endpoints,
    new storage files, new modes, new dependencies), update that file too —
    it's meant to be a new session's *complete* orientation, and an
    incomplete one is worse than an obviously-stale one.
+9. If something durable about the project's philosophy, standards, or
+   things-never-to-change list changed, update `docs/AI_CONTEXT.md` too.
 
 Do not leave documentation updates for "a future session" — do them in the
 same session as the code change, before ending your turn.
@@ -170,9 +190,10 @@ same session as the code change, before ending your turn.
 .venv\Scripts\python -m pytest tests\test_orders.py   # one module
 ```
 
-- All 310 tests must pass before you consider work done. If a test fails
-  and you don't understand why, investigate the root cause — don't weaken
-  or delete the test to make it pass.
+- The full suite must pass (100% green — check `docs/PROJECT_STATUS.md` or
+  just run it for the current count, currently 345) before you consider
+  work done. If a test fails and you don't understand why, investigate the
+  root cause — don't weaken or delete the test to make it pass.
 - New backend code needs new tests in the matching `tests/test_*.py` file,
   following the existing `class Test<Thing>` / `def test_<behavior>`
   structure already used throughout.
@@ -225,4 +246,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   committed" — documentation (including this file's own history) can
   describe work that was written and tested but never committed. Always
   verify with git directly rather than trusting a doc's claim about commit
-  state.
+  state. This applies to `git status` itself, too: it has previously
+  printed "working tree clean" here while `git diff --stat` showed real
+  uncommitted changes. Cross-check both before trusting either (full story
+  in `docs/AI_CONTEXT.md` "Common mistakes to avoid").
+- Adding a risk/validation gate function is not the same as it being
+  active. A gate was once added (`RiskManager.approve_manual_entry`) but
+  never actually called from the code path it was meant to protect, so it
+  did nothing until a later session wired it up. When adding a gate, verify
+  the call site with a test that would fail if the gate weren't wired in —
+  not just a unit test of the gate function in isolation.

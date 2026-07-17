@@ -6,6 +6,9 @@ configuration (`broker.live_trading_enabled`) that defaults to `false` and requi
 explicit, multi-step opt-in that does not exist anywhere in this codebase — there is no
 live-broker implementation to enable even if the flags are set.
 
+For orientation on *why* things are built this way (vision, philosophy, things not to
+touch casually), see `AI_CONTEXT.md`. This file is the *how* — the shape of the system.
+
 ---
 
 ## 1. Design Principles
@@ -31,41 +34,107 @@ live-broker implementation to enable even if the flags are set.
 
 ---
 
-## 2. Component Map
+## 2. Directory Structure
 
 ```
-┌───────────────────────────────────────────────────────────────────────┐
-│                             UI Layer                                   │
-│   pywebview desktop window ── FastAPI ── WebSocket live feed           │
-│   static/index.html: Dashboard · Trade · Coach · Watchlist ·           │
-│                       Journal · Backtest · Learning · Settings         │
-└────────────────────────────┬────────────────────────────────────────┘
-                             │
-┌────────────────────────────┴────────────────────────────────────────┐
-│                        Orchestrator                                   │
-│  Event loop: fetch candles → manage AI positions → evaluate manual    │
-│  orders → reconcile manual round trips (+ coach) → mark/risk → scan   │
-│  for AI entries (gated by operating_mode) → notify                    │
-└─┬──────┬──────┬────────┬─────────┬─────────┬─────────┬──────────┬───┘
-  │      │      │        │         │         │         │          │
-┌─┴──┐ ┌─┴──┐ ┌─┴───┐ ┌──┴───┐ ┌───┴────┐ ┌──┴───┐ ┌───┴────┐ ┌───┴───┐
-│Data│ │ AI │ │Risk │ │Broker│ │ Orders │ │Coach │ │Journal │ │Notify │
-│    │ │Eng.│ │ Mgr │ │(Paper│ │ Mgr    │ │      │ │& Learn │ │       │
-│    │ │    │ │     │ │+ PM) │ │(manual)│ │      │ │        │ │       │
-└────┘ └────┘ └─────┘ └──────┘ └────────┘ └──────┘ └────────┘ └───────┘
-                │
-        ┌───────┴────────┐
-        │  Backtester    │  (drives AI Engine with historical data)
-        └────────────────┘
-
-              config.yaml ──┐
-                            ▼
-                   RuntimeSettings (data/settings.json)
-                   overlays watchlist / trading_mode / operating_mode
-                   onto the live config, mutated by UI actions
+optionspilot/
+├── config.yaml                  # structural, startup-only config (user-editable)
+├── pyproject.toml                # deps, package-data, pytest config
+├── CLAUDE.md                     # permanent AI-agent instructions (read first)
+├── README.md                     # user-facing overview + setup
+├── optionspilot_app.py           # PyInstaller entry point (exe launches here)
+├── OptionsPilot.spec             # PyInstaller build spec (gitignored, regenerated)
+│
+├── optionspilot/                 # the package
+│   ├── __main__.py                #   CLI: run/ui/serve/scan/status/journal/backtest/learn
+│   ├── orchestrator.py            #   the one event loop; composes every subsystem
+│   ├── config/                    #   settings.py (pydantic, startup) + runtime.py (live overlay)
+│   ├── core/                      #   domain models (dataclasses), logging setup
+│   ├── data/                      #   MarketDataProvider ABC, yfinance adapter, caching, symbols
+│   ├── analysis/                  #   PURE FUNCTIONS: indicators, patterns, structure, SMC, options math
+│   ├── engine/                    #   MultiTimeframeAnalyzer → ConfluenceScorer → TradeGate → planner
+│   ├── risk/                      #   RiskManager — the only path to the broker
+│   ├── broker/                    #   PaperBroker, OrderManager, PositionManager, registry (live stubs)
+│   ├── coach/                     #   TradeCoach (process-scored review) + CoachProfile (aggregation)
+│   ├── journal/                   #   SQLite trade record store
+│   ├── learning/                  #   evidence-weight tuning from journal history
+│   ├── backtest/                  #   event-driven replay through the SAME engine/risk/broker
+│   ├── notify/                    #   desktop toast + email notifications
+│   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
+│   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py)
+│   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
+│   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)
+│
+├── tests/                        # one test file per module, pytest, 345 tests
+├── scripts/                      # build_exe.ps1, soak.py, make_icon.py, fetch_symbols.py
+├── docs/                         # this document set
+├── assets/                       # generated app icon
+├── data/                         # gitignored — the user's real paper account, journal, logs
+└── logs/                         # gitignored — rotating per-subsystem logs
 ```
 
-### 2.1 Data Engine (`optionspilot/data/`)
+Layering rule (enforced by convention, not by tooling): each layer only depends on
+layers below it. `analysis/` has no dependents below `engine/`; `engine/` doesn't
+import `broker/`; `broker/` doesn't import `ui/`. If a change requires importing
+"up" the stack, that's a signal the code belongs somewhere else.
+
+---
+
+## 3. Backend Architecture
+
+```mermaid
+graph TB
+    subgraph UI["UI Layer"]
+        WV[pywebview desktop window]
+        API[FastAPI app / server.py]
+        WS[WebSocket /ws]
+    end
+
+    subgraph Core["Orchestrator (orchestrator.py)"]
+        ORCH[Orchestrator.run_cycle]
+    end
+
+    DATA[Data Engine<br/>CachedProvider → YFinanceProvider]
+    ENGINE[AI Decision Engine<br/>Analyzer → Scorer → Gate → Selector → Planner]
+    RISK[Risk Manager<br/>the only path to the broker]
+    BROKER[Broker Layer<br/>PaperBroker + PositionManager]
+    ORDERS[Order Manager<br/>manual working orders]
+    COACH[Trade Coach<br/>process-scored review]
+    JOURNAL[Journal + Learning]
+    NOTIFY[Notifier]
+    BACKTEST[Backtester<br/>drives the AI Engine offline]
+
+    WV --> API
+    API --> WS
+    API -->|UIServer.lock| ORCH
+
+    ORCH --> DATA
+    ORCH --> ENGINE
+    ORCH --> RISK
+    ORCH --> BROKER
+    ORCH --> ORDERS
+    ORCH --> COACH
+    ORCH --> JOURNAL
+    ORCH --> NOTIFY
+
+    ENGINE --> RISK
+    RISK --> BROKER
+    ORDERS --> RISK
+    BACKTEST -.->|same code, historical candles| ENGINE
+    BACKTEST -.-> RISK
+    BACKTEST -.-> BROKER
+
+    style RISK fill:#4a1a1a,stroke:#ff5252
+    style BROKER fill:#1a2a4a,stroke:#3d8bff
+```
+
+The `Orchestrator` is the only class that composes engine + risk + broker + coach +
+notify into a cycle. The UI never calls broker methods directly to open a position —
+it either calls into the orchestrator or a narrowly-scoped public method the
+orchestrator exposes for exactly that purpose (see `register_manual_entry`,
+`approve_manual_entry`).
+
+### 3.1 Data Engine (`optionspilot/data/`)
 - `MarketDataProvider` (abstract): `get_candles(symbol, timeframe, start, end)`,
   `get_quote(symbol)`, `get_option_chain(symbol, expiration)`.
 - `YFinanceProvider`: free provider used in v1. Delayed/EOD-quality data — fine for
@@ -81,10 +150,10 @@ live-broker implementation to enable even if the flags are set.
 - Future adapters: Polygon, Tradier (market data), Alpaca, TradingView webhooks
   (as an *alert input*, since TradingView has no data/trading API).
 
-### 2.2 Analysis Library (`optionspilot/analysis/`)
+### 3.2 Analysis Library (`optionspilot/analysis/`)
 Pure, stateless functions over pandas DataFrames. No I/O, no side effects — fully
 unit-testable and reused verbatim by the live engine, the backtester, AND the trade
-coach (see 2.6). This sharing is what guarantees live/backtest parity and lets the
+coach (see 3.9). This sharing is what guarantees live/backtest parity and lets the
 coach reason about a manual trade with the exact same lenses the AI trades with.
 - `indicators.py` — EMA, SMA, VWAP, MACD, RSI, Stoch RSI, ATR, Bollinger, Supertrend,
   ADX, OBV, relative volume.
@@ -98,10 +167,28 @@ coach reason about a manual trade with the exact same lenses the AI trades with.
 - `options_metrics.py` — Black-Scholes greeks, IV solving, liquidity scoring
   (spread %, OI, volume), expected move.
 
-### 2.3 AI Decision Engine (`optionspilot/engine/`)
+---
+
+## 4. AI Engine (`optionspilot/engine/`)
+
+```mermaid
+flowchart LR
+    A[Candles, per timeframe] --> B[MultiTimeframeAnalyzer]
+    B -->|TimeframeView per tf| C[ConfluenceScorer]
+    C -->|"ScoreResult: direction, confidence 0-100, evidence[]"| D[TradeGate]
+    D -->|"GateReport: tradeable? quality, threshold, reasons"| E{tradeable?}
+    E -->|no| F[Signal logged, no action]
+    E -->|yes, operating_mode=human| G[One-time advice notification]
+    E -->|yes, operating_mode=ai| H[ContractSelector]
+    H --> I[TradePlanner]
+    I -->|TradePlan| J[RiskManager.approve]
+```
+
 - `MultiTimeframeAnalyzer`: runs the analysis library across configured timeframes
   (e.g. 1D/4H/1H/15m/5m), producing a `TimeframeView` per timeframe. Capped to the
-  trailing 400 bars per timeframe to bound per-scan cost.
+  trailing 400 bars per timeframe to bound per-scan cost. Views are memoized per
+  (symbol, timeframe) on a data fingerprint — unchanged frames skip the entire
+  indicator/pattern/smart-money rebuild.
 - `ConfluenceScorer`: weighted scoring of 15 evidence signals (trend alignment,
   structure, patterns, volume, momentum, SMC signals) → confidence score 0–100 with an
   itemized reason list. Weights come from config and are later tuned by the learning
@@ -122,23 +209,62 @@ coach reason about a manual trade with the exact same lenses the AI trades with.
   (even in Human Mode — it's what the AI's "advice" is built from), `build_plan()`
   only matters when something is actually going to trade.
 
-### 2.4 Risk Manager (`optionspilot/risk/`)
-A gatekeeper every *entry* must pass through — neither the AI engine nor a manual
-order can reach the broker for an entry without it. Enforces: max daily/weekly loss,
-max consecutive losses, max drawdown, risk-per-trade %, max contracts, daily trade
-limit, trading-hours window, cooldown after losses, and automatic shutdown ("circuit
-breaker") on limit breach. Position sizing is computed here (account balance ×
-risk % ÷ max loss per contract), never by the strategy. **Exits are never risk-gated**
-— a stop must always be honorable regardless of the daily loss limit.
+---
 
-### 2.5 Broker Layer (`optionspilot/broker/`)
+## 5. Risk Management (`optionspilot/risk/`)
+
+```mermaid
+flowchart TD
+    subgraph Entry Gates ["_entry_veto — shared by both paths"]
+        H["Halt check"] --> W["Weekday/hours window (ET)"]
+        W --> D["Daily trade limit"]
+        D --> M["Max open positions<br/>(skipped when scaling into a held contract)"]
+        M --> CD["Cooldown after loss"]
+    end
+
+    CD --> AI_RR["AI path: min risk/reward"]
+    AI_RR --> AI_SIZE["AI path: %-risk position sizing<br/>(HARD veto if budget can't cover 1 contract)"]
+
+    CD --> MAN_QTY["Manual path: quantity/premium validity"]
+    MAN_QTY --> MAN_MAX["Manual path: max contracts<br/>(counting existing position)"]
+    MAN_MAX --> MAN_NOTE["Manual path: %-risk budget<br/>ADVISORY note only — never a veto"]
+```
+
+`RiskManager` is the only path to the broker for entries — neither the AI engine nor
+a manual order can reach `open_position`/`open_manual` without passing through it.
+Exits are never risk-gated — a stop must always be honorable regardless of the daily
+loss limit.
+
+- `approve(plan, open_positions, now)` — the AI path. Enforces every entry gate, then
+  the engine's %-risk position sizing (`equity · risk% / min(premium·100, |delta|·
+  stop_distance·100·1.25)`, capped at `max_contracts`) as a hard veto if the budget
+  can't cover even one contract.
+- `approve_manual_entry(quantity, premium, open_positions, now, *, is_new_position,
+  existing_quantity)` — the Human Mode path. Shares every hard gate the AI path has
+  (halt, hours, daily trade limit, max open positions, cooldown, max contracts). The
+  %-risk sizing is **deliberately advisory only here** — computed and surfaced in
+  `RiskDecision.notes`, never a veto. Sizing a user-directed trade is the user's call;
+  oversizing is the coach's job to flag (the `oversized` mistake tag), not the risk
+  manager's to block. Wired from `UIServer.place_order` (immediate market buys, 422
+  on veto) and `OrderManager.evaluate`'s fill-time `approve_entry` callback (delayed
+  limit/stop fills).
+- Circuit breaker: daily loss limit & max consecutive losses → halted until the next
+  ET day; weekly loss limit → halted until next ET Monday; max drawdown → halted
+  until a human calls `reset_halt()`. All three share `_halt_reason`/`_halt_until`
+  state, surfaced to the UI as a banner and to the orchestrator as a notification.
+
+---
+
+## 6. Broker Layer / Paper Trading Engine (`optionspilot/broker/`)
+
 - `Broker` (abstract): `open_position`, `close_position`, `get_positions`,
   `get_account`, mark-to-market.
 - `PaperBroker`: full simulator — realistic fills using bid/ask with configurable
   slippage, commissions, and partial fills; tracks account equity, positions, P&L.
-  Persists state to SQLite so the paper account survives restarts. Two entry paths:
-  `open_position()` (AI, takes a `TradePlan`) and `open_manual()` (Human Mode, no
-  plan). Every `Position` carries `managed_by: "ai" | "manual"`.
+  Persists state to SQLite (`data/paper.db`) so the paper account survives restarts.
+  Two entry paths: `open_position()` (AI, takes a `TradePlan`) and `open_manual()`
+  (Human Mode, no plan). Every `Position` carries `managed_by: "ai" | "manual"` —
+  this field is the load-bearing distinction between the two modes' exit ownership.
 - `PositionManager`: manages AI-owned positions' exits each cycle (stop/target/
   CHoCH-invalidation/partial). **Explicitly ignores `managed_by="manual"` positions**
   — those are the `OrderManager`'s job, never the AI's.
@@ -148,7 +274,8 @@ risk % ÷ max loss per contract), never by the strategy. **Exits are never risk-
   GTC time-in-force. Evaluated once per scan cycle against fresh quotes — no
   intrabar simulation (documented limitation of delayed data). Reservation checks
   prevent overselling a position across multiple bracket orders; sell orders
-  auto-cancel if the position closes first; fully persisted and restart-safe.
+  auto-cancel if the position closes first; fully persisted and restart-safe
+  (`data/orders.db`).
 - `registry.py`: `create_broker()` factory. `AlpacaBroker`/`TradierBroker`/
   `WebullBroker`/`IBKRBroker` are named extension slots that raise `BrokerError`
   with guidance — no live-order code exists yet anywhere. Live adapters, when
@@ -156,9 +283,12 @@ risk % ÷ max loss per contract), never by the strategy. **Exits are never risk-
   `broker.i_understand_the_risks: true` (checked at construction, defense in depth
   even though nothing currently implements either flag's true path).
 
-### 2.6 Trade Coach (`optionspilot/coach/`, new in V2-3)
+---
+
+## 7. Trade Coach (`optionspilot/coach/`, new in V2-3)
+
 - `TradeCoach.review()`: takes one closed `TradeRecord` (manual trades only — AI
-  trades are tuned by the learning system instead, see 2.7) plus entry/exit context
+  trades are tuned by the learning system instead, see §8) plus entry/exit context
   snapshots and the contract's order history, and produces a `CoachReview`:
   before-the-trade findings (setup quality agreement, trend confirmation, chased-entry
   detection, volume/DTE/IV/delta sanity, position sizing, opening-chop timing,
@@ -174,23 +304,27 @@ risk % ÷ max loss per contract), never by the strategy. **Exits are never risk-
   (improving/declining), win rate sliced by setup quality, and the top-3 recommended
   exercises. Rebuilt fresh from disk on every call — never drifts from evidence.
 - Reviews are triggered by the orchestrator's manual-trade reconciliation loop (see
-  2.9), never called directly by the UI.
+  §10), never called directly by the UI.
 
-### 2.7 Journal & Learning (`optionspilot/journal/`, `optionspilot/learning/`)
-- SQLite journal: every trade (AI or manual) stores entry/exit, P&L, confidence
-  score, full entry/exit reasoning, market conditions, indicators used, and — for
-  manual trades — `mistakes`/`lessons` populated from the coach review and a
-  `coach_score` in `market_conditions`.
+---
+
+## 8. Journal & Learning (`optionspilot/journal/`, `optionspilot/learning/`)
+- SQLite journal (`data/journal.db`): every trade (AI or manual) stores entry/exit,
+  P&L, confidence score, full entry/exit reasoning, market conditions, indicators
+  used, and — for manual trades — `mistakes`/`lessons` populated from the coach
+  review and a `coach_score` in `market_conditions`.
 - Learning system: periodic batch analysis over **AI** trades in the journal — win
   rate and expectancy sliced by indicator, time of day, DTE, delta bucket, market
   regime, strategy. Produces updated `ConfluenceScorer` weights via regularized,
   sample-size-aware updates (no weight moves on < N trades of evidence). All weight
-  changes are versioned and logged so learning is auditable and reversible.
-  (Manual trades are coached individually instead of feeding the weight tuner — the
-  two feedback loops are deliberately separate: AI trades teach the scorer, human
-  trades teach the human.)
+  changes are versioned and logged (`data/learning/weights.json`) so learning is
+  auditable and reversible. (Manual trades are coached individually instead of
+  feeding the weight tuner — the two feedback loops are deliberately separate: AI
+  trades teach the scorer, human trades teach the human.)
 
-### 2.8 Backtesting (`optionspilot/backtest/`)
+---
+
+## 9. Backtesting (`optionspilot/backtest/`)
 Event-driven backtester that replays cached historical candles bar-by-bar through
 the *same* AI engine and risk manager, using the PaperBroker in simulation mode.
 Options prices are reconstructed via Black-Scholes from underlying + IV estimates
@@ -199,67 +333,240 @@ report flags this). Outputs: net profit, win rate, profit factor, max drawdown,
 average win/loss, Sharpe, trade distribution, monthly/yearly returns, equity curve
 — as JSON + rendered HTML report.
 
-### 2.9 Orchestrator (`optionspilot/orchestrator.py`)
-The event loop: market-hours aware scheduler that, each cycle:
-1. Pulls fresh candles for every watchlist symbol/timeframe.
-2. Manages AI positions (`PositionManager`, `managed_by="ai"` only).
-3. Evaluates working manual orders (`OrderManager.evaluate()`).
-4. Reconciles manual round trips: detects newly opened/closed `managed_by="manual"`
-   positions, captures analysis context while a position is open, and on close
-   rebuilds the trade from fill/order history, journals it, and generates a coach
-   review.
-5. Marks positions to market, updates risk-manager equity, persists an equity
-   snapshot.
-6. Surfaces circuit-breaker halts as notifications.
-7. Scans flat symbols for new signals. **If `operating_mode == "human"`**: a
-   tradeable signal becomes a one-time advice notification, never an order. **If
-   `operating_mode == "ai"`** (default): routes through risk → broker exactly as
-   before.
-8. Checks for large moves (notification only).
+---
 
-### 2.10 UI (`optionspilot/ui/`)
-FastAPI backend (`server.py`) + single self-contained HTML/CSS/JS dashboard (no
-build step, no bundler), served locally and wrapped in a pywebview native window
-(`desktop.py`); packaged with PyInstaller (`--windowed`, no console) → normal
-Windows app with a single-instance guard. WebSocket pushes the full status payload
-every second when something changed (heartbeats otherwise). Tabs: Dashboard
-(portfolio hero, P&L, confidence meters, position cards), **Charts**
-(vendored lightweight-charts: candles/volume, EMA/VWAP/Bollinger overlays,
-synced RSI/MACD subpanes, drawings, fullscreen — data from `/api/candles`,
-indicators computed by the same `analysis/` code the engine trades with),
-**Trade** (account metrics, live option chain, order ticket, working orders —
-manual paper trading), **Coach** (process-score reviews, recurring mistakes,
-recommended exercises), Watchlist (quick-add/bulk-paste/presets/pin/reorder),
-Journal, Backtest runner, Learning insights, Settings (mode toggle + advanced
-custom-mode tuning).
+## 10. Data Flow (one scan cycle)
 
-### 2.11 Notifications (`optionspilot/notify/`)
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant D as CachedProvider
+    participant PM as PositionManager
+    participant OM as OrderManager
+    participant R as RiskManager
+    participant B as PaperBroker
+    participant C as TradeCoach
+    participant J as Journal
+    participant N as Notifier
+
+    O->>D: fetch candles (all symbols × timeframes, parallel)
+    O->>PM: review AI positions (stop/target/CHoCH/partial)
+    PM->>B: close/adjust as needed
+    O->>OM: evaluate() working manual orders
+    OM->>R: approve_entry callback (fill-time)
+    OM->>B: fill triggered orders
+    O->>O: reconcile manual round trips
+    O->>C: review closed manual trades
+    C->>J: coached TradeRecord
+    O->>B: mark positions to market
+    O->>R: update_equity, check circuit breaker
+    R-->>N: halt notification (if breached)
+    loop each flat watchlist symbol
+        O->>O: MultiTimeframeAnalyzer → ConfluenceScorer → TradeGate
+        alt operating_mode = human, tradeable
+            O->>N: one-time advice notification
+        else operating_mode = ai, tradeable
+            O->>R: approve(plan)
+            R->>B: open_position (on approval)
+            B-->>N: trade_opened notification
+        end
+    end
+    O->>N: large-move detection
+    N-->>O: WebSocket status payload updates within ~1s
+```
+
+1. Orchestrator wakes on schedule (e.g. every 60s during market hours) or on
+   demand (`POST /api/scan`).
+2. Data Engine returns fresh candles for each watchlist symbol × timeframe (cached).
+3. **AI position management**: `PositionManager` reviews `managed_by="ai"`
+   positions for stop/target/CHoCH/partial exits.
+4. **Manual order evaluation**: `OrderManager.evaluate()` checks every working
+   order (limit/stop/target/trailing) against fresh quotes, gated at fill time by
+   `RiskManager.approve_manual_entry`.
+5. **Manual trade reconciliation**: context captured for open manual positions;
+   closed ones are journaled and sent to `TradeCoach.review()`.
+6. Positions marked to market; risk manager equity updated; equity snapshot
+   persisted.
+7. Circuit-breaker halts surfaced as notifications.
+8. For each flat watchlist symbol: `MultiTimeframeAnalyzer` → `ConfluenceScorer` →
+   `TradeGate` verdict.
+   - **Human Mode**: tradeable signal → one-time advice notification, nothing else.
+   - **AI Mode**: tradeable signal → `ContractSelector` → `TradePlanner` →
+     `RiskManager.approve()` → `PaperBroker.open_position()` on approval.
+9. Large-move detection (notification only).
+10. Journal records everything; Notifier fires; UI updates via WebSocket within ~1-2s.
+
+---
+
+## 11. Frontend Architecture (`optionspilot/ui/static/index.html`)
+
+**No build step, no bundler, no npm, no `package.json`.** One self-contained HTML
+file with inline `<style>`/`<script>`. The single vendored exception is
+`lightweight-charts.js` (TradingView's charting library, Apache-2.0), served locally
+and bundled into the exe — no CDN references anywhere. This is a deliberate,
+repeatedly-reaffirmed architectural constraint; see `CLAUDE.md` and `AI_CONTEXT.md`.
+
+- Talks to the backend exclusively via `fetch()` to `/api/*` REST endpoints, plus
+  one WebSocket (`/ws`) for live status pushes.
+- Tabs (keyboard 1–9 switches): Dashboard (portfolio hero, P&L, confidence meters,
+  position cards), **Charts** (§12), **Trade** (account metrics, live option chain,
+  order ticket, working orders — manual paper trading), **Coach** (process-score
+  reviews, recurring mistakes, recommended exercises), Watchlist (quick-add/
+  bulk-paste/presets/pin/reorder), Journal, Backtest runner, Learning insights,
+  Settings (mode toggle + advanced custom-mode tuning).
+- Header holds both mode controls: the AI/Human `operating_mode` segmented toggle
+  and the `trading_mode` segmented toggle — visually adjacent but functionally
+  independent, matching the backend's orthogonality guarantee.
+- DOM writes are diffed (`setHTML` helper) so unchanged sections never re-render;
+  skeleton loaders cover chain/journal/coach/learning/metrics fetches.
+- **No automated test coverage exists for this file.** The FastAPI layer is
+  thoroughly tested via `TestClient`; nothing drives the actual page short of
+  manual (or ad hoc Playwright) verification. This is the single biggest coverage
+  gap in the project — see `AI_CONTEXT.md` "Technical debt."
+
+### 11.1 Charts
+
+The Charts tab (V2-4) is built on vendored `lightweight-charts`:
+- Candlestick + volume chart, five timeframes (5m/15m/1h/4h/1D), zoom/pan/crosshair,
+  an OHLC+change+volume+indicator legend.
+- Overlay indicators (EMA×3, VWAP, Bollinger) and synced RSI/MACD subpanes — all
+  computed by `/api/candles`, which calls the *same* `analysis/` functions the
+  engine trades with (what you see charted is exactly what the scorer saw).
+- Five drawing tools: horizontal Level (persists per symbol), Trend line, Fib
+  retracement, Zone rectangle, and bar Note (all persist per symbol+timeframe in
+  `localStorage`). Esc cancels an armed tool; Clear removes everything for the
+  current symbol.
+- **Position/order trade lines**: loading a chart draws labeled price lines for
+  that symbol's open position (entry/stop/target, underlying space) and working
+  manual orders' underlying-level triggers — LIMIT orders are premium-space and
+  deliberately not drawn on an underlying chart.
+- Trade-from-chart: deep links from watchlist rows, dashboard meters, and position
+  cards open the chart; "Trade →" jumps to the order ticket with the symbol loaded.
+- Fullscreen (F key).
+
+### 11.2 WebSockets
+
+`GET /ws`: pushes the full `status_payload()` (account, positions, signals,
+notifications, watchlist, modes, scan progress) once per second **only when
+something changed** — a tiny heartbeat otherwise, which the frontend ignores (no
+re-render). Change detection avoids wasted renders on an idle account. All
+mutating REST endpoints acquire `UIServer.lock` (an `RLock`) to serialize the
+background cycle-loop thread against API request threads; `/api/candles` and
+`/api/chain` deliberately do NOT take the lock (provider-only reads), so chart and
+chain loads never contend with a running scan.
+
+### 11.3 Settings
+
+Two settings surfaces, matching the two config layers (§13):
+- **Settings tab**: mode toggle (conservative/high-risk/custom) plus an advanced
+  tuning panel for Custom mode (six validated risk/engine fields — risk-per-trade
+  %, max trades/day, max contracts, min risk/reward, daily loss limit, confidence
+  bar). Values are validated identically to `config.yaml`; switching back to
+  conservative/high-risk restores the yaml values exactly via the `baseline`
+  snapshot.
+- **Header segmented controls**: `operating_mode` (AI/Human) and `trading_mode`
+  toggles, both instant, no restart, both persisted to `data/settings.json`.
+
+---
+
+## 12. Cross-cutting Concerns
+
+### 12.1 Configuration (`optionspilot/config/`)
+Two layers by design:
+- `settings.py`: structural, startup-only config — packaged defaults → user
+  `config.yaml` → environment variables (`OPTIONSPILOT__SECTION__KEY`). Validated
+  with pydantic; unknown keys and out-of-range values fail fast at startup.
+- `runtime.py` (`RuntimeSettings`): the in-app-editable overlay — watchlist,
+  `trading_mode` (+ custom tunables), `operating_mode`. Persisted to
+  `data/settings.json`, applied on top of the yaml config at startup, then
+  mutated live by UI actions under the server lock. A `baseline` snapshot lets
+  `custom` mode restore exact yaml values on exit.
+
+### 12.2 Logging (`optionspilot/core/logging_setup.py`)
+Structured, rotating file logs per subsystem + console output (skipped
+automatically in the windowed/no-console build, where `sys.stderr` is `None`).
+Every trade decision is reconstructable from logs alone.
+
+### 12.3 Models (`optionspilot/core/models.py`)
+Typed domain objects (Candle, Quote, OptionContract, Signal, TradePlan, Order,
+Fill, Position, TradeRecord) — standard-library `dataclasses`, shared by every
+module. This is the shared vocabulary of the system; changing a field here
+touches persistence, the engine, the broker, and the UI simultaneously (see
+`CLAUDE.md`'s "files that should not be unnecessarily modified").
+
+### 12.4 Notifications (`optionspilot/notify/`)
 `Notifier` interface; desktop toasts (`windows-toasts`, optional — falls back to
 log-only) and SMTP email adapters. Events: trade opened/closed, AI advice (Human
 Mode), risk limit hit, order filled/expired/rejected, large move, daily/weekly
 summary.
 
-### 2.12 Cross-cutting
-- **Config** (`optionspilot/config/`): two layers by design.
-  - `settings.py`: structural, startup-only config — packaged defaults → user
-    `config.yaml` → environment variables (`OPTIONSPILOT__SECTION__KEY`). Validated
-    with pydantic; unknown keys and out-of-range values fail fast at startup.
-  - `runtime.py` (`RuntimeSettings`): the in-app-editable overlay — watchlist,
-    `trading_mode` (+ custom tunables), `operating_mode`. Persisted to
-    `data/settings.json`, applied on top of the yaml config at startup, then
-    mutated live by UI actions under the server lock. A `baseline` snapshot lets
-    `custom` mode restore exact yaml values on exit.
-- **Logging** (`optionspilot/core/logging_setup.py`): structured, rotating file logs
-  per subsystem + console output (skipped automatically in the windowed/no-console
-  build, where `sys.stderr` is `None`). Every trade decision is reconstructable
-  from logs alone.
-- **Models** (`optionspilot/core/models.py`): typed domain objects (Candle, Quote,
-  OptionContract, Signal, TradePlan, Order, Fill, Position, TradeRecord) shared by
-  every module — the vocabulary of the system.
+---
+
+## 13. Dependencies
+
+| Concern        | Choice                     | Why |
+|----------------|----------------------------|-----|
+| Language       | Python 3.12+                | Ecosystem for market data, pandas, ML |
+| Data wrangling | pandas + numpy             | Standard, fast enough for candle-scale data |
+| Market data    | yfinance (v1), pluggable   | Free, no API key; adapters for paid feeds later |
+| Storage        | SQLite + JSON files (stdlib) | Zero-ops, single-file, perfect for desktop app |
+| Validation     | pydantic v2                | Config + model validation, fail-fast |
+| API/UI backend | FastAPI + uvicorn          | Async, WebSocket support, well-documented |
+| Frontend       | Single static HTML/CSS/JS  | No build step, no bundler, works offline in the exe (one vendored asset: lightweight-charts, Apache-2.0) |
+| Desktop shell  | pywebview (WebView2)       | Native window on Win11 without Electron weight |
+| Packaging      | PyInstaller (`--windowed`) | One-folder Windows executable, no console window |
+| Tests          | pytest                     | Standard; 345 tests as of the V2-4-finish commit |
+
+Optional extras (`pyproject.toml`): `dev` (`pytest`, `httpx` for FastAPI
+`TestClient`, `Pillow` for icon generation), `ui` (`fastapi`, `uvicorn[standard]`,
+`pywebview`), `notify` (`windows-toasts`, optional desktop notifications). No
+linting, formatting, or type-checking tooling is configured yet — see
+`CONTRIBUTING.md` "Automation opportunities."
+
+**Why not Electron or Tauri** (evaluated explicitly during V2-1 planning): the
+backend is inherently Python (pandas/numpy-heavy analysis engine) and would need
+embedding either way; a JS-shell rewrite would only replace window chrome at the
+cost of the existing test suite. Revisit only if multi-window/multi-monitor
+layouts become a real requirement (Tauri would be preferred over Electron then).
 
 ---
 
-## 3. Design Patterns in Use
+## 14. Build Pipeline
+
+```mermaid
+flowchart LR
+    A[optionspilot_app.py<br/>PyInstaller entry point] --> B["scripts/build_exe.ps1"]
+    B --> C{running instance<br/>detected?}
+    C -->|yes| D[refuse to build]
+    C -->|no| E[back up dist/OptionsPilot/data/]
+    E --> F["PyInstaller --windowed --onedir<br/>--add-data ui\\static<br/>--add-data optionspilot\\data_assets<br/>--icon assets\\optionspilot.ico"]
+    F --> G[restore data/ into the fresh build]
+    G --> H[dist/OptionsPilot/OptionsPilot.exe]
+```
+
+- `optionspilot_app.py` is the actual PyInstaller entry point: double-clicking the
+  exe with no arguments opens the desktop app (`ui`); any CLI arguments pass
+  straight through to `optionspilot.__main__.main()` (e.g. `OptionsPilot.exe scan`,
+  `OptionsPilot.exe serve --port 8787`). `multiprocessing.freeze_support()` is
+  called first — required for a frozen Windows build.
+- `scripts/build_exe.ps1` refuses to build over a running instance (open SQLite
+  handles would corrupt) and explicitly backs up/restores `dist\OptionsPilot\data\`
+  around the PyInstaller `--clean` wipe, so rebuilding never loses the user's real
+  paper account, journal, or learned weights.
+- `OptionsPilot.spec` is PyInstaller-generated and gitignored — not hand-maintained.
+- `scripts/make_icon.py` generates `assets/optionspilot.ico` (committed, not
+  regenerated automatically — only re-run if the icon design changes).
+- `scripts/fetch_symbols.py` regenerates `optionspilot/data_assets/symbols.csv`
+  from a public NASDAQ Trader listing — not hand-edited.
+- `scripts/soak.py --cycles N`: a stability soak harness (repeated live cycles on a
+  scratch data dir, tracking exceptions, heap growth, cycle times) — not part of the
+  build, but the pre-release confidence check for long unattended sessions.
+- Per `CLAUDE.md`: **the exe is rebuilt deliberately last**, after a feature is
+  fully committed and tested, never mid-session.
+
+---
+
+## 15. Design Patterns in Use
 
 - **Strategy pattern**: `MarketDataProvider`, `Broker`, and `Notifier` are all
   abstract interfaces with swappable concrete implementations — the rest of the
@@ -268,7 +575,8 @@ summary.
   selector→planner pipeline behind two calls (`evaluate`, `build_plan`).
   `Orchestrator` is a facade over the whole application for the UI/CLI.
 - **Gatekeeper / chain-of-responsibility-ish**: every entry order must pass through
-  `RiskManager.approve()` — no component, AI or manual, has a shortcut around it.
+  `RiskManager` (`approve()` or `approve_manual_entry()`) — no component, AI or
+  manual, has a shortcut around it.
 - **Overlay / layered configuration**: `RuntimeSettings` overlays a mutable layer
   on top of the immutable `config.yaml` baseline rather than editing the yaml file
   or maintaining two independent config objects.
@@ -283,52 +591,7 @@ summary.
 
 ---
 
-## 4. Data Flow (one scan cycle)
-
-1. Orchestrator wakes on schedule (e.g. every 60s during market hours) or on
-   demand (`POST /api/scan`).
-2. Data Engine returns fresh candles for each watchlist symbol × timeframe (cached).
-3. **AI position management**: `PositionManager` reviews `managed_by="ai"`
-   positions for stop/target/CHoCH/partial exits.
-4. **Manual order evaluation**: `OrderManager.evaluate()` checks every working
-   order (limit/stop/target/trailing) against fresh quotes.
-5. **Manual trade reconciliation**: context captured for open manual positions;
-   closed ones are journaled and sent to `TradeCoach.review()`.
-6. Positions marked to market; risk manager equity updated; equity snapshot
-   persisted.
-7. Circuit-breaker halts surfaced as notifications.
-8. For each flat watchlist symbol: `MultiTimeframeAnalyzer` → `ConfluenceScorer` →
-   `TradeGate` verdict.
-   - **Human Mode**: tradeable signal → one-time advice notification, nothing else.
-   - **AI Mode**: tradeable signal → `ContractSelector` → `TradePlanner` →
-     `RiskManager.approve()` → `PaperBroker.open_position()` on approval.
-9. Large-move detection (notification only).
-10. Journal records everything; Notifier fires; UI updates via WebSocket within 2s.
-
----
-
-## 5. Technology Choices
-
-| Concern        | Choice                     | Why |
-|----------------|----------------------------|-----|
-| Language       | Python 3.12+                | Ecosystem for market data, pandas, ML |
-| Data wrangling | pandas + numpy             | Standard, fast enough for candle-scale data |
-| Market data    | yfinance (v1), pluggable   | Free, no API key; adapters for paid feeds later |
-| Storage        | SQLite + JSON files (stdlib) | Zero-ops, single-file, perfect for desktop app |
-| Validation     | pydantic v2                | Config + model validation, fail-fast |
-| API/UI backend | FastAPI + uvicorn          | Async, WebSocket support, well-documented |
-| Frontend       | Single static HTML/CSS/JS  | No build step, no bundler, works offline in the exe (one vendored asset: lightweight-charts, Apache-2.0) |
-| Desktop shell  | pywebview (WebView2)       | Native window on Win11 without Electron weight |
-| Packaging      | PyInstaller (`--windowed`) | One-folder Windows executable, no console window |
-| Tests          | pytest                     | Standard; 335 tests as of the performance/polish pass |
-
-**Why not Electron or Tauri** (evaluated explicitly during V2-1 planning): the
-backend is inherently Python (pandas/numpy-heavy analysis engine) and would need
-embedding either way; a JS-shell rewrite would only replace window chrome at the
-cost of the existing test suite. Revisit only if multi-window/multi-monitor
-layouts become a real requirement (Tauri would be preferred over Electron then).
-
-## 6. Known Limitations (documented deliberately, not oversights)
+## 16. Known Limitations (documented deliberately, not oversights)
 
 - yfinance data is delayed (~15 min) and rate-limited; intraday history is limited
   (~60 days of 5m bars). Good for paper trading and strategy development; a paid
@@ -342,5 +605,5 @@ layouts become a real requirement (Tauri would be preferred over Electron then).
 - The trade coach infers behavioral tags (revenge trading, chased entry, etc.) from
   observable order/timing patterns, not literal intent — an honest approximation,
   documented in `coach/coach.py`'s module docstring.
-- No browser-driven UI test coverage exists (see `docs/AI_HANDOFF.md` "Known
+- No browser-driven UI test coverage exists (see `AI_HANDOFF.md` "Known
   issues" for the current verification status of the newest UI surfaces).

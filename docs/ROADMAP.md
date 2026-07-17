@@ -1,85 +1,169 @@
-# OptionsPilot — Development Roadmap
+# OptionsPilot — Roadmap
 
-Each phase is built, tested, and documented before the next begins.
-Checkboxes are updated as work lands.
+This is the top-level, always-current roadmap. For granular per-phase
+checklists and acceptance detail on the V2 rewrite, see `ROADMAP-V2.md`
+(this file summarizes; that file itemizes). For exact dates, commit hashes,
+and prose descriptions of what shipped, see `CHANGELOG.md`.
 
-## Phase 1 — Foundation (this session)
-- [x] Project scaffold, pyproject, virtualenv, git init
-- [x] Architecture + roadmap documents
-- [x] Layered configuration system (defaults → config.yaml → env), pydantic-validated
-- [x] Structured logging (rotating files + console)
-- [x] Core domain models (Candle, Quote, OptionContract, Signal, TradePlan, Order,
-      Fill, Position, TradeRecord)
-- [x] Data engine: provider interface, yfinance adapter, SQLite candle cache
-- [x] Indicator library: EMA, SMA, VWAP, MACD, RSI, Stoch RSI, ATR, Bollinger,
-      Supertrend, ADX, OBV, relative volume
-- [x] Unit tests for all of the above
+---
 
-## Phase 2 — Analysis Suite (complete)
-- [x] Candlestick pattern detectors (11 patterns) + tests against known fixtures
-- [x] Market structure: swings, HH/HL/LH/LL, BOS, CHoCH, trend state, consolidation
-- [x] Smart money concepts: FVG, order blocks, liquidity pools, equal highs/lows,
-      premium/discount zones, liquidity grabs
-- [x] Volume analysis: spikes, pressure, divergence
-- [x] Options math: Black-Scholes greeks, IV solver, liquidity scorer, expected move
+## Completed
 
-## Phase 3 — AI Decision Engine (complete)
-- [x] MultiTimeframeAnalyzer (TimeframeView per timeframe)
-- [x] ConfluenceScorer with configurable weights + itemized reasons
-- [x] ContractSelector (delta/DTE/liquidity filters)
-- [x] TradePlanner (entry/stop/targets/partials/invalidation)
-- [x] Signal logging with full evidence trail
+### v1 — Original 8-phase build (2026-07-11, commit `40eb1ea`)
 
-## Phase 4 — Risk & Execution (complete)
-- [x] RiskManager: all limits, circuit breaker, position sizing
-- [x] Broker interface + PaperBroker simulator (fills, slippage, commissions,
-      persistent account state)
-- [x] Open-position manager (trailing stops, partials, invalidation exits)
+Foundation, analysis suite, AI decision engine, risk manager + paper
+broker, journal/learning/backtester, orchestrator + notifications, desktop
+UI, hardening (soak harness, TradingView webhook, broker registry stubs,
+performance pass). Fully committed, tested, packaged. See `ROADMAP-V2.md`
+"Phases" section header for the original phase-by-phase list if needed —
+it predates that file and is preserved in git history.
 
-## Phase 5 — Journal, Learning, Backtesting (complete)
-- [x] SQLite trade journal with full context snapshots
-- [x] Learning system: performance slicing, sample-aware weight updates, versioned
-- [x] Event-driven backtester reusing the live engine
-- [x] Backtest reports (JSON + HTML): all required metrics + equity curve
+### Trading modes (2026-07-14)
 
-## Phase 6 — Orchestrator & Notifications (complete)
-- [x] Market-hours-aware event loop
-- [x] Watchlist scanning, signal → risk → broker pipeline
-- [x] Desktop + email notifications, daily/weekly summaries
-- [x] CLI application: run / scan / status / journal / backtest / learn
-- [x] Restart-safe open-trade context + risk-state rebuild from journal
+Conservative (fixed confidence bar) and High-Risk (setup-quality-adaptive
+bar) `trading_mode`, with identical risk management underneath both.
 
-## Phase 7 — Desktop UI (complete)
-- [x] FastAPI backend + WebSocket live feed
-- [x] Dashboard, positions, journal browser, backtest runner, learning insights,
-      settings view (dark mode, responsive; config editing stays in config.yaml
-      by design — validated at startup)
-- [x] pywebview desktop shell (`python -m optionspilot ui`)
-- [x] PyInstaller packaging → dist\OptionsPilot\OptionsPilot.exe
-      (`scripts\build_exe.ps1`)
+### V2-0 — Stabilize
 
-## Phase 8 — Hardening & Extension Points (complete)
-- [x] Soak harness (`scripts/soak.py`): repeated live cycles with exception,
-      memory-growth, and cycle-time tracking — rerun during market hours before
-      long unattended sessions
-- [x] TradingView webhook alert listener (`/webhook/tradingview`): secret-gated,
-      triggers a full-pipeline scan, can never place an order directly
-- [x] Broker adapter registry (`broker/registry.py`) with Alpaca / Tradier /
-      Webull (pending API approval) / IBKR slots that fail loudly with guidance
-- [x] Performance pass: smart-money detectors vectorized, analyzer capped to a
-      400-bar window — backtest 7.9s → 4.7s on 520 bars, identical results
+Watchlist manager (autocomplete against a bundled 12k-symbol directory,
+presets, favorites, pin/reorder), `RuntimeSettings` overlay system, in-app
+trading-mode toggle — all live, no-restart.
 
-## Post-v1 additions (shipped)
-- [x] Trading modes (2026-07-14): `engine.trading_mode` — conservative (fixed
-      80% bar, default) vs high_risk (setup-quality-adaptive threshold via
-      `engine/gate.py`: excellent 62 / good 70 / average 77 / poor never;
-      stretch entries require RR ≥ 2.0; identical risk management in both
-      modes; full accept/reject reasoning in logs, journal, and dashboard)
+### V2-1 — True desktop application
 
-## Beyond v1 (candidate work, unscheduled)
-- [ ] Candle cache in the live loop (incremental fetch + merge) to cut
-      yfinance traffic during long sessions
-- [ ] First real live-broker adapter (Alpaca options paper API is the natural
-      candidate) — only after sustained paper profitability
-- [ ] News / economic calendar / sentiment inputs as new evidence types
-- [ ] Portfolio-level risk (correlated positions, sector exposure)
+`--windowed` no-console PyInstaller build, generated app icon,
+single-instance guard, windowed-safe logging.
+
+### V2-2 — Manual trading engine
+
+`OrderManager` (market/limit/stop-loss/take-profit/trailing, DAY/GTC), the
+Trade tab, account metrics. `Position.managed_by` separates AI-managed from
+user-managed positions — this distinction is load-bearing throughout the
+codebase (see `AI_CONTEXT.md`).
+
+### V2-3 — AI Mode vs. Human Mode
+
+The `operating_mode` axis (independent of `trading_mode`), the manual-trade
+reconciliation loop, and `TradeCoach` — a deterministic, process-scored
+post-trade review system with a 14-tag mistake taxonomy. Live-verified in a
+real browser; the exe was rebuilt and smoke-tested the same day.
+
+### Performance & polish pass (2026-07-16)
+
+Scan cycle profiled and optimized end-to-end (14.9s → ~0.1s warm),
+non-blocking `/api/scan`, brokerage-style UI redesign.
+
+### V2-4 — Chart workspace
+
+Vendored `lightweight-charts`, `/api/candles` (indicators from the same
+`analysis/` code the engine trades with), a five-timeframe interactive
+chart with EMA/VWAP/Bollinger overlays and synced RSI/MACD subpanes,
+fullscreen, five drawing tools (horizontal level, trend line, fib
+retracement, zone rectangle, bar note — all persisted per symbol or
+symbol+timeframe in localStorage), position/order price lines on the
+chart, and trade-from-chart deep links. **The three-panel workspace layout
+and multi-chart layouts are explicitly deferred** — see "Deferred" below.
+
+---
+
+## In Progress
+
+Nothing is actively in progress between sessions — each V2 phase has
+shipped as a complete, tested, documented unit before the next began (the
+project's stated discipline; see `CLAUDE.md`). The next phase to pick up is
+an open scope decision — see "Planned."
+
+---
+
+## Planned
+
+Listed in the order they appear in `ROADMAP-V2.md`; no priority is implied
+beyond that ordering. Which one comes next is the user's call.
+
+### V2-5 — Replay engine
+
+- Pick a historical day/session; future candles hidden server-side.
+- Play / pause / step-one-candle / speed control.
+- Separate replay paper account; orders fill against replay bars.
+- `TradeCoach` reviews replay trades exactly like live ones.
+
+### V2-6 — Journal & improvement dashboard
+
+- Chart-context snapshot per trade (candle window + entry/exit markers,
+  re-rendered on demand — the deliberate substitute for static
+  screenshots, documented in `ROADMAP-V2.md`).
+- Notes + emotions fields; filter by strategy/symbol/P&L/date/mistake.
+- Improvement dashboard: win-rate trend, weaknesses, best hours/days/
+  conditions, mistake frequency over time, recommended exercises.
+- **Partial overlap already shipped**: the V2-3 Coach tab's `CoachProfile`
+  already covers recurring mistakes, score trend, and win rate by setup
+  quality. V2-6 is additive on top of that, not a rebuild — the remaining
+  scope is chart snapshots, notes/emotions capture, and journal filtering
+  UI specifically.
+
+### V2-4 workspace remainder (optional, large)
+
+The full three-panel layout (top bar / right sidebar / bottom panel) and
+multi-chart layouts. Deferred as a deliberate, separate design decision —
+the current single-chart-plus-toolbar Charts tab is a complete, usable
+substitute, so this is a UI-restructuring project rather than a missing
+feature.
+
+---
+
+## Deferred
+
+Explicitly considered and pushed out, with the reason recorded so it isn't
+re-litigated by accident:
+
+- **Stock/share (non-option) manual positions** — deferred from V2-2. Would
+  need a new "stock leg" position shape and touch `broker/orders.py`,
+  `PaperBroker`, and the Trade tab's chain/ticket UI (currently
+  options-only).
+- **A real live-broker adapter** (Alpaca's options paper API is the natural
+  first candidate) — explicitly gated on sustained paper profitability.
+  Building this without a direct, dedicated user request is against the
+  project's core safety rule; see `CLAUDE.md`.
+- **A paid market-data feed** (Polygon/Tradier) — the free yfinance
+  provider is adequate for paper trading and strategy development; this is
+  the documented upgrade path for serious intraday work, not a current need.
+- **News / economic-calendar / sentiment evidence** — would be a new
+  `ConfluenceScorer` evidence type; no design work started.
+- **Portfolio-level risk** (correlated positions, sector exposure limits) —
+  the current `RiskManager` reasons per-position only.
+- **Candle cache for the live loop** (incremental fetch + merge) — the
+  `CachedProvider` already made this low-urgency (warm cycles are ~0.1s);
+  worth revisiting only if yfinance rate-limiting becomes a problem at a
+  larger watchlist size.
+
+---
+
+## Long-term Vision
+
+From the user's own framing of the project (see `AI_HANDOFF.md`): *"a
+polished, professional desktop trading platform that combines the best
+aspects of TradingView, Webull, and Thinkorswim, while adding an AI trading
+coach that can both trade autonomously in AI Mode and teach me in Human
+Mode."*
+
+That vision has two structural pillars that are not up for casual
+revision:
+
+1. **Paper trading only, permanently, unless the user explicitly asks
+   otherwise in a dedicated request.** The system is deliberately built so
+   a live-broker adapter *could* slot into the existing `Broker` interface
+   someday, gated behind sustained paper profitability and a two-flag
+   opt-in — but building that adapter is a decision the user makes once,
+   explicitly, not a natural next step to infer from "make it better."
+2. **Deterministic, auditable logic over ML/LLM black boxes.** The scorer,
+   the gate, and the coach are all hand-authored rule systems by design —
+   this is what makes every trade decision fully reconstructable from logs
+   and every coaching verdict explainable in plain English. An LLM call in
+   the trading or coaching path would break that property.
+
+Beyond the currently-scoped V2-5/V2-6 phases, longer-horizon ideas that
+have been discussed but not scoped: a desktop app for other platforms
+(macOS/Linux — currently Windows-only via pywebview/PyInstaller; see
+`AI_CONTEXT.md` "Future desktop plans"), and no mobile plans exist or are
+anticipated (the analysis engine is pandas/numpy-heavy and the UI assumes
+a desktop-sized viewport; see `AI_CONTEXT.md` "Future mobile plans").

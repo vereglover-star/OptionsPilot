@@ -1,30 +1,31 @@
 # OptionsPilot
 
-AI-powered options **paper-trading** system: multi-timeframe market analysis,
-confidence-scored trade decisions, strict risk management, a learning journal,
-and backtesting — designed so live trading could later be enabled by
-configuration only (and deliberately impossible in v1).
+AI-powered options **paper-trading** desktop platform: multi-timeframe market
+analysis, confidence-scored trade decisions, strict risk management, a
+deterministic trade coach, an interactive chart workspace, and backtesting —
+designed so live trading could later be enabled by configuration only (and
+deliberately impossible today).
 
-> **Safety:** v1 contains no live-trading code path. The only broker is a
-> simulator. See `docs/ARCHITECTURE.md` §2.5 for the live-trading gate design.
+> **Safety:** the only broker is a simulator — there is no live-trading code
+> path anywhere in this codebase. See `docs/ARCHITECTURE.md` §1 and §6 for
+> the live-trading gate design.
 
 ## Status
 
-Phase 1 of 8 complete — see [docs/ROADMAP.md](docs/ROADMAP.md).
+All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
+(chart workspace). **345 tests, 100% passing.** See
+[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
+[docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
-| Phase | Scope | Status |
-|-------|-------|--------|
-| 1 | Foundation: config, logging, models, data engine, indicators | ✅ done |
-| 2 | Analysis suite: candlesticks, structure, SMC, volume, options math | ✅ done |
-| 3 | AI decision engine | ✅ done |
-| 4 | Risk manager + paper broker | ✅ done |
-| 5 | Journal, learning, backtesting | ✅ done |
-| 6 | Orchestrator + notifications + CLI | ✅ done |
-| 7 | Desktop UI (pywebview + FastAPI, PyInstaller packaging) | ✅ done |
-| 8 | Hardening: soak harness, TradingView webhook, broker adapter slots, performance pass | ✅ done |
-
-All 8 planned phases are complete. See [docs/ROADMAP.md](docs/ROADMAP.md)
-for candidate post-v1 work.
+| Area | Status |
+|------|--------|
+| v1 (analysis engine, AI decision engine, risk + paper broker, journal/learning/backtest, orchestrator, desktop UI, hardening) | ✅ done |
+| Trading modes (conservative / high-risk / custom) | ✅ done |
+| Manual paper trading (order book, Trade tab, account metrics) | ✅ done |
+| AI Mode vs. Human Mode + deterministic Trade Coach | ✅ done |
+| Interactive chart workspace (drawing tools, trade lines) | ✅ done |
+| Replay engine (V2-5) | ⬜ not started |
+| Journal & improvement dashboard (V2-6) | ⬜ partially covered by the Coach tab |
 
 ## Setup
 
@@ -47,10 +48,13 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot serve --port 8787
 ```
 
-The dashboard shows equity, P&L today/week/month, per-symbol AI confidence
-meters against the trade threshold, open positions, notifications, the full
-journal with each trade's reasoning, a backtest runner, and the learning
-system's weights and performance slices.
+The app has nine tabs: **Dashboard** (equity, P&L, AI confidence meters,
+position cards), **Charts** (interactive candles/volume with indicator
+overlays, drawing tools, and position/order trade lines), **Trade** (manual
+option chain, order ticket, working orders, account metrics), **Coach**
+(process-scored review of every manual trade, recurring mistakes, practice
+exercises), **Watchlist**, **Journal**, **Backtest**, **Learning**, and
+**Settings**. Keyboard 1–9 switches tabs.
 
 ### Package as a normal Windows app
 
@@ -74,7 +78,7 @@ Double-click the exe to open the desktop app. CLI commands pass through:
 ```
 
 All state lives under `data/` (paper account, journal, learned weights,
-backtest reports). Logs rotate under `logs/` per subsystem.
+coach reviews, backtest reports). Logs rotate under `logs/` per subsystem.
 
 ### TradingView alerts (optional)
 
@@ -88,6 +92,20 @@ character `tradingview_secret`), then point a TradingView alert webhook at
 
 An alert triggers a scan of that symbol through the full engine + risk
 pipeline — it changes *when* the system looks, never *whether* it trades.
+
+## AI Mode vs. Human Mode
+
+Two independent axes, switchable live from the header (no restart):
+
+- **`operating_mode`** — `ai` (default): the engine places entries itself and
+  manages its own stops/targets. `human`: the engine still scans and scores
+  every symbol, but only advises (one notification per tradeable signal) —
+  you place every order from the Trade tab, and the **Trade Coach** reviews
+  each closed round trip with a process-based score and a mistake taxonomy.
+- **`trading_mode`** — conservative / high-risk / custom (see below).
+  Applies to the confidence threshold in *both* operating modes.
+
+Switching one axis never flips the other.
 
 ## Watchlist
 
@@ -161,22 +179,47 @@ optionspilot/
   engine/        multi-timeframe analyzer, confluence scorer, contract
                  selector, trade planner
   risk/          the gate: limits, circuit breaker, position sizing
-  broker/        Broker ABC, paper simulator, position manager, registry
+  broker/        Broker ABC, paper simulator, order manager, position
+                 manager, registry
+  coach/         deterministic post-trade review + aggregated profile
   journal/       SQLite trade journal
   learning/      performance slicing, bounded weight updates, WeightStore
   backtest/      event-driven replay + JSON/HTML reports
   notify/        desktop + email notification center
   integrations/  TradingView webhook parsing
-  ui/            FastAPI backend, static dashboard, pywebview shell
+  ui/            FastAPI backend, static dashboard (incl. Charts tab),
+                 pywebview shell
   orchestrator.py  the live event loop
-scripts/         build_exe.ps1, soak.py
-docs/            ARCHITECTURE.md, ROADMAP.md, MODULES.md
-tests/           pytest suite (225 tests)
+scripts/         build_exe.ps1, soak.py, make_icon.py, fetch_symbols.py
+docs/            see "Documentation" below
+tests/           pytest suite (345 tests)
 ```
 
 ## Documentation
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — full system design, data flow,
-  technology choices, and honest v1 limitations (data quality, TradingView/Webull
-  API realities).
-- [docs/ROADMAP.md](docs/ROADMAP.md) — phase-by-phase plan with acceptance items.
+Start with [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) if you're an AI assistant
+picking up this project, or [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) if
+you're a human contributor. The full set:
+
+- [docs/AI_CONTEXT.md](docs/AI_CONTEXT.md) — permanent orientation for AI
+  sessions: vision, philosophy, standards, what never to change casually.
+- [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) — complete technical orientation
+  for a session that has never seen this codebase.
+- [docs/NEXT_SESSION.md](docs/NEXT_SESSION.md) — the concise "what to do
+  right now" handoff, updated after every significant session.
+- [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) — structured snapshot
+  (version, milestones, test count, priorities).
+- [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md) — the session-by-session
+  narrative log.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — full system design, data
+  flow diagrams, technology choices, and honest limitations.
+- [docs/MODULES.md](docs/MODULES.md) — quick API map per module.
+- [docs/ROADMAP.md](docs/ROADMAP.md) — Completed / In Progress / Planned /
+  Deferred / long-term vision. [docs/ROADMAP-V2.md](docs/ROADMAP-V2.md) has
+  the granular per-phase checklist.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — dated, prose changelog by feature.
+- [docs/TODO.md](docs/TODO.md) — flat, actionable work queue.
+- [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — coding conventions, commit
+  style, testing expectations, definition of done.
+- [CLAUDE.md](CLAUDE.md) — permanent instructions for AI coding sessions
+  (safety rules, architecture rules, workflow) — read this first if you are one.
