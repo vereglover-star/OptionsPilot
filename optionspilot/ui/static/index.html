@@ -366,6 +366,23 @@ pre.cfg { background:var(--surface-2); border-radius:10px; padding:14px; overflo
 .cfg-row .v .on { color:var(--good); font-weight:600; }
 .cfg-row .v .off { color:var(--muted); }
 .cfg-row .v .lock { color:var(--warn); }
+
+/* coach: first-run explainer steps */
+.coach-steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+               gap:14px; }
+.coach-step { background:var(--surface-2); border:1px solid var(--grid);
+              border-radius:var(--r-md); padding:14px 16px; font-size:var(--fs-md); }
+.coach-step .n { width:26px; height:26px; border-radius:50%; background:var(--accent-soft);
+                 color:var(--accent); font-weight:700; display:flex; align-items:center;
+                 justify-content:center; margin-bottom:8px; }
+.coach-step p { color:var(--muted); margin-top:4px; line-height:1.5; }
+
+/* learning: weight-shift bar (center = default, right = boosted, left = damped) */
+.wbar { position:relative; height:10px; background:var(--surface-3);
+        border-radius:5px; overflow:hidden; }
+.wbar .mid { position:absolute; left:50%; top:0; bottom:0; width:1px;
+             background:var(--baseline); }
+.wbar .fill { position:absolute; top:0; bottom:0; border-radius:5px; opacity:.75; }
 .hint { color:var(--muted); font-size:var(--fs-sm); margin-top:8px; }
 .empty { color:var(--muted); padding:14px 4px; }
 h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
@@ -640,13 +657,31 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
 
   <!-- COACH (Human Mode reviews + profile) -->
   <section id="tab-coach" style="display:none">
+    <div id="coach-intro" class="panel" style="display:none">
+      <h2>Your trading coach</h2>
+      <div class="coach-steps">
+        <div class="coach-step"><div class="n">1</div>
+          <b>Trade in Human Mode</b>
+          <p>Switch the header to <b>👤 You trade</b>. The AI keeps scanning
+          and advising, but every entry is yours.</p></div>
+        <div class="coach-step"><div class="n">2</div>
+          <b>Close a round trip</b>
+          <p>Any manual position you open and close — win or lose — gets a
+          full deterministic review: setup quality, timing, stops, exits.</p></div>
+        <div class="coach-step"><div class="n">3</div>
+          <b>Get scored on process</b>
+          <p>Scores rate discipline, not luck — a disciplined loser outscores
+          a reckless winner. Recurring mistakes become targeted exercises.</p></div>
+      </div>
+      <div style="text-align:center; margin-top:14px">
+        <button class="btn primary" id="coach-gohuman">Switch to Human Mode</button>
+      </div>
+    </div>
     <div class="cards" id="coach-cards"></div>
     <div class="grid2">
       <div class="panel">
         <h2>Recurring mistakes — your personal coaching</h2>
-        <div id="coach-mistakes"><div class="empty">No reviewed trades yet.
-          Switch to <b>👤 You trade</b> and close a trade — every manual round
-          trip gets a full AI review here.</div></div>
+        <div id="coach-mistakes"><div class="empty">No reviewed trades yet.</div></div>
       </div>
       <div class="panel">
         <h2>Strengths & recommended exercises</h2>
@@ -707,8 +742,24 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   <!-- JOURNAL -->
   <section id="tab-journal" style="display:none">
     <div class="cards" id="journal-stats"></div>
+    <div class="panel" id="journal-curve-panel" style="display:none">
+      <h2>Cumulative P&L — closed trades</h2>
+      <svg class="chart" id="journal-curve" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
+    </div>
     <div class="panel">
       <h2>Trades (click a row for the AI's reasoning)</h2>
+      <div class="wl-tools" id="journal-filters" style="display:none">
+        <input id="jf-sym" placeholder="Symbol…" style="width:110px" aria-label="Filter by symbol">
+        <select id="jf-dir" aria-label="Filter by direction">
+          <option value="">All directions</option>
+          <option value="long">Long</option><option value="short">Short</option>
+        </select>
+        <select id="jf-res" aria-label="Filter by result">
+          <option value="">Wins & losses</option>
+          <option value="win">Wins</option><option value="loss">Losses</option>
+        </select>
+        <span class="hint" style="display:inline; margin:0" id="jf-count"></span>
+      </div>
       <div id="journal-table"></div>
     </div>
   </section>
@@ -1120,12 +1171,41 @@ async function loadJournal() {
        ["Profit factor", st.profit_factor], ["Avg win / loss",
         `<span class="v small">${fmt$(st.avg_win)} / ${fmt$(st.avg_loss)}</span>`]]
       .map(([k,v,c]) => `<div class="card"><div class="k">${k}</div><div class="v ${c||""}">${v}</div></div>`).join("");
-  $("journal-table").innerHTML = d.trades.length === 0
-    ? `<div class="empty">No completed trades yet.</div>`
+  window._journal = d.trades;
+  // cumulative P&L curve, oldest -> newest (the API returns newest first)
+  $("journal-curve-panel").style.display = d.trades.length >= 2 ? "" : "none";
+  if (d.trades.length >= 2) {
+    let acc = 0;
+    const pts = [...d.trades].reverse().map(t =>
+      [new Date(t.exit_ts || t.entry_ts), acc += t.pnl]);
+    drawEquity($("journal-curve"), pts, 0);
+  }
+  $("journal-filters").style.display = d.trades.length ? "" : "none";
+  renderJournalTable();
+}
+
+function renderJournalTable() {
+  const trades = window._journal || [];
+  if (!trades.length) {
+    $("journal-table").innerHTML =
+      `<div class="empty">No completed trades yet. Every closed round trip —
+       the AI's and yours — lands here with its full reasoning chain.</div>`;
+    return;
+  }
+  const sym = ($("jf-sym").value || "").trim().toUpperCase();
+  const dir = $("jf-dir").value, res = $("jf-res").value;
+  const idx = trades.map((t, i) => ({ t, i })).filter(({ t }) =>
+    (!sym || t.symbol.toUpperCase().includes(sym)) &&
+    (!dir || t.direction === dir) &&
+    (!res || (res === "win" ? t.pnl > 0 : t.pnl <= 0)));
+  $("jf-count").textContent = idx.length === trades.length
+    ? `${trades.length} trades` : `${idx.length} of ${trades.length} trades`;
+  $("journal-table").innerHTML = idx.length === 0
+    ? `<div class="empty">No trades match those filters.</div>`
     : `<table><tr><th>Entry</th><th>Symbol</th><th>Dir</th><th class="num">Qty</th>
        <th class="num">In</th><th class="num">Out</th><th class="num">P&L</th>
        <th class="num">Conf</th><th>Exit reason</th></tr>` +
-      d.trades.map((t, i) => `<tr class="expandable" onclick="toggleReasons(${i})">
+      idx.map(({ t, i }) => `<tr class="expandable" onclick="toggleReasons(${i})">
         <td>${new Date(t.entry_ts).toLocaleString()}</td><td>${t.symbol}</td>
         <td><span class="chip ${t.direction}">${t.direction}</span></td>
         <td class="num">${t.quantity}</td><td class="num">${t.entry_price.toFixed(2)}</td>
@@ -1134,8 +1214,10 @@ async function loadJournal() {
         <td class="num">${t.confidence.toFixed(0)}%</td><td>${esc(t.exit_reason)}</td></tr>
         <tr id="reasons-${i}" style="display:none"><td colspan="9">
           <div class="reasons">${t.entry_reasons.map(esc).join("\n")}</div></td></tr>`).join("") + "</table>";
-  window._journal = d.trades;
 }
+$("jf-sym").oninput = renderJournalTable;
+$("jf-dir").onchange = renderJournalTable;
+$("jf-res").onchange = renderJournalTable;
 window.toggleReasons = i => {
   const r = $("reasons-" + i);
   r.style.display = r.style.display === "none" ? "" : "none";
@@ -1165,16 +1247,42 @@ async function pollBacktest() {
   $("bt-status").textContent = "done.";
   const r = j.report;
   const eq = r.equity_curve.map(([t, e]) => [new Date(t), e]);
+  // drawdown series: distance below the running equity high, in %
+  let peak = -Infinity;
+  const dd = eq.map(([t, e]) => {
+    peak = Math.max(peak, e);
+    return [t, peak > 0 ? (e / peak - 1) * 100 : 0];
+  });
+  // exit-reason breakdown from the trade list
+  const byExit = {};
+  for (const t of r.trades) {
+    const b = byExit[t.exit_reason] ??= { n: 0, pnl: 0, wins: 0 };
+    b.n++; b.pnl += t.pnl; if (t.pnl > 0) b.wins++;
+  }
+  const wins = r.trades.filter(t => t.pnl > 0).length;
   $("bt-result").innerHTML = `
     <div class="cards">
       ${[["Net profit", fmt$(r.net_profit) + ` (${r.net_profit_pct >= 0 ? "+" : ""}${r.net_profit_pct}%)`, cls(r.net_profit)],
-         ["Trades", r.n_trades], ["Win rate", (r.win_rate*100).toFixed(1)+"%"],
+         ["Trades", `${r.n_trades} <span style="font-size:var(--fs-sm); font-weight:500">(${wins}W / ${r.n_trades - wins}L)</span>`],
+         ["Win rate", (r.win_rate*100).toFixed(1)+"%"],
          ["Profit factor", r.profit_factor], ["Max drawdown", r.max_drawdown_pct+"%"],
          ["Sharpe", r.sharpe]]
         .map(([k,v,c]) => `<div class="card"><div class="k">${k}</div><div class="v small ${c||""}">${v}</div></div>`).join("")}
     </div>
     <div class="panel"><h2>Backtest equity — ${r.symbol}, ${r.strategy}</h2>
       <svg class="chart" id="bt-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg></div>
+    <div class="grid2">
+      <div class="panel"><h2>Drawdown from peak (%)</h2>
+        <svg class="chart" id="bt-dd" viewBox="0 0 960 200" preserveAspectRatio="none"></svg></div>
+      <div class="panel"><h2>By exit reason</h2>
+        <table><tr><th>Exit</th><th class="num">Trades</th><th class="num">Win rate</th>
+        <th class="num">Total P&L</th></tr>
+        ${Object.entries(byExit).sort((a, b) => b[1].n - a[1].n).map(([k, b]) =>
+          `<tr><td>${esc(k)}</td><td class="num">${b.n}</td>
+           <td class="num">${(b.wins / b.n * 100).toFixed(0)}%</td>
+           <td class="num ${cls(b.pnl)}">${fmt$(b.pnl)}</td></tr>`).join("")}
+        </table></div>
+    </div>
     <div class="panel"><h2>Trades</h2>
       <table><tr><th>Entry</th><th>Dir</th><th class="num">Qty</th><th class="num">P&L</th>
       <th class="num">Conf</th><th>Exit</th></tr>
@@ -1186,6 +1294,7 @@ async function pollBacktest() {
     <div class="panel"><h2>Notes</h2>
       ${r.notes.map(n => `<div class="hint">• ${esc(n)}</div>`).join("")}</div>`;
   drawEquity($("bt-chart"), eq, r.initial_balance);
+  drawEquity($("bt-dd"), dd, 0);
 }
 
 /* ── learning ─────────────────────────────────────────────────────────── */
@@ -1194,11 +1303,25 @@ async function loadLearning() {
   if (!_lrnLoaded) { $("weights").innerHTML = skel(6); _lrnLoaded = true; }
   const d = await (await fetch("/api/learning")).json();
   $("weights-ver").textContent = d.weights_version ? `(learned v${d.weights_version})` : "(no learned weights yet)";
+  // deviation bar: how far learning has moved each weight from its default
+  // (bounded ±: the learning system caps at 0.25×–2× of default)
+  const devBar = w => {
+    if (w.learned == null || !w.default) return "";
+    const ratio = Math.max(-1, Math.min(1, Math.log2(w.effective / w.default)));
+    const pct = Math.abs(ratio) * 50;
+    const side = ratio >= 0
+      ? `left:50%; width:${pct}%; background:var(--good)`
+      : `right:50%; width:${pct}%; background:var(--bad)`;
+    return `<div class="wbar" title="${ratio >= 0 ? "boosted" : "damped"} vs default">
+      <div class="mid"></div><div class="fill" style="${side}"></div></div>`;
+  };
   $("weights").innerHTML = `<table><tr><th>Evidence</th><th class="num">Default</th>
-    <th class="num">Learned</th><th class="num">Effective</th></tr>` +
+    <th class="num">Learned</th><th style="width:120px">Shift</th>
+    <th class="num">Effective</th></tr>` +
     Object.entries(d.weights).map(([k, w]) => `<tr><td>${k}</td>
       <td class="num">${w.default.toFixed(2)}</td>
       <td class="num">${w.learned == null ? "—" : w.learned.toFixed(2)}</td>
+      <td>${devBar(w)}</td>
       <td class="num"><b>${w.effective.toFixed(2)}</b></td></tr>`).join("") + "</table>";
   const slice = rows => rows.length === 0 ? `<div class="empty">No trades yet.</div>`
     : `<table><tr><th>Slice</th><th class="num">Trades</th><th class="num">Win rate</th>
@@ -2279,11 +2402,17 @@ document.querySelectorAll("#op-seg button").forEach(b => b.onclick = async () =>
   if (lastStatus) { lastStatus.operating_mode = d.operating_mode; renderStatus(lastStatus); }
 });
 
+$("coach-gohuman").onclick = () =>
+  document.querySelector('#op-seg button[data-op="human"]').click();
+
 let _coachLoaded = false;
 async function loadCoach() {
   if (!_coachLoaded) { $("coach-reviews").innerHTML = skel(4); _coachLoaded = true; }
   const d = await (await fetch("/api/coach")).json();
   const p = d.profile;
+  // first-run explainer replaces the stat cards until a review exists
+  $("coach-intro").style.display = p.trades_reviewed === 0 ? "" : "none";
+  $("coach-cards").style.display = p.trades_reviewed === 0 ? "none" : "";
   $("coach-cards").innerHTML = (p.trades_reviewed === 0 ? [
     ["Trades reviewed", "0", ""],
   ] : [

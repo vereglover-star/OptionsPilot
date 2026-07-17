@@ -4,7 +4,31 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-4: settings redesign — structured config cards replace the JSON dump
+## [Uncommitted] 2026-07-17 — V3-5: analytics presentation — Coach, Journal, Backtest, Learning
+
+*351 tests (unchanged — all four are frontend presentation over existing
+endpoints; every new chart/branch is derived client-side).*
+
+- **Coach**: a first-run explainer replaces the bare "0 reviews" stat —
+  three numbered steps (trade in Human Mode → close a round trip → get
+  scored on process) with a one-click "Switch to Human Mode" button; it
+  disappears permanently once the first review exists.
+- **Journal**: a cumulative-P&L curve panel (appears from the second
+  closed trade), plus symbol/direction/win-loss filters with a live
+  "N of M trades" count — all over the already-loaded trade list, no new
+  requests.
+- **Backtest**: results now include a drawdown-from-peak chart, a
+  win/loss split on the trades card, and a "by exit reason" breakdown
+  (count, win rate, total P&L per exit type) — the shape of report a
+  desk would actually read. Verified by running a real 25-day SPY
+  backtest through the UI (zero trades at the conservative bar is the
+  correct outcome; the full layout renders).
+- **Learning**: the evidence-weights table gains a centered shift bar per
+  row — green right of center where learning has boosted a weight above
+  its default, red left where it damped one — making the bounded
+  0.25×–2× learning rule visible at a glance.
+
+## 2026-07-17 — V3-4: settings redesign — structured config cards replace the JSON dump
 
 *351 tests (unchanged — frontend only; the config stays read-only in-app
 by design, matching the startup-validated `config.yaml` philosophy).*
