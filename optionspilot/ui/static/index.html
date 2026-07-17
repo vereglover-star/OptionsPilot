@@ -347,6 +347,25 @@ form.bt input { background:var(--surface-2); border:1px solid var(--ring); color
                 border-radius:var(--r-sm); padding:8px 10px; width:110px; font-size:var(--fs-md); }
 pre.cfg { background:var(--surface-2); border-radius:10px; padding:14px; overflow:auto;
           font-size:var(--fs-sm); line-height:1.5; color:var(--ink-2); }
+
+/* settings: grouped read-only config cards */
+.cfg-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+            gap:12px; margin-top:12px; }
+.cfg-card { background:var(--surface-2); border:1px solid var(--grid);
+            border-radius:var(--r-md); padding:13px 15px; }
+.cfg-card h3 { font-size:var(--fs-md); font-weight:650; margin-bottom:2px;
+               text-transform:capitalize; }
+.cfg-card .note { color:var(--muted); font-size:var(--fs-sm); margin-bottom:9px;
+                  line-height:1.45; }
+.cfg-row { display:flex; justify-content:space-between; gap:12px; padding:4px 0;
+           font-size:var(--fs-md); border-bottom:1px solid var(--grid); }
+.cfg-row:last-child { border-bottom:none; }
+.cfg-row .k { color:var(--muted); }
+.cfg-row .v { color:var(--ink-2); font-variant-numeric:tabular-nums; text-align:right;
+              overflow-wrap:anywhere; }
+.cfg-row .v .on { color:var(--good); font-weight:600; }
+.cfg-row .v .off { color:var(--muted); }
+.cfg-row .v .lock { color:var(--warn); }
 .hint { color:var(--muted); font-size:var(--fs-sm); margin-top:8px; }
 .empty { color:var(--muted); padding:14px 4px; }
 h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
@@ -757,10 +776,15 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
       </details>
     </div>
     <div class="panel">
-      <h2>Effective configuration (read-only)</h2>
-      <pre class="cfg" id="config"></pre>
-      <div class="hint">Edit <code>config.yaml</code> (or OPTIONSPILOT__SECTION__KEY environment
-        variables) and restart to change settings. Validation failures refuse to start — by design.</div>
+      <h2>Effective configuration</h2>
+      <div class="wl-tools" style="margin-top:0">
+        <input id="cfg-search" placeholder="Search settings…" style="width:240px"
+               aria-label="Search settings">
+        <span class="hint" style="display:inline; margin:0">Read-only here — edit
+          <code>config.yaml</code> (or <code>OPTIONSPILOT__SECTION__KEY</code> env vars)
+          and restart. Invalid values refuse to start, by design.</span>
+      </div>
+      <div class="cfg-grid" id="config"></div>
     </div>
   </section>
 </main>
@@ -1189,10 +1213,56 @@ async function loadLearning() {
 }
 
 /* ── settings ─────────────────────────────────────────────────────────── */
+const CFG_NOTES = {
+  data: "Market data feed, cached candles, and scan timeframes. The watchlist itself is managed on the Watchlist tab.",
+  indicators: "Which indicators are computed for every scan — and drawn on the Charts tab.",
+  engine: "How the AI decides: confidence bar, scan cadence, timeframe roles, and the contract filters.",
+  risk: "Hard limits enforced on every entry, AI or manual. The trading-mode toggle above adjusts the confidence bar, never these.",
+  broker: "Paper-trading simulator. The live-trading flags are permanently off by design — no live adapter exists in this build.",
+  notify: "Desktop toasts and optional email summaries.",
+  integrations: "Inbound TradingView alert webhook (scan-trigger only — it can never place an order).",
+  logging: "Rotating per-subsystem logs under logs/.",
+};
+const LOCKED_KEYS = new Set(["live_trading_enabled", "i_understand_the_risks"]);
+
+function cfgVal(key, v) {
+  if (typeof v === "boolean")
+    return LOCKED_KEYS.has(key)
+      ? `<span class="lock" title="off by design — no live-broker code exists">🔒 off</span>`
+      : v ? `<span class="on">✓ on</span>` : `<span class="off">– off</span>`;
+  if (Array.isArray(v)) return esc(v.join(", ")) || "—";
+  if (v === null || v === "") return "—";
+  if (typeof v === "object")
+    return esc(Object.entries(v).map(([k, x]) => `${k}: ${x}`).join(", ")) || "—";
+  return esc(String(v));
+}
+
 async function loadConfig() {
   const d = await (await fetch("/api/config")).json();
-  $("config").textContent = JSON.stringify(d, null, 2);
+  $("config").innerHTML = Object.entries(d).map(([section, vals]) => `
+    <div class="cfg-card" data-section="${section}">
+      <h3>${esc(section)}</h3>
+      <div class="note">${CFG_NOTES[section] || ""}</div>
+      ${Object.entries(vals).map(([k, v]) => `
+        <div class="cfg-row" data-q="${esc((section + " " + k + " " +
+             JSON.stringify(v)).toLowerCase())}">
+          <span class="k">${esc(k)}</span><span class="v">${cfgVal(k, v)}</span>
+        </div>`).join("")}
+    </div>`).join("");
+  cfgFilter();
 }
+
+function cfgFilter() {
+  const q = $("cfg-search").value.trim().toLowerCase();
+  document.querySelectorAll("#config .cfg-row").forEach(r =>
+    r.style.display = !q || r.dataset.q.includes(q) ? "" : "none");
+  document.querySelectorAll("#config .cfg-card").forEach(c => {
+    const any = [...c.querySelectorAll(".cfg-row")]
+      .some(r => r.style.display !== "none");
+    c.style.display = any ? "" : "none";
+  });
+}
+$("cfg-search").oninput = cfgFilter;
 
 /* ── toasts ───────────────────────────────────────────────────────────── */
 let toastTimer = null;

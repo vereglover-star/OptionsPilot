@@ -4,7 +4,31 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-3: trade screen — faster contract selection, risk context, order-entry keys
+## [Uncommitted] 2026-07-17 — V3-4: settings redesign — structured config cards replace the JSON dump
+
+*351 tests (unchanged — frontend only; the config stays read-only in-app
+by design, matching the startup-validated `config.yaml` philosophy).*
+
+- The raw `JSON.stringify` dump — the app's single biggest visual outlier
+  (flagged in `ROADMAP-V3-UX.md` as C1) — is now a grid of grouped cards,
+  one per config section (data/indicators/engine/risk/broker/notify/
+  integrations/logging), each with a plain-English description of what
+  the section controls and where its live counterpart lives (e.g. "the
+  watchlist itself is managed on the Watchlist tab").
+- Booleans render as ✓ on / – off; the two live-trading gate flags render
+  as 🔒 off with a tooltip stating they're off by design with no live
+  adapter in the build — the safety posture is now visible in the UI, not
+  buried in a JSON blob.
+- A search box filters across every section/key/value, hiding empty
+  cards as it narrows.
+- The restart-to-change rule is stated once, inline, next to the search —
+  only where it's actually true (the Trading-mode panel above it remains
+  fully live, unchanged).
+- **Verified**: lock rendering and search behavior driven in a real
+  browser (search "confidence" → 1/69 rows, only the engine card left);
+  full suite + browser smoke check, zero console errors.
+
+## 2026-07-17 — V3-3: trade screen — faster contract selection, risk context, order-entry keys
 
 *351 tests (unchanged — frontend only; all order placement still routes
 through the existing risk-gated `/api/orders` path).*
