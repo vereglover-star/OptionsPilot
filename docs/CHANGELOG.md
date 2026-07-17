@@ -4,6 +4,63 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-07-17 — V2-4 finish: trade lines + fib/zone/note tools; manual entries risk-gated
+
+*345 tests. Completes the tractable remainder of the V2-4 drawing/overlay
+scope, and finishes the manual-entry risk-gating work found uncommitted
+from the 2026-07-16 session. The full three-panel workspace layout and
+multi-chart layouts stay deferred (a larger design decision — see
+`ROADMAP-V2.md`).*
+
+**Manual entries now pass through the RiskManager** (completing work left
+uncommitted and unwired by the previous session — its `_entry_veto`
+refactor, `approve_manual_entry`, and `OrderManager.evaluate`'s fill-time
+`approve_entry` callback existed but the immediate market-buy path in
+`UIServer.place_order` never called them, so a halted account could still
+buy):
+- `RiskManager.approve_manual_entry`: every hard gate the AI has — halt,
+  weekend/hours window, daily trade limit, max open positions (skipped
+  when scaling into an already-held contract), cooldown after loss, max
+  contracts (counting the existing position) — plus quantity/premium
+  validity. The engine's %-risk position sizing is deliberately advisory
+  only for manual trades: sizing a user-directed trade is the user's
+  call, and oversizing is the coach's job to flag (`oversized` tag), not
+  the risk manager's to block. The %-budget comparison is still computed,
+  logged, and surfaced in `RiskDecision.notes`.
+- `UIServer.place_order` preflights immediate market buys through
+  `Orchestrator.approve_manual_entry` (422 with the veto text), and
+  delayed working-order fills are approved at trigger time by
+  `OrderManager.evaluate`'s callback (rejected orders cancel with the
+  veto as the result). Manual fills are recorded against the daily trade
+  limit via `register_manual_entry(entry_ts=...)`.
+- New `TestManualEntry` unit tests in `tests/test_risk.py` (halt, hours,
+  daily limit, max-contracts scaling, oversize-allowed-with-note,
+  invalid inputs) alongside the endpoint-level halt test.
+
+- **Position/order lines on the chart**: loading a chart now draws labeled
+  price lines for that symbol's open positions — entry spot (blue, solid),
+  working stop (red, dashed) and target (green, dashed), all in underlying
+  space (`Position.entry_spot`/`stop_current`/`target`) — plus the
+  underlying-level triggers of working manual orders (stop-loss/take-profit
+  levels and the live trailing-stop level, orange dashed). LIMIT orders are
+  premium-space and deliberately not drawn on an underlying chart. Each
+  line is labeled with the position/order size and strike (e.g.
+  "stop 2× 580C"). Backend: the status payload's positions now include
+  `entry_spot` (was already persisted on `Position`, just not exposed).
+- **Three new drawing tools** alongside Level/Trend: **Fib** (click swing
+  start then swing end → 0/0.236/0.382/0.5/0.618/0.786/1 retracement
+  levels as labeled dotted price lines), **Zone** (click two corners → a
+  supply/demand rectangle drawn as top/bottom edges spanning the two
+  bars), and **Note** (click a bar, type text in an inline input, Enter →
+  a labeled square marker above that bar). All persist in localStorage per
+  symbol+timeframe like trend lines; the existing Clear button removes
+  them; old stored drawings load unchanged (missing keys default empty).
+- Esc now cancels the active drawing tool anywhere on the Charts tab.
+- Hygiene (from `TODO.md`): `pyproject.toml` `package-data` now ships
+  `data_assets/*` in wheels/sdists; `Pillow` added to the `dev` extra
+  (needed by `scripts/make_icon.py`); `engine.operating_mode` documented
+  inline in `config.yaml` matching `trading_mode`'s comment style.
+
 ## 2026-07-16 — V2-4 core: interactive chart workspace
 
 *338 tests. The Charts tab ships the core of the V2-4 roadmap phase.*

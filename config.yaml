@@ -17,6 +17,15 @@ engine:
   #                 risk/reward >= high_risk_min_rr_stretch. All risk limits,
   #                 stops and position sizing stay fully enforced.
   trading_mode: conservative
+  # Operating mode — "ai" (default) or "human":
+  #   ai:    the engine places entries itself (through the risk manager) and
+  #          manages its own stops/targets.
+  #   human: the engine still scans and scores every symbol, but only advises
+  #          (one notification per tradeable signal) — YOU place every order
+  #          from the Trade tab, and the AI coach reviews each closed trade.
+  # Switchable live from the app header; the in-app choice is persisted in
+  # data/settings.json and overrides this value on the next start.
+  operating_mode: ai
   high_risk_floor: 60           # never trade below this confidence, ever
   high_risk_min_rr_stretch: 2.0 # RR required for below-base-confidence entries
   target_delta: 0.45

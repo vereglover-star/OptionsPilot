@@ -78,6 +78,51 @@ class TestGates:
         assert rm.approve(make_plan(), 0, later).approved
 
 
+class TestManualEntry:
+    """Human Mode entries share the AI's hard gates but not its sizing."""
+
+    def approve(self, rm, quantity=1, premium=2.5, open_positions=0, now=NOW,
+                **kw):
+        return rm.approve_manual_entry(
+            quantity=quantity, premium=premium,
+            open_positions=open_positions, now=now, **kw)
+
+    def test_halt_blocks_manual_entry(self):
+        rm = manager()
+        rm.record_closed_trade(NOW - timedelta(minutes=1), -5_000.0)  # halts
+        d = self.approve(rm)
+        assert not d.approved and "trading halted" in d.veto
+
+    def test_hours_and_daily_limit_apply(self):
+        early = datetime(2026, 7, 10, 13, 0, tzinfo=timezone.utc)  # 09:00 ET
+        assert "outside trading hours" in self.approve(manager(), now=early).veto
+        rm = manager(daily_trade_limit=1)
+        rm.record_entry(NOW - timedelta(hours=1))
+        assert "daily trade limit" in self.approve(rm).veto
+
+    def test_max_contracts_counts_existing_position(self):
+        rm = manager(max_contracts=5)
+        d = self.approve(rm, quantity=3, existing_quantity=3,
+                         is_new_position=False)
+        assert not d.approved and "max contracts" in d.veto
+
+    def test_scaling_into_held_position_skips_max_open_positions(self):
+        rm = manager(max_open_positions=1)
+        d = self.approve(rm, open_positions=1, is_new_position=False)
+        assert d.approved
+
+    def test_oversized_entry_is_allowed_with_advisory_note(self):
+        # 4 contracts * $2.50 premium = $1000 max risk >> 1% budget ($250):
+        # allowed — sizing discipline is the coach's job, not a hard block
+        d = self.approve(manager(), quantity=4)
+        assert d.approved and d.quantity == 4
+        assert "budget" in d.notes[0]
+
+    def test_invalid_inputs_vetoed(self):
+        assert "invalid quantity" in self.approve(manager(), quantity=0).veto
+        assert "no valid ask" in self.approve(manager(), premium=0.0).veto
+
+
 class TestCircuitBreaker:
     def test_daily_loss_halts_until_next_day(self):
         rm = manager()  # 3% of 25000 = 750

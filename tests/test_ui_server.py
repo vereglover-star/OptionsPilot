@@ -64,6 +64,8 @@ class TestScanAPI:
         assert len(s["positions"]) == 1
         pos = s["positions"][0]
         assert pos["underlying"] == "SPY" and pos["quantity"] >= 1
+        # chart position lines need underlying-space levels in the payload
+        assert pos["entry_spot"] > 0 and pos["stop"] > 0 and pos["target"] > 0
         assert s["signals"]["SPY"]["confidence"] > 25
         assert any(n["kind"] == "trade_opened" for n in s["notifications"])
         assert len(s["equity_history"]) == 1
@@ -264,6 +266,26 @@ class TestManualTradingAPI:
             "right": "call", "quantity": 2,
         }).json()
         assert r2["event"] == "filled"
+        assert client.get("/api/status").json()["positions"] == []
+
+    def test_market_buy_respects_risk_halt(self, client):
+        """Manual entries must not bypass the same circuit breaker used by AI.
+
+        This exercised a real gap: the order endpoint called OrderManager
+        directly, so a halted account could still open a manual position.
+        """
+        d = self.chain(client)
+        row = self.atm_call(d)
+        client.orch.risk.record_closed_trade(NOW - timedelta(minutes=1), -5_000.0)
+
+        r = client.post("/api/orders", json={
+            "kind": "market", "side": "buy_to_open", "symbol": "SPY",
+            "expiration": d["expiration"], "strike": row["strike"],
+            "right": "call", "quantity": 1,
+        })
+
+        assert r.status_code == 422
+        assert "trading halted" in r.json()["error"]
         assert client.get("/api/status").json()["positions"] == []
 
     def test_stop_loss_lifecycle_via_scan(self, client):

@@ -5,10 +5,14 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **V2-4 remaining scope** (if the user wants it next): three-panel
-      workspace layout, fib/rectangle/note drawing tools, position/order
-      lines drawn on the chart, multi-chart layouts. Core shipped
-      2026-07-16 — see `ROADMAP-V2.md` for the per-item status.
+- [x] **V2-4 drawing/overlay remainder** — done 2026-07-16: fib
+      retracement / zone rectangle / bar-note drawing tools, and
+      position/order lines drawn on the chart (entry/stop/target +
+      working-order trigger levels).
+- [ ] **V2-4 layout remainder** (only if the user wants it): the full
+      three-panel workspace layout (top bar / right sidebar / bottom
+      panel) and multi-chart layouts — a large UI restructuring, left as
+      an explicit user decision. See `ROADMAP-V2.md`.
 
 ## Deferred by user decision
 
@@ -31,14 +35,11 @@ is. This file is the flat, actionable checklist version.
 
 ## Medium Priority
 
-- [ ] Fix `pyproject.toml` `package-data`: add `"data_assets/*"` so a
-      `pip install` of a wheel/sdist ships the bundled symbol directory
-      (currently only works via the repo checkout or the PyInstaller build,
-      which explicitly `--add-data`s it).
-- [ ] Add `Pillow` to a `dev` (or new `assets`) extra in `pyproject.toml` —
-      `scripts/make_icon.py` needs it and it was installed ad hoc.
-- [ ] Add an inline comment for `engine.operating_mode` in `config.yaml`,
-      matching the documentation style already used for `trading_mode`.
+- [x] Fix `pyproject.toml` `package-data`: `"data_assets/*"` added
+      2026-07-16.
+- [x] Add `Pillow` to the `dev` extra in `pyproject.toml` — done 2026-07-16.
+- [x] Inline comment for `engine.operating_mode` in `config.yaml` — done
+      2026-07-16.
 - [ ] Decide on and implement stock/share (non-option) manual positions —
       deferred from V2-2. Touches `broker/orders.py`, `PaperBroker`, the
       Trade tab chain/ticket UI (currently options-only).
@@ -46,9 +47,19 @@ is. This file is the flat, actionable checklist version.
       (Playwright or similar) for the highest-value flows (mode toggle,
       manual order placement, coach review rendering) — there is currently
       zero regression coverage for `static/index.html` beyond static
-      ID-reference checking.
+      ID-reference checking. Groundwork exists: `playwright` was
+      pip-installed ad hoc into `.venv` on 2026-07-17 (driving the system
+      Edge via `channel="msedge"`, no browser download) and used to
+      live-verify the Charts tab; the throwaway driver scripts are in the
+      session scratchpad, not the repo. Gotcha worth keeping: pace
+      scripted chart clicks ≥700ms apart or lightweight-charts coalesces
+      them as double-clicks.
 
 ## Low Priority
+
+- [ ] Serve a favicon (`/favicon.ico` currently 404s in the browser — the
+      only console error on an otherwise clean page; `assets/optionspilot.ico`
+      already exists and could be routed).
 
 - [ ] V2-4 groundwork: evaluate bundling `lightweight-charts` (Apache-2.0)
       into `optionspilot/ui/static/` (no CDN — must work fully offline

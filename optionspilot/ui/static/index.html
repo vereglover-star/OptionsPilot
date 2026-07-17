@@ -401,8 +401,13 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
         <span class="draw-tools" id="ch-tools" aria-label="Drawing tools">
           <button data-tool="hline" title="Horizontal line: click a price level">─ Level</button>
           <button data-tool="trend" title="Trend line: click two points">╱ Trend</button>
+          <button data-tool="fib" title="Fib retracement: click swing start, then swing end">ƒ Fib</button>
+          <button data-tool="rect" title="Zone: click two opposite corners">▭ Zone</button>
+          <button data-tool="note" title="Note: click a bar, type text, Enter">✎ Note</button>
           <button data-tool="clear" title="Remove all drawings for this symbol">Clear</button>
         </span>
+        <input id="ch-note-text" placeholder="note text — Enter places, Esc cancels"
+               style="display:none; width:230px" maxlength="60" aria-label="Note text">
         <span style="margin-left:auto"></span>
         <button class="btn" id="ch-trade" title="Open this symbol in the Trade tab">Trade →</button>
         <button class="btn" id="ch-full" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
@@ -412,7 +417,8 @@ h3.sub { font-size:12px; color:var(--muted); margin:14px 0 8px; text-transform:u
       <div id="ch-rsi" class="subpane" style="display:none"></div>
       <div id="ch-macd" class="subpane" style="display:none"></div>
       <div class="chart-hint">Scroll to zoom · drag to pan · double-click the time axis to reset ·
-        drawings save per symbol · F toggles fullscreen</div>
+        drawings save per symbol · Esc cancels a tool · F toggles fullscreen ·
+        open positions and working orders show as labeled price lines</div>
     </div>
   </section>
 
@@ -720,6 +726,7 @@ document.addEventListener("keydown", e => {
   if (i >= 0) switchTab(TAB_KEYS[i]);
   if (e.key.toLowerCase() === "f" &&
       $("tab-charts").style.display !== "none") toggleChartFullscreen();
+  if (e.key === "Escape" && CH.tool) chSetTool(null);
 });
 
 /* ── live status ──────────────────────────────────────────────────────── */
@@ -1280,15 +1287,19 @@ const CH = {
   main: null, candle: null, volume: null, overlays: {},
   rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
   macdLine: null, macdSig: null,
-  data: null, timeIndex: null, tool: null, pendingPoint: null,
-  priceLines: [], trendSeries: [], loading: false,
+  data: null, timeIndex: null, tool: null, pendingPoint: null, pendingNote: null,
+  priceLines: [], trendSeries: [], fibLines: [], rectSeries: [],
+  tradeLines: [], loading: false,
 };
 const CH_COLORS = {
   up: "#00c46a", down: "#ff5252", grid: "#23262c", text: "#82868e",
   ema: ["#f7b32b", "#3d8bff", "#c084fc"], vwap: "#22d3ee",
   bb: "rgba(148,163,184,.55)", volUp: "rgba(0,196,106,.35)",
   volDn: "rgba(255,82,82,.35)", trend: "#f7b32b", hline: "#f7b32b",
+  fib: "#c084fc", rect: "#3d8bff", note: "#22d3ee",
+  entry: "#3d8bff", order: "#f7b32b",
 };
+const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
 const chOpts = extra => ({
   autoSize: true,
   layout: { background: { type: "solid", color: "transparent" },
@@ -1386,6 +1397,7 @@ async function loadChart(symbol) {
       color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
     chApplyIndicators();
     chRestoreDrawings();
+    chLoadTradeLines();
     CH.main.timeScale().fitContent();
     chLegend(null);
   } finally { CH.loading = false; }
@@ -1445,30 +1457,60 @@ function chLegend(param) {
   $("ch-legend").innerHTML = bits.map(b => `<span>${b}</span>`).join("");
 }
 
-/* drawings: horizontal levels persist per symbol; trend lines per symbol+tf */
+/* drawings: horizontal levels persist per symbol; trend lines, fibs,
+   zones and notes per symbol+tf */
 const chDrawKey = () => `chDraw:${CH.sym}`;
-const chLoadDraw = () => JSON.parse(localStorage.getItem(chDrawKey()) ||
-                                    '{"hlines":[],"trends":{}}');
+function chLoadDraw() {
+  const d = JSON.parse(localStorage.getItem(chDrawKey()) || "{}");
+  return { hlines: d.hlines || [], trends: d.trends || {}, fibs: d.fibs || {},
+           rects: d.rects || {}, notes: d.notes || {} };
+}
 const chSaveDraw = d => localStorage.setItem(chDrawKey(), JSON.stringify(d));
 
 function chRestoreDrawings() {
-  for (const pl of CH.priceLines) CH.candle.removePriceLine(pl);
-  for (const s of CH.trendSeries) CH.main.removeSeries(s);
-  CH.priceLines = []; CH.trendSeries = [];
+  for (const pl of [...CH.priceLines, ...CH.fibLines])
+    CH.candle.removePriceLine(pl);
+  for (const s of [...CH.trendSeries, ...CH.rectSeries]) CH.main.removeSeries(s);
+  CH.priceLines = []; CH.trendSeries = []; CH.fibLines = []; CH.rectSeries = [];
   const d = chLoadDraw();
   for (const price of d.hlines) CH.priceLines.push(chMakeHline(price));
   for (const t of (d.trends[CH.tf] || [])) CH.trendSeries.push(chMakeTrend(t));
+  for (const f of (d.fibs[CH.tf] || [])) chMakeFib(f);
+  for (const z of (d.rects[CH.tf] || [])) chMakeRect(z);
+  chSetNotes(d.notes[CH.tf] || []);
 }
 
 const chMakeHline = price => CH.candle.createPriceLine({
   price, color: CH_COLORS.hline, lineWidth: 1,
   lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
 });
-function chMakeTrend(t) {
-  const s = CH.main.addLineSeries({ color: CH_COLORS.trend, lineWidth: 1,
+function chMakeSeg(t, color) {
+  const s = CH.main.addLineSeries({ color, lineWidth: 1,
     priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
   s.setData([{ time: t.t1, value: t.p1 }, { time: t.t2, value: t.p2 }]);
   return s;
+}
+const chMakeTrend = t => chMakeSeg(t, CH_COLORS.trend);
+function chMakeFib(f) {
+  // full-width retracement levels: 0 at the second click, 1 at the first
+  for (const r of FIB_RATIOS)
+    CH.fibLines.push(CH.candle.createPriceLine({
+      price: +(f.p2 + (f.p1 - f.p2) * r).toFixed(2), color: CH_COLORS.fib,
+      lineWidth: 1, lineStyle: LightweightCharts.LineStyle.SparseDotted,
+      axisLabelVisible: true, title: r.toFixed(3),
+    }));
+}
+function chMakeRect(z) {
+  // a zone: top and bottom edges spanning the two clicked bars
+  const [lo, hi] = z.p1 <= z.p2 ? [z.p1, z.p2] : [z.p2, z.p1];
+  CH.rectSeries.push(chMakeSeg({ t1: z.t1, p1: hi, t2: z.t2, p2: hi }, CH_COLORS.rect));
+  CH.rectSeries.push(chMakeSeg({ t1: z.t1, p1: lo, t2: z.t2, p2: lo }, CH_COLORS.rect));
+}
+function chSetNotes(notes) {
+  CH.candle.setMarkers([...notes]
+    .sort((a, b) => a.time - b.time)
+    .map(n => ({ time: n.time, position: "aboveBar", shape: "square",
+                 color: CH_COLORS.note, text: n.text })));
 }
 
 function chClick(param) {
@@ -1481,28 +1523,88 @@ function chClick(param) {
     chSaveDraw(d);
     CH.priceLines.push(chMakeHline(+price.toFixed(2)));
     chSetTool(null);
-  } else if (CH.tool === "trend") {
-    let time = param.time;
-    if (time === undefined)
-      time = CH.main.timeScale().coordinateToTime(param.point.x);
-    if (time === null || time === undefined) return;   // clicked outside data
-    if (!CH.pendingPoint) { CH.pendingPoint = { t1: time, p1: +price.toFixed(2) }; return; }
-    if (time === CH.pendingPoint.t1) return;      // need two distinct bars
-    const t = { ...CH.pendingPoint, t2: time, p2: +price.toFixed(2) };
-    if (t.t2 < t.t1) { [t.t1, t.t2] = [t.t2, t.t1]; [t.p1, t.p2] = [t.p2, t.p1]; }
-    (d.trends[CH.tf] = d.trends[CH.tf] || []).push(t);
-    chSaveDraw(d);
-    CH.trendSeries.push(chMakeTrend(t));
-    CH.pendingPoint = null;
-    chSetTool(null);
+    return;
   }
+  let time = param.time;
+  if (time === undefined)
+    time = CH.main.timeScale().coordinateToTime(param.point.x);
+  if (time === null || time === undefined) return;   // clicked outside data
+  if (CH.tool === "note") {
+    CH.pendingNote = { time };
+    const inp = $("ch-note-text");
+    inp.style.display = ""; inp.value = ""; inp.focus();
+    return;
+  }
+  // two-point tools: trend / fib / rect
+  if (!CH.pendingPoint) { CH.pendingPoint = { t1: time, p1: +price.toFixed(2) }; return; }
+  if (time === CH.pendingPoint.t1) return;      // need two distinct bars
+  const t = { ...CH.pendingPoint, t2: time, p2: +price.toFixed(2) };
+  if (CH.tool !== "fib" && t.t2 < t.t1)   // fib keeps click order (1 → 0)
+    { [t.t1, t.t2] = [t.t2, t.t1]; [t.p1, t.p2] = [t.p2, t.p1]; }
+  const bucket = { trend: d.trends, fib: d.fibs, rect: d.rects }[CH.tool];
+  (bucket[CH.tf] = bucket[CH.tf] || []).push(t);
+  chSaveDraw(d);
+  if (CH.tool === "trend") CH.trendSeries.push(chMakeTrend(t));
+  else if (CH.tool === "fib") chMakeFib(t);
+  else chMakeRect(t);
+  CH.pendingPoint = null;
+  chSetTool(null);
+}
+
+function chPlaceNote(text) {
+  const d = chLoadDraw();
+  (d.notes[CH.tf] = d.notes[CH.tf] || []).push({ time: CH.pendingNote.time, text });
+  chSaveDraw(d);
+  chSetNotes(d.notes[CH.tf]);
+  chCancelNote();
+  chSetTool(null);
+}
+function chCancelNote() {
+  CH.pendingNote = null;
+  $("ch-note-text").style.display = "none";
 }
 
 function chSetTool(tool) {
   CH.tool = tool; CH.pendingPoint = null;
+  if (tool !== "note") chCancelNote();
   document.querySelectorAll("#ch-tools button").forEach(b =>
     b.classList.toggle("active", b.dataset.tool === tool));
   $("ch-main").style.cursor = tool ? "crosshair" : "";
+}
+
+/* position/order lines: labeled price lines for the charted symbol's open
+   positions (entry/stop/target, underlying space) and working manual orders
+   (stop/take-profit/trailing levels; LIMIT orders are premium-space and are
+   deliberately not drawn on an underlying chart) */
+async function chLoadTradeLines() {
+  const seq = CH.tradeSeq = (CH.tradeSeq || 0) + 1;
+  for (const pl of CH.tradeLines) CH.candle.removePriceLine(pl);
+  CH.tradeLines = [];
+  const line = (price, color, title, style) => CH.tradeLines.push(
+    CH.candle.createPriceLine({ price, color, lineWidth: 1,
+      lineStyle: style ?? LightweightCharts.LineStyle.Solid,
+      axisLabelVisible: true, title }));
+  const dash = LightweightCharts.LineStyle.Dashed;
+  let st = lastStatus;
+  if (!st) {
+    try { st = await (await fetch("/api/status")).json(); } catch { st = null; }
+    if (seq !== CH.tradeSeq) return;   // superseded by a newer chart load
+  }
+  for (const p of (st?.positions || []).filter(p => p.underlying === CH.sym)) {
+    const tag = `${p.quantity}× ${p.strike}${p.right === "call" ? "C" : "P"}`;
+    if (p.entry_spot) line(p.entry_spot, CH_COLORS.entry, `entry ${tag}`);
+    if (p.stop) line(p.stop, CH_COLORS.down, `stop ${tag}`, dash);
+    if (p.target) line(p.target, CH_COLORS.up, `target ${tag}`, dash);
+  }
+  try {
+    const o = await (await fetch("/api/orders")).json();
+    if (seq !== CH.tradeSeq) return;
+    for (const w of (o.working || []).filter(w => w.underlying === CH.sym)) {
+      const lvl = w.trail_stop_at ?? w.stop_level;
+      if (lvl) line(lvl, CH_COLORS.order,
+                    `${w.kind.replace(/_/g, " ")} ${w.quantity}×`, dash);
+    }
+  } catch { /* orders endpoint unavailable — position lines still shown */ }
 }
 
 function chPaintControls() {
@@ -1537,6 +1639,15 @@ document.querySelectorAll("#ch-tools button").forEach(b => b.onclick = () => {
 });
 $("ch-symbol").addEventListener("keydown", e => {
   if (e.key === "Enter") { e.preventDefault(); loadChart($("ch-symbol").value.trim()); }
+});
+$("ch-note-text").addEventListener("keydown", e => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const text = $("ch-note-text").value.trim();
+    if (text && CH.pendingNote) chPlaceNote(text);
+    else chSetTool(null);
+  }
+  if (e.key === "Escape") chSetTool(null);
 });
 $("ch-full").onclick = toggleChartFullscreen;
 $("ch-trade").onclick = () => {

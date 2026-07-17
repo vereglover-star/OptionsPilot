@@ -261,7 +261,7 @@ so `/api/journal` and the Journal tab show AI and manual trades uniformly
 | Does the engine still scan? | Yes | Yes — same `DecisionEngine.evaluate()` call |
 | What happens on a tradeable signal | Auto-trades | One-time "advice only" notification (never repeated for the same bar) |
 | Who manages exits | `PositionManager` (AI stops/targets, `managed_by="ai"`) | `OrderManager` working orders the user places (`managed_by="manual"`) |
-| Risk limits (daily loss, position sizing, hours, etc.) | Fully enforced | Fully enforced (same `RiskManager`, same journal-based state rebuild) |
+| Risk limits (halt, hours, daily trade limit, max positions, cooldown, max contracts) | Fully enforced via `RiskManager.approve()` | Fully enforced via `RiskManager.approve_manual_entry()` — market buys preflighted in `UIServer.place_order`, delayed limit fills approved at trigger time by `OrderManager.evaluate`'s callback. The %-risk position sizing is advisory only for manual trades (oversizing is the coach's `oversized` tag to flag, not a hard block) |
 | Coached? | No (learning system tunes evidence weights instead) | Yes — every closed round trip gets a `TradeCoach` review |
 
 Switching `operating_mode` is instant (no restart) and does **not** close
@@ -286,10 +286,9 @@ Two config layers, by design:
    taken before any runtime overlay) lets mode switches restore exact yaml
    values when leaving `custom` mode.
 
-**Known minor gap**: `operating_mode` is a real, validated `EngineConfig`
-field and CAN be set directly in `config.yaml` (`engine: operating_mode:
-human`), but this isn't yet documented with an inline comment there the way
-`trading_mode` is. Low priority — see `TODO.md`.
+`operating_mode` is a real, validated `EngineConfig` field and CAN be set
+directly in `config.yaml` (`engine: operating_mode: human`) — documented
+with an inline comment there since 2026-07-16, matching `trading_mode`.
 
 ## APIs and endpoints (FastAPI, `optionspilot/ui/server.py`)
 
@@ -377,7 +376,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (335 tests as of this writing, all passing)
+# Tests (345 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -412,27 +411,19 @@ window instead of corrupting the shared account database.
 
 ## Known issues / technical debt
 
-1. `pyproject.toml`'s `package-data` only lists `ui/static/*` — it is
-   **missing `data_assets/*`** (the 12k-symbol CSV). This doesn't break the
-   PyInstaller build (`build_exe.ps1` explicitly passes
-   `--add-data optionspilot\data_assets;...`) or running from the repo
-   directly, but a `pip install` of a built wheel/sdist would ship without
-   the symbol directory. Fix: add `"data_assets/*"` to `package-data`.
-2. `Pillow` (used only by `scripts/make_icon.py`) is not declared in any
-   `pyproject.toml` extra — it was installed ad hoc. Low priority since the
-   icon is a generated, committed asset (`assets/optionspilot.ico`) that
-   rarely needs regenerating, but should be added to a `dev` extra for
-   reproducibility.
-3. `operating_mode` is not documented with an inline comment in
-   `config.yaml` the way `trading_mode` is, even though it's a real,
-   settable field. Cosmetic — the field works correctly either way.
+1. (resolved 2026-07-16) `pyproject.toml` `package-data` now includes
+   `data_assets/*`, so wheels/sdists ship the 12k-symbol CSV.
+2. (resolved 2026-07-16) `Pillow` is declared in the `dev` extra
+   (`scripts/make_icon.py` needs it).
+3. (resolved 2026-07-16) `operating_mode` now has an inline comment in
+   `config.yaml` matching `trading_mode`'s style.
 4. V2-2's roadmap line item "stock (share) positions" was explicitly
    deferred — the entire trading engine (chain, orders, coach) is
    options-only. Adding shares would need a new `OptionContract`-shaped
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (335 tests cover this
+   exercises the FastAPI layer via `TestClient` (345 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

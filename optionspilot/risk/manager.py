@@ -94,41 +94,14 @@ class RiskManager:
 
     def approve(self, plan: TradePlan, open_positions: int, now: datetime) -> RiskDecision:
         cfg = self._cfg
-        self._clear_expired_halt(now)
-
-        if self._halt_reason:
-            return self._veto(f"trading halted: {self._halt_reason}")
-
-        now_et = now.astimezone(ET)
-        if now_et.weekday() >= 5:
-            return self._veto("market closed (weekend)")
-        if not (cfg.trading_start <= now_et.time() < cfg.trading_end):
-            return self._veto(
-                f"outside trading hours ({now_et.time():%H:%M} ET, "
-                f"window {cfg.trading_start:%H:%M}-{cfg.trading_end:%H:%M})"
-            )
-
-        entries_today = sum(1 for t in self._entries
-                            if t.astimezone(ET).date() == now_et.date())
-        if entries_today >= cfg.daily_trade_limit:
-            return self._veto(f"daily trade limit reached ({cfg.daily_trade_limit})")
-
-        if open_positions >= cfg.max_open_positions:
-            return self._veto(f"max open positions reached ({cfg.max_open_positions})")
+        common_veto = self._entry_veto(open_positions, now)
+        if common_veto is not None:
+            return common_veto
 
         if plan.risk_reward < cfg.min_risk_reward:
             return self._veto(
                 f"risk/reward {plan.risk_reward:.2f} below minimum {cfg.min_risk_reward}"
             )
-
-        last_loss = next((t for t, pnl in reversed(self._closed) if pnl < 0), None)
-        if last_loss is not None:
-            elapsed = (now - last_loss).total_seconds() / 60
-            if elapsed < cfg.cooldown_minutes_after_loss:
-                return self._veto(
-                    f"cooldown after loss: {elapsed:.0f} of "
-                    f"{cfg.cooldown_minutes_after_loss} minutes elapsed"
-                )
 
         quantity, loss_per_contract, sizing_note = self._position_size(plan)
         if quantity < 1:
@@ -137,6 +110,54 @@ class RiskManager:
             )
         log.info("approved %s x%d (%s)", plan.contract.symbol, quantity, sizing_note)
         return RiskDecision(approved=True, quantity=quantity, notes=(sizing_note,))
+
+    def approve_manual_entry(
+        self,
+        quantity: int,
+        premium: float,
+        open_positions: int,
+        now: datetime,
+        *,
+        is_new_position: bool = True,
+        existing_quantity: int = 0,
+    ) -> RiskDecision:
+        """Apply the hard entry gates to a manual options order.
+
+        Manual entries pass through every non-negotiable gate the AI does
+        (halt, hours, daily trade limit, max positions, cooldown, max
+        contracts) — Human Mode never bypasses the circuit breaker.  The
+        engine's %-risk position sizing is deliberately NOT enforced here:
+        sizing a user-directed trade is the user's call, and oversizing is
+        the coach's job to flag (the `oversized` mistake tag), not the risk
+        manager's to block.  The %-risk budget is still computed and
+        surfaced as an advisory note.
+        """
+        cfg = self._cfg
+        common_veto = self._entry_veto(
+            open_positions, now, is_new_position=is_new_position,
+        )
+        if common_veto is not None:
+            return common_veto
+        if quantity < 1:
+            return self._veto(f"invalid quantity {quantity}")
+        if premium <= 0:
+            return self._veto("manual entry has no valid ask price")
+        total_quantity = existing_quantity + quantity
+        if total_quantity > cfg.max_contracts:
+            return self._veto(
+                f"max contracts exceeded ({total_quantity} > {cfg.max_contracts})"
+            )
+
+        risk_budget = self._equity * cfg.risk_per_trade_pct / 100
+        loss_per_contract = premium * 100
+        note = (f"manual entry: max premium risk {quantity * loss_per_contract:.2f} "
+                f"vs {cfg.risk_per_trade_pct}% budget {risk_budget:.2f}")
+        if quantity * loss_per_contract > risk_budget:
+            log.warning("manual entry exceeds the %% risk budget — allowed, "
+                        "left to the coach (%s)", note)
+        else:
+            log.info("approved manual entry x%d (%s)", quantity, note)
+        return RiskDecision(approved=True, quantity=quantity, notes=(note,))
 
     # ── internals ────────────────────────────────────────────────────────────
 
@@ -158,6 +179,43 @@ class RiskManager:
                 f"{self._equity:.2f}), est. loss/contract {loss_per_contract:.2f}, "
                 f"size {quantity} (max {cfg.max_contracts})")
         return quantity, loss_per_contract, note
+
+    def _entry_veto(
+        self, open_positions: int, now: datetime, *, is_new_position: bool = True,
+    ) -> RiskDecision | None:
+        """Shared entry gates for AI plans and manual option entries."""
+        cfg = self._cfg
+        self._clear_expired_halt(now)
+
+        if self._halt_reason:
+            return self._veto(f"trading halted: {self._halt_reason}")
+
+        now_et = now.astimezone(ET)
+        if now_et.weekday() >= 5:
+            return self._veto("market closed (weekend)")
+        if not (cfg.trading_start <= now_et.time() < cfg.trading_end):
+            return self._veto(
+                f"outside trading hours ({now_et.time():%H:%M} ET, "
+                f"window {cfg.trading_start:%H:%M}-{cfg.trading_end:%H:%M})"
+            )
+
+        entries_today = sum(1 for t in self._entries
+                            if t.astimezone(ET).date() == now_et.date())
+        if entries_today >= cfg.daily_trade_limit:
+            return self._veto(f"daily trade limit reached ({cfg.daily_trade_limit})")
+
+        if is_new_position and open_positions >= cfg.max_open_positions:
+            return self._veto(f"max open positions reached ({cfg.max_open_positions})")
+
+        last_loss = next((t for t, pnl in reversed(self._closed) if pnl < 0), None)
+        if last_loss is not None:
+            elapsed = (now - last_loss).total_seconds() / 60
+            if elapsed < cfg.cooldown_minutes_after_loss:
+                return self._veto(
+                    f"cooldown after loss: {elapsed:.0f} of "
+                    f"{cfg.cooldown_minutes_after_loss} minutes elapsed"
+                )
+        return None
 
     def _check_loss_breaches(self, ts: datetime) -> None:
         cfg = self._cfg

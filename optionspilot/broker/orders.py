@@ -242,6 +242,7 @@ class OrderManager:
         now: datetime,
         get_spot: Callable[[str], float | None],
         get_option_quote: Callable[[OptionContract], tuple[float, float]],
+        approve_entry: Callable[[WorkingOrder, float], str | None] | None = None,
     ) -> list[dict]:
         """Walk the working book against fresh quotes. Returns fill/expiry
         events. Callables may return None/(0,0) on data failure — the order
@@ -270,6 +271,12 @@ class OrderManager:
                 triggered = self._underlying_trigger(order, spot)
 
             if triggered:
+                if order.side == "buy_to_open" and approve_entry is not None:
+                    veto = approve_entry(order, ask)
+                    if veto:
+                        self._finish(order, OrderStatus.CANCELLED, f"rejected: {veto}")
+                        events.append({"event": "rejected", "order": order.to_dict()})
+                        continue
                 event = self._execute(order, now, spot=spot or 0.0,
                                       bid=bid, ask=ask)
                 if event is not None:

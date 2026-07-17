@@ -433,10 +433,20 @@ class Orchestrator:
                          if c.symbol == contract.symbol), None)
             return (live.bid, live.ask) if live is not None else (0.0, 0.0)
 
-        for event in self.orders.evaluate(now, get_spot, get_option_quote):
+        def approve_entry(order, ask: float) -> str | None:
+            decision = self.approve_manual_entry(
+                order.contract, order.quantity, now, premium=ask,
+            )
+            return decision.veto if not decision.approved else None
+
+        for event in self.orders.evaluate(
+            now, get_spot, get_option_quote, approve_entry=approve_entry,
+        ):
             summary.setdefault("orders", []).append(event)
             order = event["order"]
             if event["event"] == "filled":
+                if order["side"] == "buy_to_open":
+                    self.register_manual_entry(order["contract"], entry_ts=now)
                 self.notifier.notify(
                     "trade_opened" if order["side"] == "buy_to_open"
                     else "trade_closed",
@@ -452,10 +462,30 @@ class Orchestrator:
 
     # ── Human Mode: manual-trade reconciliation + coaching ───────────────────
 
-    def register_manual_entry(self, contract_symbol: str) -> None:
+    def approve_manual_entry(self, contract, quantity: int, now: datetime,
+                             premium: float | None = None):
+        """Risk preflight for every manual buy, including delayed limit fills."""
+        existing = next(
+            (p for p in self.broker.get_positions()
+             if p.contract.symbol == contract.symbol),
+            None,
+        )
+        return self.risk.approve_manual_entry(
+            quantity=quantity,
+            premium=premium if premium is not None and premium > 0 else contract.ask,
+            open_positions=len(self.broker.get_positions()),
+            now=now,
+            is_new_position=existing is None,
+            existing_quantity=existing.quantity if existing is not None else 0,
+        )
+
+    def register_manual_entry(self, contract_symbol: str,
+                              entry_ts: datetime | None = None) -> None:
         """Called right after an immediate (market) manual fill so the round
         trip is tracked even if it opens and closes between scan cycles.
         Context is captured on the next cycle while the position is open."""
+        if entry_ts is not None:
+            self.risk.record_entry(entry_ts)
         position = next(
             (p for p in self.broker.get_positions()
              if p.contract.symbol == contract_symbol and p.managed_by == "manual"),

@@ -89,6 +89,16 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   positions → min RR → loss cooldown → sizing.
 - Sizing: `equity · risk% / min(premium·100, |delta|·stop_distance·100·1.25)`,
   capped at `max_contracts`.
+- `approve_manual_entry(quantity, premium, open_positions, now, *,
+  is_new_position, existing_quantity)` — Human Mode entries share the same
+  hard gates (halt → weekday/hours → daily trade limit → max open positions,
+  skipped when scaling into a held contract → loss cooldown → max contracts
+  counting the existing position). The %-risk sizing is advisory only here
+  (computed into `notes`, never a veto) — oversizing a user-directed trade
+  is the coach's `oversized` tag to flag, not a hard block. Wired from
+  `UIServer.place_order` (immediate market buys, 422 on veto) and
+  `OrderManager.evaluate`'s `approve_entry` callback (delayed fills —
+  vetoed orders cancel with the veto text as the result).
 - Feeds: `record_entry(ts)`, `record_closed_trade(ts, pnl)`, `update_equity(eq, ts)`.
 - Circuit breaker: daily loss & loss streak → halted until next ET day; weekly
   loss → next ET Monday; max drawdown → `reset_halt()` (human) only.

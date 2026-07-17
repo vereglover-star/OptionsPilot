@@ -171,6 +171,7 @@ class UIServer:
                     "avg_price": round(p.avg_price, 2),
                     "mark": round(mark, 2),
                     "unrealized": round(p.unrealized_pnl(mark), 2),
+                    "entry_spot": round(p.entry_spot, 2),
                     "stop": p.stop_current,
                     "target": p.target,
                     "opened_at": p.opened_at.isoformat(),
@@ -305,6 +306,7 @@ class UIServer:
                     "expirations": expirations, "chain": rows}
 
     def place_order(self, payload: dict) -> dict:
+        from optionspilot.broker.base import BrokerError
         from optionspilot.broker.orders import OrderKind, TIF
         from optionspilot.core.models import OptionRight
 
@@ -330,6 +332,14 @@ class UIServer:
                 spot = provider.get_quote(symbol).last
             except Exception:  # noqa: BLE001 — spot is advisory for buys
                 spot = 0.0
+            if side == "buy_to_open" and kind is OrderKind.MARKET:
+                # immediate fills never reach OrderManager.evaluate()'s
+                # fill-time risk callback — preflight them here so manual
+                # entries can't bypass the circuit breaker / entry limits
+                decision = self.orch.approve_manual_entry(
+                    contract, quantity, utcnow(), premium=contract.ask)
+                if not decision.approved:
+                    raise BrokerError(decision.veto)
             order, event = self.orch.orders.place(
                 kind=kind, side=side, contract=contract, quantity=quantity,
                 ts=utcnow(), tif=tif,
@@ -341,8 +351,10 @@ class UIServer:
             )
             if (event and event["event"] == "filled"
                     and side == "buy_to_open"):
-                # track immediately so fast round trips still get coached
-                self.orch.register_manual_entry(contract.symbol)
+                # track immediately so fast round trips still get coached,
+                # and count the entry against the daily trade limit
+                self.orch.register_manual_entry(contract.symbol,
+                                                entry_ts=utcnow())
         return {"order": order.to_dict(),
                 "event": event["event"] if event else "working"}
 

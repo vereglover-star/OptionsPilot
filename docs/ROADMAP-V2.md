@@ -56,7 +56,7 @@ windowed (no console) build, app icon, shutdown audit.
 - [x] Mistake taxonomy + per-trade tags persisted in the journal
 - [x] Coaching profile: recurring mistakes, strengths/weaknesses, long-term stats
 
-### V2-4 — Chart workspace (TradingView-inspired) — CORE SHIPPED 2026-07-16
+### V2-4 — Chart workspace (TradingView-inspired) — SHIPPED except workspace layout
 - [x] Bundle lightweight-charts (Apache-2.0, vendored at
       `ui/static/lightweight-charts.js`, offline in the exe)
 - [ ] Workspace layout: top bar (ticker search, live price, market status,
@@ -64,14 +64,16 @@ windowed (no console) build, app icon, shutdown audit.
       positions, orders, account, AI analysis), bottom panel (history,
       journal, coaching, performance, strategy tester)
       *(deferred — the Charts tab has its own toolbar instead; the full
-      three-panel workspace remains open)*
+      three-panel workspace remains open, as do multi-chart layouts)*
 - [x] Chart: candles, volume, zoom/pan/crosshair + OHLC legend, five
       timeframes, indicator overlays (EMA×3/VWAP/Bollinger) and synced
-      RSI/MACD subpanes, fullscreen (F) *(position/order lines on the chart
-      still open; Supertrend overlay not exposed)*
-- [x] Drawing tools: horizontal levels (persist per symbol) and trend lines
-      (persist per symbol+timeframe), one-click clear
-      *(fib retracement / rectangle / note still open)*
+      RSI/MACD subpanes, fullscreen (F) *(Supertrend overlay not exposed)*
+- [x] Position/order lines on the chart (2026-07-16): labeled entry/stop/
+      target price lines per open position + underlying-level triggers of
+      working manual orders (LIMIT orders are premium-space, not drawn)
+- [x] Drawing tools: horizontal levels (persist per symbol); trend lines,
+      fib retracement, zone rectangles, and bar notes (persist per
+      symbol+timeframe); one-click clear; Esc cancels the active tool
 - [x] Trade-from-chart (opens the order ticket with the symbol prefilled;
       deep links from watchlist rows, dashboard meters, and position cards)
 

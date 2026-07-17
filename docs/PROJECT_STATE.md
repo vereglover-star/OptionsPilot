@@ -3,45 +3,32 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-16, after the V2-4-core session (interactive
-chart workspace shipped on top of the same-day performance/polish pass).
+**Last updated:** 2026-07-17, after the V2-4-finish session (drawing
+tools + trade lines on the chart, manual-entry risk gating completed,
+hygiene backlog cleared). The session's work was prepared as one commit —
+as always, trust `git log`, not this file, for whether it landed.
 
-## Verified facts about current state (checked this session)
+## Verified facts about current state (checked 2026-07-17)
 
-- **V2-3 is committed.** The commit includes the coach package, human-mode
-  orchestrator changes, new API endpoints, the frontend (AI/Human toggle,
-  Coach tab), both new test files, and the full doc set (`CLAUDE.md`,
-  `docs/AI_HANDOFF.md`, `docs/PROJECT_STATE.md`, `docs/TODO.md`,
-  `docs/CHANGELOG.md`). Run `git log --oneline -5` to see it.
-- Full test suite: **335 tests, 100% passing** (310 from V2-3 plus 25 new
-  ones covering the CachedProvider, analyzer memoization, parallel fetch,
-  and the non-blocking scan endpoint).
-- **Performance pass (2026-07-16, after the V2-3 commit) is done and
-  live-verified**: scan cycle 14.9s → 4.5s cold / ~0.1s warm (measured);
-  soak 4 cycles, warm 0.1s/cycle, −0.1MB heap growth, PASS. The UI was
-  redesigned (brokerage-style Trade tab, position cards, order-confirmation
-  modal, skeletons, keyboard shortcuts 1–8, non-blocking Scan with live
-  progress) and verified in a real browser against a scratch data dir —
-  every tab rendered, zero console errors. See `CHANGELOG.md` for the full
-  itemized list.
-- **The V2-3 frontend was live-verified in a real browser this session**,
-  against a scratch data directory (so the user's real paper account was
-  untouched). Verified: AI/Human toggle switches, persists to
-  `data/settings.json`, and survives page reload; Coach tab renders its
-  empty state; a full manual round trip (SPY call chain load → contract
-  select → market buy fill → sell-to-close fill) works through the Trade
-  tab; a scan cycle reconciles the closed manual trade into a coach review
-  (correct `no_stop` mistake tag, process score, verdict); the Coach tab
-  renders the review with working expandable detail rows; switching
-  `trading_mode` does not flip `operating_mode`; zero browser console
-  errors throughout. No bugs found — no code changes were needed.
-- **The exe was rebuilt with V2-3 and smoke-tested this session** (after
-  the user closed their running instance). `build_exe.ps1` backed up and
-  restored the app's real `data/` as designed. The packaged app was
-  smoke-tested in serve mode against a scratch data directory: AI→Human
-  toggle, SPY manual round trip via the Trade tab, scan cycle → coach
-  review rendered in the Coach tab with correct `no_stop` tag, zero
-  console errors. V2-3 has no remaining follow-ups.
+- Full test suite: **345 tests, 100% passing** (338 from the V2-4-core
+  commit, plus the endpoint-level halt test and the new `TestManualEntry`
+  suite in `tests/test_risk.py`). Static `$("id")` reference check clean.
+- **A `git status` printed "working tree clean" this session while
+  `git diff --stat` showed 13 dirty files** (the 2026-07-16 session's
+  uncommitted manual-risk-gating work). The output-capture trap in
+  `CLAUDE.md` applies to git too — cross-check `git status` with
+  `git diff --stat` before trusting either.
+- **V2-4-finish work live-verified 2026-07-17** in serve mode against
+  scratch data dirs, including a real headless-browser drive (Playwright
+  driving system Edge): fib/zone/note tools drawn, persisted across
+  reload, cleared; Esc disarm; entry + stop-loss price lines rendered on
+  the chart after a real manual buy + protective stop
+  (screenshot-confirmed); manual round trip → coach review; cooldown and
+  quantity vetoes surfaced as 422s through the real endpoint. Only
+  console error: the pre-existing missing `/favicon.ico` (now in TODO).
+- Earlier verified milestones (V2-3 frontend, performance pass, V2-3 exe
+  rebuild + smoke test) are recorded in `CHANGELOG.md` and the git log —
+  all committed and unchanged by this session.
 
 ## Completed (phases 1–8, the original v1 roadmap — see `docs/ROADMAP.md`)
 
@@ -134,38 +121,57 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-2026-07-16 shipped, in order: the V2-3 commit, the performance/polish pass
-(scan 14.9s → ~0.1s warm, brokerage-style UI, non-blocking scans, 335
-tests), and then **the core of V2-4**: a Charts tab built on vendored
-lightweight-charts (candles/volume, EMA/VWAP/Bollinger overlays, synced
-RSI/MACD subpanes, OHLC legend, five timeframes, fullscreen, horizontal
-levels + trend lines persisted in localStorage, trade-from-chart, deep
-links from watchlist/dashboard/positions), fed by a new `/api/candles`
-endpoint whose indicators come from the same `analysis/` code the engine
-trades with. 338 tests, live-verified in a browser. Deferred from V2-4:
-the full three-panel workspace layout, fib/rectangle/note drawing tools,
-position/order lines on the chart, and multi-chart layouts (see
-`ROADMAP-V2.md` annotations). **The exe still predates all of today's
-UI work** — rebuild + smoke test when the app is closed (user explicitly
-deprioritized this until feature-complete).
+2026-07-17 finished V2-4's tractable remainder and completed the
+manual-risk-gating work found uncommitted (and unwired) from 2026-07-16.
+The whole changeset ships as one commit:
+
+- **Chart trade lines**: `loadChart` draws labeled price lines for the
+  charted symbol — position entry (`entry_spot`, newly exposed in the
+  status payload), AI stop/target, and working manual orders'
+  underlying-level triggers (stop/take-profit/trailing; LIMIT orders are
+  premium-space and deliberately not drawn).
+- **Three new drawing tools**: Fib retracement, Zone rectangle, and bar
+  Notes (inline text input → chart marker) — persisted per
+  symbol+timeframe in localStorage like trend lines; Esc cancels an armed
+  tool; old stored drawings load unchanged.
+- **Manual-entry risk gating completed**: the 2026-07-16 session left
+  `RiskManager.approve_manual_entry` + `OrderManager.evaluate`'s
+  fill-time approval callback uncommitted AND unwired for immediate
+  market buys — `UIServer.place_order` now preflights them (422 + veto
+  text). The hard %-risk sizing veto was converted to an advisory note
+  (it blocked nearly all manual buys at default settings and broke a
+  committed test; sizing discipline is the coach's `oversized` tag's
+  job). New `TestManualEntry` suite in `tests/test_risk.py`.
+- **Hygiene cleared**: `pyproject.toml` ships `data_assets/*`, `Pillow`
+  in the `dev` extra, `operating_mode` documented inline in `config.yaml`.
+- **345 tests, 100% passing.** Static `$("id")` check clean.
+- **Live-verified 2026-07-17** in serve mode against scratch data dirs,
+  including a real headless-browser drive (Playwright + system Edge,
+  installed ad hoc into `.venv` — not a project dependency): fib/zone/
+  note drawn, persisted across reload, cleared; Esc disarm; entry +
+  stop-loss lines rendered on the chart after a real manual buy + stop
+  (screenshot-confirmed); manual round trip → coach review; cooldown and
+  qty-0 vetoes observed as 422s through the real endpoint. Only console
+  error: the pre-existing missing `/favicon.ico`.
+- Note for future browser driving: lightweight-charts coalesces clicks
+  faster than ~500ms as double-clicks — pace scripted two-point drawing
+  clicks ≥700ms apart.
+
+**The exe still predates all 2026-07-16/17 UI work** — rebuild + smoke
+test deliberately LAST (user's stated preference), when the app is closed.
 
 ## Next recommended task
 
-1. **Finish V2-4's remaining scope** if the user wants it (three-panel
-   workspace layout, more drawing tools, position/order lines on the
-   chart), OR move to V2-5 (replay) / V2-6 (journal dashboard), OR pause
-   to accumulate live paper-trading data — user's call.
-2. Eventually: rebuild + smoke-test the exe (user wants this LAST, once
-   feature-complete — do not prioritize it).
-3. Hygiene backlog unchanged (`pyproject.toml` package-data, Pillow extra,
-   `operating_mode` yaml comment) — see `TODO.md`.
+1. V2-5 (replay engine) or V2-6 (journal dashboard), or the V2-4
+   three-panel workspace layout, or pause to accumulate paper-trading
+   data — user's call.
+2. Eventually: rebuild + smoke-test the exe (LAST, once feature-complete).
 
 ## Current priorities
 
-1. The what-next scope decision (finish V2-4 extras / V2-5 / V2-6 / pause
+1. The what-next scope decision (V2-5 / V2-6 / workspace layout / pause
    and trade) — user's call.
-2. Exe rebuild deliberately LAST (user's stated preference: packaging only
-   after feature-complete).
+2. Exe rebuild deliberately LAST.
 
 ## Blockers
 
