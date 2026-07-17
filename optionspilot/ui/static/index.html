@@ -27,6 +27,9 @@
 }
 * { box-sizing:border-box; margin:0; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
+.skip { position:absolute; left:-9999px; top:8px; z-index:100; background:var(--accent);
+        color:#fff; padding:8px 14px; border-radius:var(--r-sm); font-size:var(--fs-md); }
+.skip:focus { left:8px; }
 html { scrollbar-color:var(--surface-3) var(--page); }
 body { background:var(--page); color:var(--ink); font-size:var(--fs-base); display:flex; min-height:100vh; }
 button { font-family:inherit; }
@@ -309,7 +312,9 @@ textarea.wl-input:focus { outline:none; border-color:var(--accent); }
 .wl-row:hover { background:var(--surface-2); }
 .wl-row.sel { background:var(--accent-soft); }
 .wl-row.dragging { opacity:.4; }
-.wl-row .drag { cursor:grab; color:var(--muted); width:16px; }
+.wl-row .drag { cursor:grab; color:var(--muted); width:16px; opacity:.5;
+                transition:opacity var(--t-fast), color var(--t-fast); }
+.wl-row:hover .drag { opacity:1; color:var(--ink-2); }
 .wl-row .pin { all:unset; cursor:pointer; width:20px; color:var(--muted); text-align:center; }
 .wl-row .pin.on { color:var(--warn); }
 .wl-row .sym { font-weight:700; width:60px; }
@@ -428,9 +433,10 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
 </style>
 </head>
 <body data-palette="#3987e5">
-<nav>
+<a class="skip" href="#tab-title">Skip to content</a>
+<nav aria-label="Main">
   <div class="logo"><span class="full">Options<b>Pilot</b></span><span class="mini">O<b>P</b></span></div>
-  <button data-tab="dashboard" class="active" title="Dashboard (1)">
+  <button data-tab="dashboard" class="active" aria-current="page" title="Dashboard (1)">
     <svg class="ic" viewBox="0 0 16 16"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1"/><rect x="9" y="9" width="5.5" height="5.5" rx="1"/></svg>
     <span class="lbl">Dashboard</span> <span class="kbd">1</span></button>
   <button data-tab="charts" title="Charts (2)">
@@ -841,7 +847,25 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
 </main>
 
 <div class="tooltip" id="tooltip"></div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
+
+<!-- keyboard shortcut reference (?) -->
+<div class="overlay" id="keys-overlay">
+  <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
+    <h3>Keyboard shortcuts</h3>
+    <div class="rows">
+      <div><span>Switch tabs</span><b>1 – 9</b></div>
+      <div><span>Chart fullscreen</span><b>F</b></div>
+      <div><span>Cancel drawing tool / close dialogs</span><b>Esc</b></div>
+      <div><span>Ticket: buy / sell side</span><b>B / S</b></div>
+      <div><span>Ticket: contracts up / down</span><b>+ / −</b></div>
+      <div><span>Ticket: review order</span><b>Enter</b></div>
+      <div><span>Watchlist: select all / remove</span><b>Ctrl+A / Del</b></div>
+      <div><span>This reference</span><b>?</b></div>
+    </div>
+    <div class="acts"><button class="btn" id="keys-close">Close</button></div>
+  </div>
+</div>
 
 <!-- order confirmation modal -->
 <div class="overlay" id="confirm-overlay">
@@ -894,6 +918,10 @@ function closeConfirm(result) {
 }
 $("confirm-ok").onclick = () => closeConfirm(true);
 $("confirm-cancel").onclick = () => closeConfirm(false);
+$("keys-close").onclick = () => $("keys-overlay").classList.remove("show");
+$("keys-overlay").onclick = e => {
+  if (e.target === $("keys-overlay")) $("keys-overlay").classList.remove("show");
+};
 $("confirm-overlay").onclick = e => { if (e.target === $("confirm-overlay")) closeConfirm(false); };
 document.addEventListener("keydown", e => {
   if (e.key === "Escape" && $("confirm-overlay").classList.contains("show")) closeConfirm(false);
@@ -903,8 +931,11 @@ document.addEventListener("keydown", e => {
 function switchTab(name) {
   const b = document.querySelector(`nav button[data-tab="${name}"]`);
   if (!b) return;
-  document.querySelectorAll("nav button").forEach(x => x.classList.remove("active"));
+  document.querySelectorAll("nav button").forEach(x => {
+    x.classList.remove("active"); x.removeAttribute("aria-current");
+  });
   b.classList.add("active");
+  b.setAttribute("aria-current", "page");
   document.querySelectorAll("main section").forEach(s => s.style.display = "none");
   const sec = $("tab-" + name);
   sec.style.display = "";
@@ -930,6 +961,8 @@ document.addEventListener("keydown", e => {
   if (i >= 0) switchTab(TAB_KEYS[i]);
   if (e.key.toLowerCase() === "f" &&
       $("tab-charts").style.display !== "none") toggleChartFullscreen();
+  if (e.key === "?") $("keys-overlay").classList.toggle("show");
+  if (e.key === "Escape") $("keys-overlay").classList.remove("show");
   if (e.key === "Escape" && CH.tool) chSetTool(null);
   // order-entry keys — active only with the Trade tab open, a contract
   // selected, and no modal showing
@@ -1202,9 +1235,9 @@ function renderJournalTable() {
     ? `${trades.length} trades` : `${idx.length} of ${trades.length} trades`;
   $("journal-table").innerHTML = idx.length === 0
     ? `<div class="empty">No trades match those filters.</div>`
-    : `<table><tr><th>Entry</th><th>Symbol</th><th>Dir</th><th class="num">Qty</th>
-       <th class="num">In</th><th class="num">Out</th><th class="num">P&L</th>
-       <th class="num">Conf</th><th>Exit reason</th></tr>` +
+    : `<table><tr><th scope="col">Entry</th><th scope="col">Symbol</th><th scope="col">Dir</th><th scope="col" class="num">Qty</th>
+       <th scope="col" class="num">In</th><th scope="col" class="num">Out</th><th scope="col" class="num">P&L</th>
+       <th scope="col" class="num">Conf</th><th scope="col">Exit reason</th></tr>` +
       idx.map(({ t, i }) => `<tr class="expandable" onclick="toggleReasons(${i})">
         <td>${new Date(t.entry_ts).toLocaleString()}</td><td>${t.symbol}</td>
         <td><span class="chip ${t.direction}">${t.direction}</span></td>
@@ -1275,8 +1308,8 @@ async function pollBacktest() {
       <div class="panel"><h2>Drawdown from peak (%)</h2>
         <svg class="chart" id="bt-dd" viewBox="0 0 960 200" preserveAspectRatio="none"></svg></div>
       <div class="panel"><h2>By exit reason</h2>
-        <table><tr><th>Exit</th><th class="num">Trades</th><th class="num">Win rate</th>
-        <th class="num">Total P&L</th></tr>
+        <table><tr><th scope="col">Exit</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Win rate</th>
+        <th scope="col" class="num">Total P&L</th></tr>
         ${Object.entries(byExit).sort((a, b) => b[1].n - a[1].n).map(([k, b]) =>
           `<tr><td>${esc(k)}</td><td class="num">${b.n}</td>
            <td class="num">${(b.wins / b.n * 100).toFixed(0)}%</td>
@@ -1284,8 +1317,8 @@ async function pollBacktest() {
         </table></div>
     </div>
     <div class="panel"><h2>Trades</h2>
-      <table><tr><th>Entry</th><th>Dir</th><th class="num">Qty</th><th class="num">P&L</th>
-      <th class="num">Conf</th><th>Exit</th></tr>
+      <table><tr><th scope="col">Entry</th><th scope="col">Dir</th><th scope="col" class="num">Qty</th><th scope="col" class="num">P&L</th>
+      <th scope="col" class="num">Conf</th><th scope="col">Exit</th></tr>
       ${r.trades.map(t => `<tr><td>${new Date(t.entry_ts).toLocaleString()}</td>
         <td><span class="chip ${t.direction}">${t.direction}</span></td>
         <td class="num">${t.quantity}</td><td class="num ${cls(t.pnl)}">${fmt$(t.pnl)}</td>
@@ -1315,17 +1348,17 @@ async function loadLearning() {
     return `<div class="wbar" title="${ratio >= 0 ? "boosted" : "damped"} vs default">
       <div class="mid"></div><div class="fill" style="${side}"></div></div>`;
   };
-  $("weights").innerHTML = `<table><tr><th>Evidence</th><th class="num">Default</th>
-    <th class="num">Learned</th><th style="width:120px">Shift</th>
-    <th class="num">Effective</th></tr>` +
+  $("weights").innerHTML = `<table><tr><th scope="col">Evidence</th><th scope="col" class="num">Default</th>
+    <th scope="col" class="num">Learned</th><th style="width:120px">Shift</th>
+    <th scope="col" class="num">Effective</th></tr>` +
     Object.entries(d.weights).map(([k, w]) => `<tr><td>${k}</td>
       <td class="num">${w.default.toFixed(2)}</td>
       <td class="num">${w.learned == null ? "—" : w.learned.toFixed(2)}</td>
       <td>${devBar(w)}</td>
       <td class="num"><b>${w.effective.toFixed(2)}</b></td></tr>`).join("") + "</table>";
   const slice = rows => rows.length === 0 ? `<div class="empty">No trades yet.</div>`
-    : `<table><tr><th>Slice</th><th class="num">Trades</th><th class="num">Win rate</th>
-       <th class="num">Expectancy</th></tr>` +
+    : `<table><tr><th scope="col">Slice</th><th scope="col" class="num">Trades</th><th scope="col" class="num">Win rate</th>
+       <th scope="col" class="num">Expectancy</th></tr>` +
       rows.map(s => `<tr><td>${esc(s.label)}</td><td class="num">${s.trades}</td>
         <td class="num">${(s.win_rate*100).toFixed(0)}%</td>
         <td class="num ${cls(s.expectancy)}">${fmt$(s.expectancy)}</td></tr>`).join("") + "</table>";
@@ -2174,9 +2207,9 @@ function renderChain(scrollToATM = false) {
     if (rows[i].strike <= tkChain.spot && tkChain.spot < rows[i + 1].strike)
       { markerAfter = i; break; }
   $("tk-chain").innerHTML = `<table>
-    <tr><th class="num">Strike</th><th class="num">Bid</th><th class="num">Ask</th>
-    <th class="num">Mid</th><th class="num">Delta</th><th class="num">IV</th>
-    <th class="num">OI</th><th class="num">Liq</th></tr>` +
+    <tr><th scope="col" class="num">Strike</th><th scope="col" class="num">Bid</th><th scope="col" class="num">Ask</th>
+    <th scope="col" class="num">Mid</th><th scope="col" class="num">Delta</th><th scope="col" class="num">IV</th>
+    <th scope="col" class="num">OI</th><th scope="col" class="num">Liq</th></tr>` +
     rows.map((r, i) => {
       const sel = tkSel && tkSel.strike === r.strike && tkSel.right === r.right;
       const marker = i === markerAfter
@@ -2444,8 +2477,8 @@ async function loadCoach() {
 
   $("coach-reviews").innerHTML = d.reviews.length === 0
     ? `<div class="empty">None yet.</div>`
-    : `<table><tr><th>Trade</th><th class="num">Score</th><th>Verdict</th>
-       <th>Setup</th><th>Summary</th></tr>` +
+    : `<table><tr><th scope="col">Trade</th><th scope="col" class="num">Score</th><th scope="col">Verdict</th>
+       <th scope="col">Setup</th><th scope="col">Summary</th></tr>` +
       d.reviews.map((r, i) => `
         <tr class="expandable" data-i="${i}"><td>${esc(r.trade_id)}</td>
           <td class="num" style="color:${r.score >= 70 ? "var(--good)" : r.score <= 40 ? "var(--bad)" : "var(--warn)"}"><b>${r.score}</b></td>
@@ -2475,8 +2508,8 @@ async function loadOrders() {
   const d = await (await fetch("/api/orders")).json();
   $("tk-working").innerHTML = d.working.length === 0
     ? `<div class="empty">None.</div>`
-    : `<table><tr><th>Kind</th><th>Contract</th><th class="num">Qty</th>
-       <th>TIF</th><th class="num">Trigger</th><th></th></tr>` +
+    : `<table><tr><th scope="col">Kind</th><th scope="col">Contract</th><th scope="col" class="num">Qty</th>
+       <th scope="col">TIF</th><th scope="col" class="num">Trigger</th><th scope="col"></th></tr>` +
       d.working.map(o => `<tr><td>${o.kind}</td><td>${o.contract}</td>
         <td class="num">${o.quantity}</td><td>${o.tif}</td>
         <td class="num">${o.limit_price ?? o.stop_level ?? o.trail_stop_at ?? "—"}</td>
@@ -2489,8 +2522,8 @@ async function loadOrders() {
   });
   $("tk-history").innerHTML = d.history.length === 0
     ? `<div class="empty">None yet.</div>`
-    : `<table><tr><th>Kind</th><th>Contract</th><th class="num">Qty</th>
-       <th>Status</th><th>Result</th></tr>` +
+    : `<table><tr><th scope="col">Kind</th><th scope="col">Contract</th><th scope="col" class="num">Qty</th>
+       <th scope="col">Status</th><th scope="col">Result</th></tr>` +
       d.history.slice(0, 12).map(o => `<tr><td>${o.kind}</td><td>${o.contract}</td>
         <td class="num">${o.quantity}</td><td>${o.status}</td>
         <td>${esc(o.result)}</td></tr>`).join("") + "</table>";

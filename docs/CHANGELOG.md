@@ -4,7 +4,28 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-5: analytics presentation — Coach, Journal, Backtest, Learning
+## [Uncommitted] 2026-07-17 — V3-6: accessibility & discoverability — skip link, live regions, ? overlay
+
+*351 tests (unchanged — markup/CSS/small JS only).*
+
+- **Skip-to-content link** (first focusable element, visible on focus).
+- **Toast messages are now a polite live region** (`role="status"
+  aria-live="polite"`) — order fills, rejections, and mode switches get
+  announced to screen readers instead of appearing silently.
+- **All 51 table headers** across every screen now carry `scope="col"`.
+- **`aria-current="page"`** tracks the active nav tab (statically for the
+  initial Dashboard state, dynamically on every switch).
+- **`?` shortcut-reference overlay**: every keyboard affordance in the
+  app (tabs, chart, order entry, watchlist) on one card; Esc or a click
+  outside closes it.
+- **Watchlist drag-handle affordance**: the ≡ handle now brightens on
+  row hover instead of sitting permanently faint — the row's
+  drag-to-reorder capability is visible before reading the caption.
+- **Verified** in a real browser: ?-overlay open/close, aria-current
+  follows tab switches, toast live-region and skip link present in the
+  DOM; full suite + browser smoke check, zero console errors.
+
+## 2026-07-17 — V3-5: analytics presentation — Coach, Journal, Backtest, Learning
 
 *351 tests (unchanged — all four are frontend presentation over existing
 endpoints; every new chart/branch is derived client-side).*
