@@ -7,6 +7,7 @@ backtests never re-download the same bars. Keyed by (symbol, timeframe, ts).
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -28,12 +29,22 @@ CREATE TABLE IF NOT EXISTS candles (
 
 
 class CandleCache:
+    """Thread-safe: in the live app, candle fetches run on ThreadPoolExecutor
+    workers (parallel scans) and FastAPI threadpool threads (/api/candles),
+    while the connection is created on the main thread. sqlite3's default
+    `check_same_thread=True` made every cross-thread store/load raise
+    ProgrammingError — swallowed by callers' best-effort excepts, silently
+    disabling the disk cache in exactly the (threaded) mode that ships.
+    A single connection guarded by a lock keeps access serialized."""
+
     def __init__(self, db_path: str | Path):
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path))
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(_SCHEMA)
-        self._conn.commit()
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
+        with self._lock:
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(_SCHEMA)
+            self._conn.commit()
 
     def store(self, symbol: str, timeframe: Timeframe, candles: pd.DataFrame) -> int:
         """Upsert candles; returns number of rows written."""
@@ -45,10 +56,11 @@ class CandleCache:
              r.open, r.high, r.low, r.close, r.volume)
             for ts, r in zip(candles.index, candles.itertuples(index=False))
         ]
-        self._conn.executemany(
-            "INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?)", rows
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO candles VALUES (?,?,?,?,?,?,?,?)", rows
+            )
+            self._conn.commit()
         return len(rows)
 
     def load(
@@ -59,13 +71,14 @@ class CandleCache:
         end: datetime,
     ) -> pd.DataFrame:
         """Cached candles in [start, end), canonical shape."""
-        cur = self._conn.execute(
-            "SELECT ts, open, high, low, close, volume FROM candles "
-            "WHERE symbol=? AND timeframe=? AND ts>=? AND ts<? ORDER BY ts",
-            (symbol.upper(), timeframe.minutes,
-             int(start.timestamp()), int(end.timestamp())),
-        )
-        rows = cur.fetchall()
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT ts, open, high, low, close, volume FROM candles "
+                "WHERE symbol=? AND timeframe=? AND ts>=? AND ts<? ORDER BY ts",
+                (symbol.upper(), timeframe.minutes,
+                 int(start.timestamp()), int(end.timestamp())),
+            )
+            rows = cur.fetchall()
         if not rows:
             return validate_candles(pd.DataFrame())
         df = pd.DataFrame(rows, columns=["ts", *CANDLE_COLUMNS])
@@ -74,11 +87,12 @@ class CandleCache:
 
     def coverage(self, symbol: str, timeframe: Timeframe) -> tuple[datetime, datetime] | None:
         """(first, last) cached bar time, or None if nothing cached."""
-        cur = self._conn.execute(
-            "SELECT MIN(ts), MAX(ts) FROM candles WHERE symbol=? AND timeframe=?",
-            (symbol.upper(), timeframe.minutes),
-        )
-        lo, hi = cur.fetchone()
+        with self._lock:
+            cur = self._conn.execute(
+                "SELECT MIN(ts), MAX(ts) FROM candles WHERE symbol=? AND timeframe=?",
+                (symbol.upper(), timeframe.minutes),
+            )
+            lo, hi = cur.fetchone()
         if lo is None:
             return None
         return (
@@ -87,7 +101,8 @@ class CandleCache:
         )
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> "CandleCache":
         return self

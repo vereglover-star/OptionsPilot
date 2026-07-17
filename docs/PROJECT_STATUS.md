@@ -51,6 +51,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3-4 — Settings redesign | Grouped searchable config cards replace the JSON dump; live-trading flags visibly locked | Committed on `v3-ui`, browser-verified |
 | V3-5 — Analytics presentation | Coach first-run explainer, journal filters + cumulative P&L curve, backtest drawdown/exit-reason panels, learning weight-shift bars | Committed on `v3-ui`, real backtest run |
 | V3-6 — Accessibility | Skip link, toast live region, `scope="col"` on all 51 headers, `aria-current`, `?` shortcut overlay | Committed on `v3-ui`, browser-verified |
+| V3-7 — Pre-merge audit fixes | `CandleCache` thread-safety (the disk cache silently never worked in the threaded live app), chart auto-retry for failed first loads, `?`-overlay order-key guard | Committed on `v3-ui`, each fix individually verified |
 
 ## Features complete
 
@@ -108,7 +109,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**351 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**352 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check) and `scripts/browser_check.py` (headless browser, every tab, zero
 console errors) both run automatically via `scripts/verify.ps1` — neither
@@ -117,7 +118,7 @@ is deep per-flow regression coverage (see `TODO.md`).
 ## Last verified date
 
 **2026-07-17** (V3 session) — `.\scripts\verify.ps1` end to end: full
-pytest run (351/351), static `$("id")` reference check, documentation
+pytest run (352/352), static `$("id")` reference check, documentation
 consistency check, `pip check`, and a headless-browser smoke check across
 all 9 tabs (Playwright + system Edge) with zero console errors — plus
 scenario-level Playwright verification per V3 milestone (chart failure

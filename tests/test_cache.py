@@ -50,3 +50,33 @@ def test_coverage(tmp_path):
         cache.store("SPY", Timeframe.M5, df)
         lo, hi = cache.coverage("SPY", Timeframe.M5)
         assert lo == dt(14, 30) and hi == dt(14, 40)
+
+
+def test_usable_from_other_threads(tmp_path):
+    """The live app stores/loads from ThreadPoolExecutor workers and FastAPI
+    threadpool threads while the connection is created on the main thread.
+    sqlite3's default check_same_thread=True made every cross-thread call
+    raise ProgrammingError — swallowed by callers' best-effort excepts,
+    silently disabling the disk cache (and the Charts tab's stale fallback)
+    in exactly the threaded mode that ships. Regression test: real work
+    from a worker thread must succeed, not raise."""
+    import threading
+
+    df = make_candles([100, 101, 102], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        errors = []
+
+        def worker():
+            try:
+                cache.store("SPY", Timeframe.M5, df)
+                out = cache.load("SPY", Timeframe.M5, dt(0), dt(23))
+                assert len(out) == 3
+            except Exception as exc:  # noqa: BLE001 — the assertion under test
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []

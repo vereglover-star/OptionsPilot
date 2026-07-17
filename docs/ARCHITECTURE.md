@@ -143,7 +143,14 @@ orchestrator exposes for exactly that purpose (see `register_manual_entry`,
   the real provider — timeframe-aware candle TTLs, short quote/chain/expiration
   memos, in-flight request dedup, SQLite write-through for warm restarts. This is
   why a manual "Scan now" right after a cycle completes in ~0.1s.
-- `CandleCache`: SQLite-backed cache so backtests and repeated scans don't re-download.
+- `CandleCache`: SQLite-backed cache so backtests and repeated scans don't
+  re-download. Thread-safe (single locked connection,
+  `check_same_thread=False`) because in serve/desktop mode every candle
+  fetch runs on a ThreadPoolExecutor worker or FastAPI threadpool thread —
+  see `CHANGELOG.md` V3-7 for the bug this fixed. Since V3-0 it also backs
+  `CachedProvider.get_candles_stale_ok()`, the Charts tab's display-only
+  fallback (any-age disk bars, flagged stale) when the live fetch fails;
+  the strict `get_candles` path the engine uses never serves stale data.
 - `symbols.py` + bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers):
   offline ticker validation and autocomplete search for the watchlist manager.
 - `presets.py`: static preset watchlists (Magnificent 7, S&P 500 Leaders, etc.).
@@ -443,6 +450,15 @@ The Charts tab (V2-4) is built on vendored `lightweight-charts`:
 - Trade-from-chart: deep links from watchlist rows, dashboard meters, and position
   cards open the chart; "Trade →" jumps to the order ticket with the symbol loaded.
 - Fullscreen (F key).
+- **Reliability layer (V3-0/V3-7)**: the canvas is never silently blank.
+  Every load carries a generation number (newest wins — rapid symbol/
+  timeframe switches can't interleave or be dropped); first paint shows a
+  loading overlay, failures show an error overlay with Retry, and if the
+  backend served stale disk bars (`stale`/`as_of` in the `/api/candles`
+  payload) a warning banner names the last bar's date. A visible chart
+  refreshes every 30s preserving zoom (`fitContent` only on symbol/
+  timeframe change); the same timer auto-retries a chart stuck on the
+  error overlay.
 
 ### 11.2 WebSockets
 
@@ -463,7 +479,9 @@ Two settings surfaces, matching the two config layers (§13):
   %, max trades/day, max contracts, min risk/reward, daily loss limit, confidence
   bar). Values are validated identically to `config.yaml`; switching back to
   conservative/high-risk restores the yaml values exactly via the `baseline`
-  snapshot.
+  snapshot. Below it, the effective structural config renders as grouped,
+  searchable read-only cards (V3-4) — one per section with a plain-English
+  note, booleans as ✓/–, and the live-trading gate flags shown locked.
 - **Header segmented controls**: `operating_mode` (AI/Human) and `trading_mode`
   toggles, both instant, no restart, both persisted to `data/settings.json`.
 

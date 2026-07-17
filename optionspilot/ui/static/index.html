@@ -965,9 +965,11 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") $("keys-overlay").classList.remove("show");
   if (e.key === "Escape" && CH.tool) chSetTool(null);
   // order-entry keys — active only with the Trade tab open, a contract
-  // selected, and no modal showing
+  // selected, and no modal/overlay showing (Enter must never submit an
+  // order from behind the shortcut-reference card)
   if ($("tab-trade").style.display !== "none" && tkSel &&
-      !$("confirm-overlay").classList.contains("show")) {
+      !$("confirm-overlay").classList.contains("show") &&
+      !$("keys-overlay").classList.contains("show")) {
     const k = e.key.toLowerCase();
     if (k === "b") setSide("buy_to_open");
     else if (k === "s") setSide("sell_to_close");
@@ -1866,10 +1868,13 @@ async function loadChart(symbol) {
 }
 
 /* keep a visible chart current: refresh on a cadence matched to the
-   backend's candle TTLs, but only while the Charts tab is on screen */
+   backend's candle TTLs, but only while the Charts tab is on screen.
+   Gated on chInit having run (CH.main) rather than on data ever having
+   loaded — so a chart stuck on the first-load error overlay auto-retries
+   too, instead of only recovering via the manual Retry button. */
 const CH_REFRESH_MS = 30000;
 setInterval(() => {
-  if (document.hidden || CH.dataKey === null) return;
+  if (document.hidden || !CH.main) return;
   if ($("tab-charts").style.display === "none") return;
   loadChart();
 }, CH_REFRESH_MS);

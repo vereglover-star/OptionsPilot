@@ -119,7 +119,7 @@ drift the way a `docs/` file might.
 
 - `pytest`, one test file per module (`broker/orders.py` ↔
   `tests/test_orders.py`), `class Test<Thing>` / `def test_<behavior>`.
-- 351 tests as of 2026-07-17, all passing, ~13s to run the full suite.
+- 352 tests as of 2026-07-17, all passing, ~13s to run the full suite.
 - New backend code needs new tests in the matching file. Boundary
   conditions get explicit tests for anything touching money/positions/risk
   (empty positions, zero quantities, missing quotes, restart-persistence) —

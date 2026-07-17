@@ -38,13 +38,21 @@ browser → committed separately:
    learning weight-shift bars.
 7. **V3-6 `79138da` — accessibility.** Skip link, toast live region,
    `scope="col"` everywhere, `aria-current`, `?` shortcut overlay.
+8. **V3-7 — pre-merge audit fixes.** A full senior-review pass over the
+   branch found and fixed three real issues: `CandleCache` was unusable
+   from worker threads (`check_same_thread` — the disk cache silently
+   never worked in the live app, and V3-0's stale fallback would have
+   returned empty in production; fixed with a locked shared connection +
+   threading regression test), the chart's 30s timer never auto-retried a
+   failed *first* load, and Enter could submit an order from behind the
+   `?` overlay. Each fix browser- or thread-verified individually.
 
 The audit that scoped all of this is `ROADMAP-V3-UX.md` (committed with
 V3-0).
 
 ## What is currently stable?
 
-Everything on both branches. **351 tests pass** (+6 cached-provider tests
+Everything on both branches. **352 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
 added in V3-0). `scripts/verify.ps1` ran clean end-to-end as the closing
 action of the session, and every milestone additionally got scenario-level
 Playwright verification (chart failure states, the full order-ticket flow —

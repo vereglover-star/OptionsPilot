@@ -4,7 +4,40 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-6: accessibility & discoverability — skip link, live regions, ? overlay
+## [Uncommitted] 2026-07-17 — V3-7: pre-merge audit — cache threading bug, chart auto-retry, key guard
+
+*352 tests (+1). A senior-review pass over the whole `v3-ui` changeset
+before merging to `main`, which found and fixed three real issues:*
+
+- **`CandleCache` was unusable from worker threads — the disk candle
+  cache silently never worked in the live app.** `sqlite3.connect()`
+  defaults to `check_same_thread=True`, and the connection is created on
+  the main thread — but every candle fetch in serve/desktop mode runs on
+  a ThreadPoolExecutor worker (parallel scans) or a FastAPI threadpool
+  thread (`/api/candles`). Every cross-thread `store`/`load` raised
+  `ProgrammingError`, which callers' best-effort `except` blocks
+  swallowed. Consequences: warm restarts always re-downloaded, and
+  V3-0's stale-chart fallback would have returned empty in production
+  (blank-chart error state instead of clearly-flagged stale bars).
+  Fixed with `check_same_thread=False` plus an explicit lock serializing
+  all connection use; proven with a before/after cross-thread script and
+  a new multi-threaded regression test (`test_usable_from_other_threads`),
+  plus an end-to-end reproduction of the production scenario (provider
+  built on main thread, dead network, stale fallback served correctly
+  from a worker thread). Pre-existing bug — exposed because the audit
+  traced V3-0's fallback path all the way down.
+- **Chart auto-retry never fired for a failed *first* load.** The 30s
+  refresh loop gated on "data has loaded at least once," so the exact
+  scenario V3-0 exists for (app opens, feed down, error overlay shown)
+  recovered only via the manual Retry button. The gate is now "chart
+  initialized," verified by watching the retry request fire from the
+  error state in a real browser.
+- **Enter could submit an order from behind the `?` shortcut overlay.**
+  The order-entry key guard checked only the confirm modal; it now also
+  suppresses B/S/+/−/Enter while the shortcut reference is open.
+  Browser-verified both ways.
+
+## 2026-07-17 — V3-6: accessibility & discoverability — skip link, live regions, ? overlay
 
 *351 tests (unchanged — markup/CSS/small JS only).*
 
