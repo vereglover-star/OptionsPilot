@@ -451,6 +451,14 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   border:2px solid transparent; box-sizing:border-box; }
 .ch-swatches i.sel { border-color:var(--ink); }
 .subpane { height:130px; margin-top:6px; border-top:1px solid var(--grid); }
+/* Trade-tab collapsible chart: hosts the one relocated chart workspace */
+.tk-chart-wrap { margin-bottom:14px; }
+.tk-chart-toggle { all:unset; cursor:pointer; display:flex; align-items:center; gap:8px;
+  font-size:var(--fs-md); font-weight:600; color:var(--ink); padding:8px 2px; }
+.tk-chart-toggle #tk-chart-caret { display:inline-block; transition:transform var(--t-fast);
+  color:var(--muted); }
+.tk-chart-toggle[aria-expanded="true"] #tk-chart-caret { transform:rotate(90deg); }
+#tk-chart-slot { margin-top:6px; }
 .chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
   display:flex; flex-direction:column; }
 .chart-panel.fullscreen #ch-main { flex:1; height:auto; }
@@ -635,6 +643,14 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   <!-- TRADE (manual paper trading) -->
   <section id="tab-trade" style="display:none">
     <div class="cards" id="acct-cards"></div>
+    <div class="tk-chart-wrap">
+      <button class="tk-chart-toggle" id="tk-chart-toggle" aria-expanded="false"
+              aria-controls="tk-chart-slot">
+        <span id="tk-chart-caret">▸</span> Chart
+        <span class="hint" style="display:inline">— synced to the ticket symbol; drawings &amp; indicators shared with the Charts tab</span>
+      </button>
+      <div id="tk-chart-slot" style="display:none"></div>
+    </div>
     <div class="grid2">
       <div class="panel">
         <h2>Option chain</h2>
@@ -980,6 +996,9 @@ function switchTab(name) {
   });
   b.classList.add("active");
   b.setAttribute("aria-current", "page");
+  // keep the single chart instance parented to whichever tab will show it
+  // (the Trade slot only when its chart is expanded; the Charts tab otherwise)
+  if (!(name === "trade" && tkChartOpen)) chReparent(chHome());
   document.querySelectorAll("main section").forEach(s => s.style.display = "none");
   const sec = $("tab-" + name);
   sec.style.display = "";
@@ -1003,8 +1022,7 @@ document.addEventListener("keydown", e => {
   if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
   const i = "123456789".indexOf(e.key);
   if (i >= 0) switchTab(TAB_KEYS[i]);
-  if (e.key.toLowerCase() === "f" &&
-      $("tab-charts").style.display !== "none") toggleChartFullscreen();
+  if (e.key.toLowerCase() === "f" && chOnScreen()) toggleChartFullscreen();
   if (e.key === "?") $("keys-overlay").classList.toggle("show");
   if (e.key === "Escape") $("keys-overlay").classList.remove("show");
   if (e.key === "Escape" && CH.tool) chSetTool(null);
@@ -2112,7 +2130,7 @@ async function loadChart(symbol) {
 const CH_REFRESH_MS = 30000;
 setInterval(() => {
   if (document.hidden || !CH.main) return;
-  if ($("tab-charts").style.display === "none") return;
+  if (!chOnScreen()) return;      // Charts tab, or the Trade tab with its chart open
   loadChart();
 }, CH_REFRESH_MS);
 
@@ -2603,7 +2621,7 @@ $("ch-note-text").addEventListener("keydown", e => {
 });
 // keyboard: Delete removes the selected drawing, Escape deselects/cancels
 document.addEventListener("keydown", e => {
-  if ($("tab-charts").style.display === "none") return;
+  if (!chOnScreen()) return;
   const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || "");
   if (typing) return;
   if ((e.key === "Delete" || e.key === "Backspace") && DRAW.sel) {
@@ -2624,6 +2642,35 @@ $("ch-trade").onclick = () => {
 };
 function openChart(symbol) { switchTab("charts"); loadChart(symbol); }
 
+/* Trade-tab chart: the ONE chart instance is relocated between the Charts
+   workspace and the Trade page's collapsible slot. Because it is the same
+   instance, symbol / timeframe / drawings / indicators are shared for free. */
+let tkChartOpen = localStorage.getItem("tkChartOpen") === "1";
+const chHome = () => $("tab-charts");
+const chOnScreen = () => $("tab-charts").style.display !== "none" ||
+  ($("tab-trade").style.display !== "none" && tkChartOpen);
+function chReparent(target) {
+  const panel = $("chart-panel");
+  if (panel.parentElement !== target) target.appendChild(panel);
+  requestAnimationFrame(() => { if (CH.main) chDrawRender(); });   // autoSize + redraw
+}
+function tkChartApply() {
+  const onTrade = $("tab-trade").style.display !== "none";
+  $("tk-chart-toggle").setAttribute("aria-expanded", String(tkChartOpen));
+  $("tk-chart-slot").style.display = tkChartOpen ? "" : "none";
+  if (onTrade && tkChartOpen) {
+    chReparent($("tk-chart-slot"));
+    loadChart(($("tk-symbol").value || CH.sym).trim().toUpperCase());  // sync to ticket
+  }
+}
+function tkToggleChart() {
+  tkChartOpen = !tkChartOpen;
+  localStorage.setItem("tkChartOpen", tkChartOpen ? "1" : "0");
+  if (!tkChartOpen) chReparent(chHome());        // park the chart back home when hidden
+  tkChartApply();
+}
+$("tk-chart-toggle").onclick = tkToggleChart;
+
 /* ── manual trading (Trade tab) ───────────────────────────────────────── */
 let tkChain = null, tkSel = null, tkRight = "call", tkSide = "buy_to_open";
 const post = (url, body) => fetch(url, {method: "POST",
@@ -2633,6 +2680,7 @@ async function loadTrade() {
   await Promise.all([loadMetrics(), loadOrders()]);
   renderTkPositions();
   if (!tkChain) loadChain();
+  tkChartApply();
 }
 
 let lastMetrics = null;
@@ -2672,6 +2720,9 @@ async function loadChain() {
   renderExpPills();
   $("tk-spot").textContent = `${d.symbol} $${d.spot.toFixed(2)}`;
   renderChain(true);
+  // keep the Trade-tab chart on the ticket's symbol
+  if (tkChartOpen && $("tab-trade").style.display !== "none" && d.symbol !== CH.sym)
+    loadChart(d.symbol);
   if (!tkSel) hideTicket();   // placeholder gains the ATM quick-pick buttons
 }
 
