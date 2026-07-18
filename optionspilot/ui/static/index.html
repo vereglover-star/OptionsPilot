@@ -943,6 +943,19 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
+// tolerate a corrupt/hand-edited localStorage value instead of throwing at
+// script-eval (chInds) or mid-render (chart drawings) — a bad key resets to
+// the fallback rather than bricking the app or the chart for that symbol
+const safeParse = (key, fallback) => {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw == null ? fallback : JSON.parse(raw);
+  } catch (e) {
+    console.warn(`corrupt localStorage[${key}] reset to default`, e);
+    try { localStorage.removeItem(key); } catch {}
+    return fallback;
+  }
+};
 const fmt$ = v => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined,
                   {minimumFractionDigits:2, maximumFractionDigits:2});
 const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
@@ -1757,13 +1770,12 @@ $("wl-list").addEventListener("keydown", e => {
 const CH = {
   sym: localStorage.getItem("chSym") || "SPY",
   tf: localStorage.getItem("chTf") || "1d",
-  inds: JSON.parse(localStorage.getItem("chInds") || '{"ema":true,"vwap":false,"bb":false,"rsi":false,"macd":false}'),
+  inds: safeParse("chInds", {ema:true, vwap:false, bb:false, rsi:false, macd:false}),
   main: null, candle: null, volume: null, overlays: {},
   rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
   macdLine: null, macdSig: null,
   data: null, dataKey: null, timeIndex: null, tool: null,
   pendingPoint: null, pendingNote: null,
-  priceLines: [], trendSeries: [], fibLines: [], rectSeries: [],
   tradeLines: [], gen: 0, dataSig: "", cache: new Map(),
   viewport: null, historyLoading: false, historyExhausted: false,
   historyArmed: false, restoringViewport: false,
@@ -1891,10 +1903,19 @@ function chTailUpdate(prev, next) {
   for (let i = a.length; i < b.length; i++) tail.push(b[i]);  // freshly appended bars
   return tail.length ? tail : null;
 }
+// per-(symbol·tf) payload cache for instant revisits, bounded LRU so a long
+// session flipping through many symbols can't grow memory without limit —
+// each entry can hold a full candle payload (hundreds of KB after paging).
+// Map preserves insertion order; re-inserting on access makes it recency-ordered.
+const CH_CACHE_MAX = 24;
 const chCacheEntry = key => {
-  const existing = CH.cache.get(key) || {};
-  CH.cache.set(key, existing);
-  return existing;
+  const existing = CH.cache.get(key);
+  if (existing) { CH.cache.delete(key); CH.cache.set(key, existing); return existing; }
+  const entry = {};
+  CH.cache.set(key, entry);
+  while (CH.cache.size > CH_CACHE_MAX)
+    CH.cache.delete(CH.cache.keys().next().value);   // evict least-recently-used
+  return entry;
 };
 const chViewport = () => {
   if (!CH.main) return null;
@@ -2181,8 +2202,19 @@ const CH_REFRESH_MS = 30000;
 setInterval(() => {
   if (document.hidden || !CH.main) return;
   if (!chOnScreen()) return;      // Charts tab, or the Trade tab with its chart open
+  // never yank the chart out from under an in-progress interaction: a full
+  // re-render mid-drag or between the two clicks of a tool would move the
+  // bars under the cursor. The next tick (≤30s) refreshes once idle.
+  if (chDrag || CH.pendingPoint || CH.pendingNote || CH.historyLoading) return;
   loadChart();
 }, CH_REFRESH_MS);
+// after minimize/sleep/tab-away the interval was suppressed by document.hidden;
+// refresh promptly on return instead of waiting up to a full cadence
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !CH.main || !chOnScreen()) return;
+  if (chDrag || CH.pendingPoint || CH.pendingNote || CH.historyLoading) return;
+  loadChart();
+});
 
 const chSeriesData = name => {
   const vals = CH.data.indicators[name];
@@ -2279,8 +2311,7 @@ function chDrawMigrate(raw) {
   return items;
 }
 function chDrawLoadModel() {
-  DRAW = { items: chDrawMigrate(JSON.parse(localStorage.getItem(chDrawKey()) || "null")),
-           sel: null };
+  DRAW = { items: chDrawMigrate(safeParse(chDrawKey(), null)), sel: null };
 }
 const chDrawSave = () =>
   localStorage.setItem(chDrawKey(), JSON.stringify({ version: 2, items: DRAW.items }));
@@ -3145,10 +3176,13 @@ function connectWS() {
     const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://")
                              + location.host + "/ws");
     ws.onmessage = e => {
-      const d = JSON.parse(e.data);
+      let d;
+      try { d = JSON.parse(e.data); } catch { return; }  // ignore a malformed frame
       if (d.heartbeat) return;   // nothing changed — skip re-rendering entirely
       renderStatus(d);
     };
+    // reconnect on drop; the server resends a full payload on every new
+    // connection (its change-digest starts empty), so we catch up automatically
     ws.onclose = () => setTimeout(connectWS, 3000);
   } catch { setInterval(refresh, 3000); }
 }

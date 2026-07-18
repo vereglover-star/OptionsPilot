@@ -104,11 +104,11 @@ V3-0).
    (+4 tests — fails the ordinary suite if any dynamic third-party
    import isn't collected). Exe rebuilt and verified live: candles
    (daily + 5m) and a 231-contract chain served from the packaged app;
-   full browser flow sweep of the chart system green. **373 tests.**
+   full browser flow sweep of the chart system green. **374 tests.**
 
 ## What is currently stable?
 
-Everything on both branches. **373 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
+Everything on both branches. **374 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
 added in V3-0, +4 packaging-guard tests added 2026-07-18). `scripts/verify.ps1` ran clean end-to-end as the closing
 action of the session, and every milestone additionally got scenario-level
 Playwright verification (chart failure states, the full order-ticket flow —
@@ -151,7 +151,7 @@ run, the accessibility overlay).
 - `optionspilot/data/base.py` — `validate_candles` is now the single
   sanitization choke point (drops NaN/inf/≤0 OHLC, zeroes bad volume,
   logs); do not weaken it.
-- `scripts/chart_check.py` — the 19-check chart regression suite; run it
+- `scripts/chart_check.py` — the 21-check chart regression suite; run it
   (via `verify.ps1`) after any chart change.
 - `optionspilot/data/cached.py` — `EMPTY_CANDLE_TTL` and
   `get_candles_stale_ok()` are new; the strict `get_candles` contract is

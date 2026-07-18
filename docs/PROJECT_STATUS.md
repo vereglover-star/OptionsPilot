@@ -7,7 +7,7 @@ For "what do I do right now," see `NEXT_SESSION.md`.
 
 **Last verified:** 2026-07-18, V3.1 chart-stabilization sprint
 (`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 19-check
+consistency, `pip check`, a headless-browser smoke check, and the 21-check
 chart regression suite, all green — plus a 10-ticker × 13-timeframe data
 sweep (130/130) and a rebuilt exe with packaged charts confirmed; see
 `PROJECT_STATE.md`).
@@ -23,13 +23,16 @@ git history.
 
 ## Current phase
 
-**V3.1 chart-stabilization sprint complete, on branch `v3-ui` (V3-0 …
-V3-7 UI + the yfinance packaging fix + V3.1-1 … V3.1-7 chart sprint all
-committed, awaiting user approval/merge).** The V3.1 sprint made the
-charting system production-ready: chart-reliability root-cause fixes,
+**V3.1 RC1 (release candidate), on branch `v3-ui` — awaiting user
+approval/merge and market-hours validation.** The V3.1 sprint made the
+charting system production-ready (chart-reliability root-cause fixes,
 13 timeframes, infinite historical scroll, TradingView-style editable
-drawings, a synced Trade-tab chart, flicker-free live updates, and a
-19-check automated chart regression suite. Preceded by: **V2 rewrite,
+drawings, a synced Trade-tab chart, flicker-free live updates, a 19-check
+automated chart regression suite), and an RC1 polish pass then audited it
+for stability/performance: dead code removed, localStorage-corruption and
+WS-frame hardening, a bounded LRU payload cache, and refresh guards that
+never disrupt an in-progress interaction. No new features. Preceded by:
+**V2 rewrite,
 post-V2-4.** The original 8-phase v1 roadmap (foundation
 through hardening) is complete and stable. V2 layers a professional desktop
 trading-platform experience on top: watchlist management, a full manual
@@ -68,6 +71,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1-5 — Trade-tab chart | The one chart instance relocated into a collapsible Trade slot (symbol/tf/drawings/indicators shared), preference remembered | `edfe2bc`, 10-check browser sync green |
 | V3.1-6 — Live updates + perf | `chSig` includes last-bar OHLCV (forming candle no longer freezes); `series.update()` fast path for trailing bars (no flicker, no reflow) | `5e04506`, simulated intrabar tick, zero view jump |
 | V3.1-7 — Chart test suite | `scripts/chart_check.py` 19-check headless-browser regression suite wired into `verify.ps1`; 10 tickers × 13 timeframes = 130/130 | `2bcb84a`, 19/19 green |
+| V3.1 RC1 — Stabilization polish | Dead-code removal, `safeParse` localStorage-corruption guard, refresh-mid-interaction + wake refreshes, bounded LRU payload cache, WS frame-parse guard + reconnect-contract test; +2 chart_check checks (21) | Uncommitted, 21/21 browser + 374 tests green |
 
 ## Features complete
 
@@ -139,7 +143,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**373 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**374 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and
@@ -150,9 +154,9 @@ browser checks are still focused regressions, not exhaustive UI coverage
 ## Last verified date
 
 **2026-07-18** (V3.1 chart-stabilization sprint) — `.\scripts\verify.ps1`
-end to end: full pytest run (373/373), static `$("id")` reference check,
+end to end: full pytest run (374/374), static `$("id")` reference check,
 documentation consistency check, `pip check`, a headless-browser smoke
 check across all 9 tabs (Playwright + system Edge) with zero console
-errors, and the 19-check chart regression suite (`chart_check.py`) —
+errors, and the 21-check chart regression suite (`chart_check.py`) —
 plus a 10-ticker × 13-timeframe provider sweep (130/130 monotonic) and a
 rebuilt exe whose packaged charts/chains were confirmed serving live data.

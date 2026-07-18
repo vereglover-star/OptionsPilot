@@ -13,7 +13,7 @@ this file, for whether anything landed.
 
 ## Verified facts about current state (checked 2026-07-18)
 
-- Full test suite: **373 tests, 100% passing** (338 from the V2-4-core
+- Full test suite: **374 tests, 100% passing** (338 from the V2-4-core
   commit, plus the endpoint-level halt test and the new `TestManualEntry`
   suite in `tests/test_risk.py`). Static `$("id")` reference check clean.
 - **A `git status` printed "working tree clean" this session while
@@ -124,9 +124,28 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-18, V3.1 chart-stabilization sprint (branch `v3-ui`, committed
-`61a2c60`…`2bcb84a`).** A dedicated sprint that made the charting system
-the strongest part of the app. Seven milestones, each root-caused and
+**2026-07-18, V3.1 RC1 stabilization polish (branch `v3-ui`).** Treated
+the V3.1 charting work as Release Candidate 1 and ran a full
+code/stability/performance audit — no new features, no redesign, the
+chart architecture untouched. Findings fixed: removed four orphaned
+`CH.*Series/priceLines` arrays left dead by V3.1-4; hardened the two
+`JSON.parse(localStorage…)` sites behind a `safeParse` helper so a
+corrupt `chInds` (app-init) or drawings store (per-symbol render) resets
+to default instead of throwing; guarded the 30s auto-refresh so it never
+re-renders mid-drag / mid-tool-placement / mid-history-load; added a
+`visibilitychange` refresh so the chart isn't stale for up to a cadence
+after wake; bounded the previously-unbounded per-(symbol·tf) payload
+cache to a 24-entry LRU; and guarded the WebSocket frame parse. Expanded
+coverage: a WS-contract backend test (full-payload-on-connect →
+heartbeat, the basis of reconnect catch-up) and two `chart_check`
+checks (corrupt-localStorage recovery, LRU bound) → 21 browser checks,
+**374 tests**. No source TODO/FIXME/XXX; version consistent at 0.1.0.
+Remaining work is genuine market-hours validation (architecture verified
+capable) — see the RC1 checklist. **This RC1 pass is uncommitted pending
+`verify.ps1` green.**
+
+Before that, 2026-07-18, the V3.1 chart-stabilization sprint (committed
+`61a2c60`…`2bcb84a`) made the charting system the strongest part of the app. Seven milestones, each root-caused and
 browser-verified before commit: (1) chart reliability — the "some
 tickers fail / IWM only shows volume" bug traced to three causes
 (drawings driving the price scale, NaN volume 500-ing the endpoint,
@@ -143,7 +162,7 @@ correctness (the forming candle froze because `chSig` ignored intrabar
 changes) + a flicker-free `series.update()` fast path; (7) a 19-check
 headless-browser regression suite (`scripts/chart_check.py`) wired into
 `verify.ps1`. Verified: all 10 required tickers × 13 timeframes return
-monotonic real data (130/130); `chart_check` 19/19 green; **373 tests**.
+monotonic real data (130/130); `chart_check` 19/19 green; **374 tests**.
 The exe was rebuilt and the packaged charts confirmed working. The
 `v3-ui` merge decision remains the user's to make.
 
@@ -166,7 +185,7 @@ in `_internal`), packaged desktop app served 206 daily SPY candles, 624
 SMCI 5m candles, and a 231-contract chain live over HTTP; full
 browser-flow sweep of the chart system green (load, indicators,
 drawings, trade lines, stale banner, retry, 30s auto-refresh — zero
-console errors); `verify.ps1` green end-to-end; **373 tests**. One
+console errors); `verify.ps1` green end-to-end; **374 tests**. One
 pre-existing quirk found and documented (not fixed): `OptionsPilot.exe
 serve` from the windowed exe never binds its port (`TODO.md`). Committed
 as `61a2c60`; the V3.1 sprint above built on it.

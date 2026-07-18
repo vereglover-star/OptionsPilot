@@ -4,6 +4,52 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-18 — V3.1 RC1: stabilization & hardening polish
+
+*374 tests (+1). A release-candidate polish pass over the V3.1 chart work —
+no new features, no redesign. A full code/stability/performance audit,
+fixing only legitimate findings; the chart architecture is unchanged.*
+
+- **Dead code removed.** The four `CH.priceLines`/`trendSeries`/`fibLines`/
+  `rectSeries` arrays were orphaned when V3.1-4 moved drawings onto the
+  overlay canvas — declared but never referenced; removed. No source
+  TODO/FIXME/XXX markers exist, and every chart/trade function is called.
+- **localStorage corruption can't brick the app or the chart.** `chInds`
+  (parsed at script-eval) and per-symbol chart drawings (parsed mid-render)
+  went through bare `JSON.parse`; a corrupt/hand-edited value threw — the
+  first would fail app init, the second the chart for that symbol. A new
+  `safeParse` helper resets a bad key to its default and continues.
+- **Refreshes never yank the chart out from under an interaction.** The 30s
+  auto-refresh (and the new visibility refresh) now skip while a drawing is
+  being dragged, a two-click tool is mid-placement, a note is being typed,
+  or history is loading — a full re-render then would have moved the bars
+  under the cursor. It runs on the next idle tick.
+- **Prompt refresh on wake.** After minimize/sleep/tab-away (when
+  `document.hidden` suppressed the interval), a `visibilitychange` handler
+  refreshes the chart on return instead of waiting up to a full cadence.
+- **Bounded payload cache.** The per-(symbol·timeframe) payload cache was
+  unbounded — each entry can hold a full paged candle payload (hundreds of
+  KB), so a long session flipping through many symbols grew memory without
+  limit. It's now an LRU capped at 24 entries (a re-fetch on eviction, never
+  a correctness issue).
+- **WebSocket frame parse hardened.** `ws.onmessage`'s `JSON.parse` is now
+  guarded (a malformed frame is ignored, not thrown). Confirmed the server
+  resends a full payload on every new connection (its change-digest starts
+  empty), so a dropped-and-reconnected client catches up automatically — a
+  new backend test (`test_ws_sends_full_payload_then_heartbeats_when_idle`)
+  locks that contract in.
+- **Regression coverage expanded.** `chart_check.py` gains two checks
+  (corrupt-localStorage recovery, LRU cache bound) → 21 headless-browser
+  checks; the WS-contract backend test brings the suite to 374.
+
+Live market-hours items remaining (architecture verified capable; only real
+market data can confirm) are enumerated in the RC1 manual-validation
+checklist: forming-candle updates, new-bar creation, indicator recompute,
+price/stop/target line movement, and option-chain refresh cadence (the
+chain currently refreshes on demand — symbol change / Load / expiration /
+post-order — with no auto-refresh timer, a deliberate choice to revisit if
+market-hours use warrants it).
+
 ## 2026-07-18 — V3.1: chart-system stabilization sprint (`v3-ui`)
 
 *373 tests (+17). A dedicated sprint making the charting system

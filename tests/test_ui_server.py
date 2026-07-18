@@ -401,3 +401,16 @@ class TestWebSocket:
         with client.websocket_connect("/ws") as ws:
             msg = ws.receive_json()
             assert msg["paper"] is True and "account" in msg
+
+    def test_ws_sends_full_payload_then_heartbeats_when_idle(self, client):
+        # The client relies on this contract: every NEW connection gets a full
+        # payload first (so a reconnect after a drop catches up automatically —
+        # the digest starts empty), then tiny heartbeats while nothing changes
+        # (which the frontend skips re-rendering on). If a change ever makes the
+        # first frame a heartbeat, reconnecting clients would render stale data.
+        with client.websocket_connect("/ws") as ws:
+            first = ws.receive_json()
+            assert "account" in first and not first.get("heartbeat")
+            # nothing mutates in this test, so the next frame is a heartbeat
+            second = ws.receive_json()
+            assert second.get("heartbeat") is True and "account" not in second

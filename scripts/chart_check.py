@@ -286,6 +286,32 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(canvas_after == canvas_before and page.evaluate("() => !!CH.main"),
                   "one chart instance throughout (no per-switch canvas leak)")
 
+            # 17. corrupt localStorage must not brick the chart (safeParse) — a
+            #     garbage drawings store resets to empty instead of throwing
+            page.evaluate("() => { localStorage.setItem('chDraw:QQQ', '{not json'); "
+                          "localStorage.setItem('chInds', 'garbage'); }")
+            page.reload()
+            page.wait_for_selector("#hero", timeout=20000)
+            page.click('nav button[data-tab="charts"]')
+            try:
+                wait_loaded("QQQ", "1d")
+                recovered = not page.evaluate(
+                    "() => document.querySelector('#ch-overlay').classList.contains('show')")
+            except Exception:  # noqa: BLE001
+                recovered = False
+            check(recovered and page.evaluate("() => Array.isArray(DRAW.items)"),
+                  "corrupt localStorage recovers to a working chart (no brick)")
+
+            # 18. payload cache is bounded (LRU) — visiting many symbols can't
+            #     grow it without limit
+            for sym in ("SPY", "META", "IWM", "AAPL", "NVDA", "TSLA", "MSFT",
+                        "AMZN", "GOOGL", "QQQ"):
+                for tf in ("1d", "1h", "5m"):
+                    page.evaluate("([s, t]) => { CH.sym = s; CH.tf = t; }", [sym, tf])
+                    page.evaluate("() => chCacheEntry(chKey())")
+            check(page.evaluate("() => CH.cache.size <= CH_CACHE_MAX"),
+                  "payload cache is bounded (LRU eviction, no unbounded growth)")
+
             browser.close()
 
         if errors:
