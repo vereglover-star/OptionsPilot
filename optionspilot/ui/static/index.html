@@ -1855,12 +1855,20 @@ async function loadChart(symbol) {
   CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
   localStorage.setItem("chSym", CH.sym);
   localStorage.setItem("chTf", CH.tf);
-  CH.candle.setData(d.candles);
-  CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
-    color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
-  chApplyIndicators();
-  chRestoreDrawings();
-  chLoadTradeLines();
+  try {
+    CH.candle.setData(d.candles);
+    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
+      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
+    chApplyIndicators();
+    chRestoreDrawings();
+    chLoadTradeLines();
+  } catch (e) {
+    // a renderer exception must surface, never leave a half-painted canvas
+    console.error("chart render failed:", e);
+    CH.dataKey = null;                       // force a clean repaint on retry
+    chOverlay("error", `Chart renderer error: ${e.message}`);
+    return;
+  }
   if (firstPaint) CH.main.timeScale().fitContent();  // refresh keeps the zoom
   chOverlay(null);
   chStale(d.stale ? d.as_of : null);
@@ -1961,8 +1969,12 @@ const chMakeHline = price => CH.candle.createPriceLine({
   lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
 });
 function chMakeSeg(t, color) {
+  // autoscaleInfoProvider null: drawings must NEVER drive the price scale —
+  // one stored segment with a stray price otherwise stretches the axis and
+  // crushes the candles into an invisible line (the "only volume renders" bug)
   const s = CH.main.addLineSeries({ color, lineWidth: 1,
-    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null });
   s.setData([{ time: t.t1, value: t.p1 }, { time: t.t2, value: t.p2 }]);
   return s;
 }

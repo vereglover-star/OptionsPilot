@@ -126,6 +126,26 @@ class TestCandlesAPI:
         assert r.status_code == 502
         assert "unavailable" in r.json()["error"]
 
+    def test_malformed_provider_bars_never_500_the_endpoint(self, client):
+        # A provider that skips validate_candles (or a future regression in
+        # it) must not be able to 500 the chart: NaN volume serializes as 0,
+        # non-finite OHLC bars are excluded from the payload. Starlette uses
+        # allow_nan=False, so one rogue float otherwise kills the response
+        # during serialization — after the endpoint's try/except.
+        import numpy as np
+        df = client.provider._candles[Timeframe.M5]
+        df.iloc[-1, df.columns.get_loc("volume")] = np.nan
+        df.iloc[-2, df.columns.get_loc("high")] = np.inf
+        n = len(df)
+        r = client.get("/api/candles?symbol=SPY&tf=5m")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["candles"][-1]["volume"] == 0          # NaN volume -> 0
+        assert len(d["candles"]) == n - 1               # inf bar excluded
+        for bar in d["candles"]:
+            for k in ("open", "high", "low", "close"):
+                assert bar[k] == bar[k]                 # no NaN leaked
+
     def test_chart_lib_is_served(self, client):
         r = client.get("/static/lightweight-charts.js")
         assert r.status_code == 200

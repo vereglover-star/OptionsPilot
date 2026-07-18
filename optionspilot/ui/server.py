@@ -243,16 +243,25 @@ class UIServer:
             df, stale = stale_ok(symbol, tf, start, end)
         else:
             df, stale = self.orch.provider.get_candles(symbol, tf, start, end), False
+        # One sanitization choke point for everything derived below: candles
+        # AND indicator series. Providers validate their own output, but this
+        # endpoint must stay robust to any that don't — a single non-finite
+        # bar otherwise poisons computed indicators (inf VWAP from one inf
+        # high) and 500s the response during JSON serialization.
+        from optionspilot.data.base import validate_candles
+        df = validate_candles(df, context=f"/api/candles {symbol} {timeframe}")
         if df.empty:
             return {"symbol": symbol, "timeframe": timeframe, "candles": [],
                     "indicators": {}, "stale": False}
 
+        import math
         icfg = self.cfg.indicators
         close = df["close"]
         series: dict[str, list] = {}
 
         def col(name: str, s) -> None:
-            series[name] = [None if v != v else round(float(v), 4) for v in s]
+            series[name] = [round(float(v), 4) if math.isfinite(v) else None
+                            for v in s]
 
         if icfg.ema:
             for period in icfg.ema_periods[:3]:
@@ -273,12 +282,18 @@ class UIServer:
             col("macd_hist", m["macd_hist"])
 
         times = [int(ts.timestamp()) for ts in df.index]
+        # validate_candles() above already dropped non-finite bars; these
+        # guards are the last line of defense — one rogue float would 500 the
+        # whole endpoint during JSON serialization (allow_nan=False).
         candles = [
             {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
              "low": round(r.low, 4), "close": round(r.close, 4),
-             "volume": int(r.volume)}
+             "volume": int(r.volume) if math.isfinite(r.volume) else 0}
             for t, r in zip(times, df.itertuples(index=False))
+            if all(math.isfinite(v) for v in (r.open, r.high, r.low, r.close))
         ]
+        log.debug("candles %s %s: %d bars%s", symbol, timeframe, len(candles),
+                  " (stale)" if stale else "")
         return {"symbol": symbol, "timeframe": timeframe,
                 "candles": candles, "indicators": series, "stale": stale,
                 "as_of": times[-1] if stale else None}

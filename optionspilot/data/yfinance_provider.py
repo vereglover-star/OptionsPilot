@@ -77,7 +77,7 @@ class YFinanceProvider(MarketDataProvider):
         })
         if df.index.tz is None:  # daily bars come back tz-naive
             df.index = df.index.tz_localize("UTC")
-        df = validate_candles(df)
+        df = validate_candles(df, context=f"{symbol} {timeframe}")
         if timeframe is Timeframe.H4:
             df = _resample(df, "4h")
         return df
