@@ -48,6 +48,10 @@ if (-not $SkipBrowser) {
     if ($RequireBrowser) { $browserArgs += "--require" }
     & $python "$PSScriptRoot\browser_check.py" @browserArgs
     $results["Browser smoke check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: chart regression check"
+    & $python "$PSScriptRoot\chart_check.py" @browserArgs
+    $results["Chart regression check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan
