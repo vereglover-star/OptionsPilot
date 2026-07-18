@@ -433,6 +433,23 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   padding:3px 10px; box-shadow:var(--sh-1); pointer-events:none; }
 #ch-histpill.show { display:flex; }
 #ch-histpill .ch-spinner { width:11px; height:11px; border-width:2px; margin:0; }
+/* editable-drawing overlay: a canvas over the chart draws every drawing plus
+   selection handles; pointer-events stay off so the chart pans/zooms freely,
+   and drag is driven from #ch-main listeners that toggle the canvas on only
+   while a drawing is grabbed */
+#ch-draw { position:absolute; inset:0; z-index:5; pointer-events:none; }
+#ch-draw-bar { position:absolute; z-index:8; display:none; gap:4px; align-items:center;
+  padding:4px 6px; background:var(--panel); border:1px solid var(--grid);
+  border-radius:var(--r-sm); box-shadow:var(--sh-2); }
+#ch-draw-bar.show { display:flex; }
+#ch-draw-bar button { all:unset; cursor:pointer; padding:3px 6px; border-radius:5px;
+  font-size:var(--fs-sm); line-height:1; color:var(--muted); }
+#ch-draw-bar button:hover { background:var(--surface); color:var(--ink); }
+#ch-draw-bar button.on { color:var(--warn); }
+.ch-swatches { display:inline-flex; gap:3px; align-items:center; }
+.ch-swatches i { width:14px; height:14px; border-radius:50%; cursor:pointer;
+  border:2px solid transparent; box-sizing:border-box; }
+.ch-swatches i.sel { border-color:var(--ink); }
 .subpane { height:130px; margin-top:6px; border-top:1px solid var(--grid); }
 .chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
   display:flex; flex-direction:column; }
@@ -588,6 +605,16 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
       </div>
       <div class="chart-legend" id="ch-legend"></div>
       <div id="ch-main">
+        <canvas id="ch-draw" aria-hidden="true"></canvas>
+        <div id="ch-draw-bar" role="toolbar" aria-label="Edit drawing">
+          <span class="ch-swatches" id="ch-draw-colors"></span>
+          <button data-act="width" title="Line thickness">▁</button>
+          <button data-act="dup" title="Duplicate">⧉</button>
+          <button data-act="lock" title="Lock / unlock">🔓</button>
+          <button data-act="hide" title="Hide / show">👁</button>
+          <button data-act="rename" title="Rename note">✎</button>
+          <button data-act="del" title="Delete (Del)">🗑</button>
+        </div>
         <div id="ch-overlay" role="status" aria-live="polite">
           <div class="ch-spinner" id="ch-overlay-spin"></div>
           <div class="sym" id="ch-overlay-sym"></div>
@@ -1769,14 +1796,18 @@ function chInit() {
     if (!r) return;
     CH.viewport = chViewport();
     chRememberViewport(chKey());
+    chDrawRender();                 // drawings track the moving coordinate system
     chMaybeLoadHistory(r);
   });
-  $("ch-main").addEventListener("wheel", () => { CH.historyArmed = true; });
-  $("ch-main").addEventListener("pointerdown", () => { CH.historyArmed = true; });
-  $("ch-main").addEventListener("touchstart", () => { CH.historyArmed = true; },
-    { passive: true });
+  const host = $("ch-main");
+  host.addEventListener("wheel", () => { CH.historyArmed = true; });
+  host.addEventListener("touchstart", () => { CH.historyArmed = true; }, { passive: true });
+  // capture phase: a drawing grab can stop the event before the chart pans
+  host.addEventListener("pointerdown", e => { CH.historyArmed = true; chPointerDown(e); }, true);
+  host.addEventListener("pointermove", chPointerMove, true);
+  window.addEventListener("pointerup", chPointerUp, true);
+  new ResizeObserver(() => chDrawRender()).observe(host);
   CH.main.subscribeCrosshairMove(chLegend);
-  CH.main.subscribeClick(chClick);
 }
 
 function chInitPane(which) {
@@ -1845,7 +1876,8 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
     CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
       color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
     chApplyIndicators();
-    chRestoreDrawings();
+    if (chDrawModelSym !== CH.sym) { chDrawLoadModel(); chDrawModelSym = CH.sym; }
+    chDrawRender();
     chLoadTradeLines();
   } catch (e) {
     // a renderer exception must surface, never leave a half-painted canvas
@@ -2147,121 +2179,343 @@ function chLegend(param) {
 const tfLabel = tf => tf === "1mo" ? "1M"
   : tf.endsWith("m") ? tf : tf.toUpperCase();
 
+/* Editable drawing model. Each drawing is a first-class object:
+     {id, type: hline|trend|fib|rect|note, tf ("*" = every tf, for hlines),
+      points:[{time,price}], color, width, text, locked, hidden}
+   Stored per symbol in localStorage ({version:2, items:[...]}) and rendered
+   to the #ch-draw overlay canvas so any of them can be selected, dragged,
+   reshaped, recolored, locked, hidden, duplicated, renamed, or deleted. */
+const CH_PALETTE = ["#f7b32b", "#3d8bff", "#c084fc", "#22d3ee", "#00c46a", "#ff5252", "#e6e8eb"];
+const DRAW_DEFAULT_COLOR = { hline: "#f7b32b", trend: "#f7b32b", fib: "#c084fc",
+  rect: "#3d8bff", note: "#22d3ee" };
+const HANDLE_R = 4, HIT_TOL = 6;
 const chDrawKey = () => `chDraw:${CH.sym}`;
-function chLoadDraw() {
-  const d = JSON.parse(localStorage.getItem(chDrawKey()) || "{}");
-  return { hlines: d.hlines || [], trends: d.trends || {}, fibs: d.fibs || {},
-           rects: d.rects || {}, notes: d.notes || {} };
-}
-const chSaveDraw = d => localStorage.setItem(chDrawKey(), JSON.stringify(d));
+let DRAW = { items: [], sel: null };
+let chDrag = null, chRenameId = null, chDrawModelSym = null;
 
-function chRestoreDrawings() {
-  for (const pl of [...CH.priceLines, ...CH.fibLines])
-    CH.candle.removePriceLine(pl);
-  for (const s of [...CH.trendSeries, ...CH.rectSeries]) CH.main.removeSeries(s);
-  CH.priceLines = []; CH.trendSeries = []; CH.fibLines = []; CH.rectSeries = [];
-  const d = chLoadDraw();
-  for (const price of d.hlines) CH.priceLines.push(chMakeHline(price));
-  for (const t of (d.trends[CH.tf] || [])) CH.trendSeries.push(chMakeTrend(t));
-  for (const f of (d.fibs[CH.tf] || [])) chMakeFib(f);
-  for (const z of (d.rects[CH.tf] || [])) chMakeRect(z);
-  chSetNotes(d.notes[CH.tf] || []);
+const chDrawId = () => "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function chDrawMigrate(raw) {
+  if (!raw) return [];
+  if (raw.version === 2 && Array.isArray(raw.items)) return raw.items;
+  const items = [];
+  const mk = (type, tf, points, text = "") => items.push({ id: chDrawId(),
+    type, tf, points, color: DRAW_DEFAULT_COLOR[type], width: 1, text,
+    locked: false, hidden: false });
+  for (const p of (raw.hlines || [])) mk("hline", "*", [{ time: 0, price: p }]);
+  const two = (bucket, type) => { for (const tf in (raw[bucket] || {}))
+    for (const t of raw[bucket][tf])
+      mk(type, tf, [{ time: t.t1, price: t.p1 }, { time: t.t2, price: t.p2 }]); };
+  two("trends", "trend"); two("fibs", "fib"); two("rects", "rect");
+  for (const tf in (raw.notes || {})) for (const n of raw.notes[tf])
+    mk("note", tf, [{ time: n.time, price: n.price ?? 0 }], n.text);
+  return items;
+}
+function chDrawLoadModel() {
+  DRAW = { items: chDrawMigrate(JSON.parse(localStorage.getItem(chDrawKey()) || "null")),
+           sel: null };
+}
+const chDrawSave = () =>
+  localStorage.setItem(chDrawKey(), JSON.stringify({ version: 2, items: DRAW.items }));
+const chDrawVisible = () =>
+  DRAW.items.filter(it => !it.hidden && (it.tf === "*" || it.tf === CH.tf));
+const chSelItem = () => DRAW.items.find(it => it.id === DRAW.sel) || null;
+
+/* data <-> pixel helpers (logical index keeps off-screen endpoints correct so
+   trend/rect lines extrapolate instead of vanishing when partly scrolled off) */
+function chX(time) {
+  if (!CH.main) return null;
+  const idx = CH.timeIndex?.get(time);
+  if (idx != null) return CH.main.timeScale().logicalToCoordinate(idx);
+  return CH.main.timeScale().timeToCoordinate(time);
+}
+const chY = price => CH.candle?.priceToCoordinate(price) ?? null;
+const chPriceAt = y => CH.candle?.coordinateToPrice(y) ?? null;
+function chTimeAt(x) {                       // snap to nearest loaded bar, clamped
+  if (!CH.main || !CH.data) return null;
+  const logical = CH.main.timeScale().coordinateToLogical(x);
+  if (logical == null) return null;
+  const n = CH.data.candles.length;
+  return CH.data.candles[Math.max(0, Math.min(n - 1, Math.round(logical)))].time;
+}
+const chCandleHigh = time => {
+  const i = CH.timeIndex?.get(time);
+  return i != null ? CH.data.candles[i].high : (CH.data?.candles.at(-1)?.high ?? 0);
+};
+const chNotePrice = it => it.points[0].price || chCandleHigh(it.points[0].time);
+
+function chDrawCtx() {
+  const c = $("ch-draw"), host = $("ch-main");
+  const w = host.clientWidth, h = host.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+    c.style.width = w + "px"; c.style.height = h + "px";
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+function chHandle(ctx, x, y) {
+  if (x == null || y == null) return;
+  ctx.save(); ctx.setLineDash([]); ctx.fillStyle = "#0d0d0d"; ctx.strokeStyle = "#e6e8eb";
+  ctx.lineWidth = 1.5; ctx.beginPath();
+  ctx.rect(x - HANDLE_R, y - HANDLE_R, HANDLE_R * 2, HANDLE_R * 2);
+  ctx.fill(); ctx.stroke(); ctx.restore();
+}
+function chText(ctx, x, y, s, align) {
+  ctx.save(); ctx.setLineDash([]); ctx.font = "11px system-ui, sans-serif";
+  ctx.textAlign = align; ctx.textBaseline = "middle";
+  ctx.fillStyle = "#0d0d0d"; ctx.globalAlpha = 0.55;
+  const wpx = ctx.measureText(s).width + 6;
+  ctx.fillRect(align === "right" ? x - wpx : x - 3, y - 8, wpx, 16);
+  ctx.globalAlpha = 1; ctx.fillStyle = ctx.strokeStyle; ctx.fillText(s, x, y);
+  ctx.restore();
+}
+function chDrawRender() {
+  if (!CH.main || !CH.candle || !$("ch-draw")) return;
+  const { ctx, w } = chDrawCtx();
+  for (const it of chDrawVisible()) chDrawOne(ctx, it, w, it.id === DRAW.sel);
+  chDrawBar();
+}
+function chDrawOne(ctx, it, w, selected) {
+  ctx.save();
+  ctx.strokeStyle = it.color; ctx.fillStyle = it.color; ctx.lineWidth = it.width || 1;
+  if (it.type === "hline") {
+    const y = chY(it.points[0].price);
+    if (y != null) { ctx.setLineDash([6, 4]); ctx.beginPath();
+      ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      chText(ctx, w - 3, y, it.points[0].price.toFixed(2), "right");
+      if (selected) chHandle(ctx, w / 2, y); }
+  } else if (it.type === "trend") {
+    const [a, b] = it.points, x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
+    if (![x1, y1, x2, y2].some(v => v == null)) {
+      ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+      if (selected) { chHandle(ctx, x1, y1); chHandle(ctx, x2, y2); } }
+  } else if (it.type === "rect") {
+    const [a, b] = it.points, x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
+    if (![x1, y1, x2, y2].some(v => v == null)) {
+      const rx = Math.min(x1, x2), ry = Math.min(y1, y2), rw = Math.abs(x2 - x1), rh = Math.abs(y2 - y1);
+      ctx.setLineDash([]); ctx.globalAlpha = 0.12; ctx.fillRect(rx, ry, rw, rh);
+      ctx.globalAlpha = 1; ctx.strokeRect(rx, ry, rw, rh);
+      if (selected) { chHandle(ctx, x1, y1); chHandle(ctx, x2, y2); } }
+  } else if (it.type === "fib") {
+    const [a, b] = it.points, x1 = chX(a.time), x2 = chX(b.time);
+    const left = Math.min(x1 ?? 0, x2 ?? 0), right = Math.max(x1 ?? w, x2 ?? w);
+    ctx.setLineDash([2, 3]);
+    for (const r of FIB_RATIOS) {
+      const price = a.price + (b.price - a.price) * r, y = chY(price);
+      if (y == null) continue;
+      ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(right, y); ctx.stroke();
+      chText(ctx, left + 3, y, `${r.toFixed(3)}  ${price.toFixed(2)}`, "left"); }
+    if (selected) { chHandle(ctx, x1, chY(a.price)); chHandle(ctx, x2, chY(b.price)); }
+  } else if (it.type === "note") {
+    const x = chX(it.points[0].time), y = chY(chNotePrice(it));
+    if (x != null && y != null) {
+      ctx.setLineDash([]); ctx.beginPath();
+      ctx.moveTo(x, y - 6); ctx.lineTo(x - 5, y - 14); ctx.lineTo(x + 5, y - 14);
+      ctx.closePath(); ctx.fill();
+      chText(ctx, x + 8, y - 14, it.text || "note", "left");
+      if (selected) chHandle(ctx, x, y - 6); }
+  }
+  ctx.restore();
 }
 
-const chMakeHline = price => CH.candle.createPriceLine({
-  price, color: CH_COLORS.hline, lineWidth: 1,
-  lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true,
-});
-function chMakeSeg(t, color) {
-  // autoscaleInfoProvider null: drawings must NEVER drive the price scale —
-  // one stored segment with a stray price otherwise stretches the axis and
-  // crushes the candles into an invisible line (the "only volume renders" bug)
-  const s = CH.main.addLineSeries({ color, lineWidth: 1,
-    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
-    autoscaleInfoProvider: () => null });
-  s.setData([{ time: t.t1, value: t.p1 }, { time: t.t2, value: t.p2 }]);
-  return s;
+/* hit-testing in pixel space */
+function chHandlePixels(it) {
+  if (it.type === "hline") return [{ x: $("ch-main").clientWidth / 2, y: chY(it.points[0].price) }];
+  if (it.type === "note") return [{ x: chX(it.points[0].time), y: (chY(chNotePrice(it)) ?? 0) - 6 }];
+  return it.points.map(p => ({ x: chX(p.time), y: chY(p.price) }));
 }
-const chMakeTrend = t => chMakeSeg(t, CH_COLORS.trend);
-function chMakeFib(f) {
-  // full-width retracement levels: 0 at the second click, 1 at the first
-  for (const r of FIB_RATIOS)
-    CH.fibLines.push(CH.candle.createPriceLine({
-      price: +(f.p2 + (f.p1 - f.p2) * r).toFixed(2), color: CH_COLORS.fib,
-      lineWidth: 1, lineStyle: LightweightCharts.LineStyle.SparseDotted,
-      axisLabelVisible: true, title: r.toFixed(3),
-    }));
+function chHitHandle(it, x, y) {
+  const pts = chHandlePixels(it);
+  for (let i = 0; i < pts.length; i++)
+    if (pts[i].x != null && pts[i].y != null &&
+        Math.hypot(pts[i].x - x, pts[i].y - y) <= HANDLE_R + 4) return i;
+  return -1;
 }
-function chMakeRect(z) {
-  // a zone: top and bottom edges spanning the two clicked bars
-  const [lo, hi] = z.p1 <= z.p2 ? [z.p1, z.p2] : [z.p2, z.p1];
-  CH.rectSeries.push(chMakeSeg({ t1: z.t1, p1: hi, t2: z.t2, p2: hi }, CH_COLORS.rect));
-  CH.rectSeries.push(chMakeSeg({ t1: z.t1, p1: lo, t2: z.t2, p2: lo }, CH_COLORS.rect));
+function chNearSeg(x1, y1, x2, y2, px, py) {
+  if ([x1, y1, x2, y2].some(v => v == null)) return false;
+  const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / L2));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)) <= HIT_TOL;
 }
-function chSetNotes(notes) {
-  CH.candle.setMarkers([...notes]
-    .sort((a, b) => a.time - b.time)
-    .map(n => ({ time: n.time, position: "aboveBar", shape: "square",
-                 color: CH_COLORS.note, text: n.text })));
+function chItemContains(it, x, y) {
+  if (it.type === "hline") { const yy = chY(it.points[0].price); return yy != null && Math.abs(yy - y) <= HIT_TOL; }
+  if (it.type === "note") { const xx = chX(it.points[0].time), yy = chY(chNotePrice(it));
+    return xx != null && yy != null && Math.abs(xx - x) <= 12 && Math.abs((yy - 10) - y) <= 14; }
+  if (it.type === "trend") { const [a, b] = it.points;
+    return chNearSeg(chX(a.time), chY(a.price), chX(b.time), chY(b.price), x, y); }
+  if (it.type === "rect") { const [a, b] = it.points;
+    const x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
+    if ([x1, y1, x2, y2].some(v => v == null)) return false;
+    const inX = x >= Math.min(x1, x2) - HIT_TOL && x <= Math.max(x1, x2) + HIT_TOL;
+    const inY = y >= Math.min(y1, y2) - HIT_TOL && y <= Math.max(y1, y2) + HIT_TOL;
+    return ((Math.abs(x - x1) <= HIT_TOL || Math.abs(x - x2) <= HIT_TOL) && inY) ||
+           ((Math.abs(y - y1) <= HIT_TOL || Math.abs(y - y2) <= HIT_TOL) && inX); }
+  if (it.type === "fib") { const [a, b] = it.points;
+    for (const r of FIB_RATIOS) { const yy = chY(a.price + (b.price - a.price) * r);
+      if (yy != null && Math.abs(yy - y) <= HIT_TOL) return true; } return false; }
+  return false;
+}
+function chHitItem(x, y) {
+  const vis = chDrawVisible();
+  for (let i = vis.length - 1; i >= 0; i--) if (chItemContains(vis[i], x, y)) return vis[i];
+  return null;
 }
 
-function chClick(param) {
-  if (!CH.tool || !param.point || !CH.data) return;
-  const price = CH.candle.coordinateToPrice(param.point.y);
-  if (price === null) return;
-  const d = chLoadDraw();
+/* pointer interaction on #ch-main (capture phase, so grabbing a drawing can
+   stop the event before lightweight-charts pans the chart) */
+function chLocal(e) {
+  const r = $("ch-main").getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+function chFreezeChart(freeze) {
+  CH.main.applyOptions({ handleScroll: !freeze, handleScale: !freeze });
+}
+function chPointerDown(e) {
+  if (!CH.main || !CH.data || e.button !== 0) return;
+  const { x, y } = chLocal(e);
+  if (CH.tool) { chToolClick(x, y); e.stopPropagation(); e.preventDefault(); return; }
+  const sel = chSelItem();
+  let target = null, handleIdx = -1;
+  if (sel && !sel.locked) { handleIdx = chHitHandle(sel, x, y); if (handleIdx >= 0) target = sel; }
+  if (!target) { const hit = chHitItem(x, y);
+    if (hit) { target = hit; DRAW.sel = hit.id; } }
+  if (!target) { if (DRAW.sel) { DRAW.sel = null; chDrawRender(); } return; }  // empty → deselect, chart pans
+  DRAW.sel = target.id;
+  if (target.locked) { chDrawRender(); e.stopPropagation(); return; }         // selectable, not draggable
+  chDrag = { id: target.id, handleIdx, startX: x, startY: y, moved: false,
+             orig: target.points.map(p => ({ ...p })) };
+  chFreezeChart(true); chDrawRender();
+  e.stopPropagation(); e.preventDefault();
+}
+function chPointerMove(e) {
+  if (!chDrag) return;
+  const { x, y } = chLocal(e);
+  const it = DRAW.items.find(i => i.id === chDrag.id);
+  if (!it) return;
+  if (Math.abs(x - chDrag.startX) + Math.abs(y - chDrag.startY) > 2) chDrag.moved = true;
+  const price = chPriceAt(y), time = chTimeAt(x);
+  if (chDrag.handleIdx >= 0) {
+    const p = it.points[chDrag.handleIdx];
+    if (it.type !== "hline" && time != null) p.time = time;
+    if (price != null) p.price = +price.toFixed(4);
+  } else {
+    const dPrice = chPriceAt(y) - chPriceAt(chDrag.startY);
+    const si = CH.timeIndex.get(chTimeAt(chDrag.startX)), ci = CH.timeIndex.get(time);
+    it.points = chDrag.orig.map(p0 => {
+      const np = { ...p0 };
+      if (np.price != null) np.price = +(p0.price + dPrice).toFixed(4);
+      if (it.type !== "hline" && si != null && ci != null) {
+        const oi = CH.timeIndex.get(p0.time);
+        if (oi != null) np.time = CH.data.candles[
+          Math.max(0, Math.min(CH.data.candles.length - 1, oi + (ci - si)))].time;
+      }
+      return np;
+    });
+  }
+  chDrawRender();
+  e.stopPropagation();
+}
+function chPointerUp(e) {
+  if (!chDrag) return;
+  const it = DRAW.items.find(i => i.id === chDrag.id);
+  chFreezeChart(false);
+  if (it && chDrag.moved) chDrawSave();
+  chDrag = null; chDrawRender();
+}
+
+/* placement of a new drawing while a tool is armed */
+function chToolClick(x, y) {
+  const price = chPriceAt(y);
+  if (price == null) return;
   if (CH.tool === "hline") {
-    d.hlines.push(+price.toFixed(2));
-    chSaveDraw(d);
-    CH.priceLines.push(chMakeHline(+price.toFixed(2)));
-    chSetTool(null);
-    return;
+    chAddItem("hline", "*", [{ time: 0, price: +price.toFixed(4) }]); chSetTool(null); return;
   }
-  let time = param.time;
-  if (time === undefined)
-    time = CH.main.timeScale().coordinateToTime(param.point.x);
-  if (time === null || time === undefined) return;   // clicked outside data
+  const time = chTimeAt(x);
+  if (time == null) return;
   if (CH.tool === "note") {
-    CH.pendingNote = { time };
-    const inp = $("ch-note-text");
-    inp.style.display = ""; inp.value = ""; inp.focus();
-    return;
+    CH.pendingNote = { time, price: +price.toFixed(4) };
+    const inp = $("ch-note-text"); inp.style.display = ""; inp.value = ""; inp.focus(); return;
   }
-  // two-point tools: trend / fib / rect
-  if (!CH.pendingPoint) { CH.pendingPoint = { t1: time, p1: +price.toFixed(2) }; return; }
-  if (time === CH.pendingPoint.t1) return;      // need two distinct bars
-  const t = { ...CH.pendingPoint, t2: time, p2: +price.toFixed(2) };
-  if (CH.tool !== "fib" && t.t2 < t.t1)   // fib keeps click order (1 → 0)
-    { [t.t1, t.t2] = [t.t2, t.t1]; [t.p1, t.p2] = [t.p2, t.p1]; }
-  const bucket = { trend: d.trends, fib: d.fibs, rect: d.rects }[CH.tool];
-  (bucket[CH.tf] = bucket[CH.tf] || []).push(t);
-  chSaveDraw(d);
-  if (CH.tool === "trend") CH.trendSeries.push(chMakeTrend(t));
-  else if (CH.tool === "fib") chMakeFib(t);
-  else chMakeRect(t);
-  CH.pendingPoint = null;
-  chSetTool(null);
+  if (!CH.pendingPoint) { CH.pendingPoint = { time, price: +price.toFixed(4) }; return; }
+  if (time === CH.pendingPoint.time && Math.abs(price - CH.pendingPoint.price) < 1e-9) return;
+  chAddItem(CH.tool, CH.tf,
+    [{ ...CH.pendingPoint }, { time, price: +price.toFixed(4) }]);
+  CH.pendingPoint = null; chSetTool(null);
+}
+function chAddItem(type, tf, points, text = "") {
+  const it = { id: chDrawId(), type, tf, points, color: DRAW_DEFAULT_COLOR[type],
+               width: 1, text, locked: false, hidden: false };
+  DRAW.items.push(it); DRAW.sel = it.id; chDrawSave(); chDrawRender();
+  return it;
+}
+
+/* selection toolbar */
+function chDrawBar() {
+  const bar = $("ch-draw-bar"), it = chSelItem();
+  if (!it) { bar.classList.remove("show"); return; }
+  $("ch-draw-colors").innerHTML = CH_PALETTE.map(c =>
+    `<i data-c="${c}" style="background:${c}" class="${c === it.color ? "sel" : ""}"></i>`).join("");
+  bar.querySelector('[data-act="lock"]').textContent = it.locked ? "🔒" : "🔓";
+  bar.querySelector('[data-act="lock"]').classList.toggle("on", it.locked);
+  bar.querySelector('[data-act="hide"]').classList.toggle("on", it.hidden);
+  bar.querySelector('[data-act="rename"]').style.display = it.type === "note" ? "" : "none";
+  bar.classList.add("show");
+  chDrawBarPosition(it);
+}
+function chDrawBarPosition(it) {
+  const bar = $("ch-draw-bar"), host = $("ch-main");
+  const pts = chHandlePixels(it).filter(p => p.x != null && p.y != null);
+  const ax = pts.length ? Math.min(...pts.map(p => p.x)) : host.clientWidth / 2;
+  const ay = pts.length ? Math.min(...pts.map(p => p.y)) : 20;
+  const bw = bar.offsetWidth || 190;
+  bar.style.left = Math.max(4, Math.min(host.clientWidth - bw - 4, ax)) + "px";
+  bar.style.top = Math.max(4, ay - 40) + "px";
+}
+function chDrawAct(act) {
+  const it = chSelItem();
+  if (!it) return;
+  if (act === "del") { DRAW.items = DRAW.items.filter(i => i.id !== it.id); DRAW.sel = null; }
+  else if (act === "dup") { const c = { ...it, id: chDrawId(),
+      points: it.points.map(p => ({ ...p })) };
+      if (c.type !== "hline") c.points = c.points.map(p => ({ ...p, price: p.price * 1.002 }));
+      else c.points = [{ ...c.points[0], price: c.points[0].price * 1.002 }];
+      DRAW.items.push(c); DRAW.sel = c.id; }
+  else if (act === "lock") it.locked = !it.locked;
+  else if (act === "hide") { it.hidden = true; DRAW.sel = null; }
+  else if (act === "width") it.width = it.width >= 3 ? 1 : (it.width || 1) + 1;
+  else if (act === "rename") { chRenameId = it.id; const inp = $("ch-note-text");
+    inp.style.display = ""; inp.value = it.text || ""; inp.focus(); return; }
+  chDrawSave(); chDrawRender();
 }
 
 function chPlaceNote(text) {
-  const d = chLoadDraw();
-  (d.notes[CH.tf] = d.notes[CH.tf] || []).push({ time: CH.pendingNote.time, text });
-  chSaveDraw(d);
-  chSetNotes(d.notes[CH.tf]);
-  chCancelNote();
-  chSetTool(null);
+  if (chRenameId) {
+    const it = DRAW.items.find(i => i.id === chRenameId);
+    if (it) it.text = text; chRenameId = null;
+  } else if (CH.pendingNote) {
+    chAddItem("note", CH.tf, [{ time: CH.pendingNote.time, price: CH.pendingNote.price }], text);
+  }
+  chDrawSave(); chCancelNote(); chDrawRender();
 }
 function chCancelNote() {
-  CH.pendingNote = null;
+  CH.pendingNote = null; chRenameId = null;
   $("ch-note-text").style.display = "none";
+  if (!CH.tool) {} else chSetTool(CH.tool);   // keep tool state coherent
 }
 
 function chSetTool(tool) {
   CH.tool = tool; CH.pendingPoint = null;
-  if (tool !== "note") chCancelNote();
+  if (tool !== "note") { CH.pendingNote = null; $("ch-note-text").style.display = "none"; }
   document.querySelectorAll("#ch-tools button").forEach(b =>
     b.classList.toggle("active", b.dataset.tool === tool));
   $("ch-main").style.cursor = tool ? "crosshair" : "";
+}
+function chClearDrawings() {
+  DRAW.items = []; DRAW.sel = null;
+  localStorage.removeItem(chDrawKey());
+  chDrawRender();
 }
 
 /* position/order lines: labeled price lines for the charted symbol's open
@@ -2322,13 +2576,19 @@ document.querySelectorAll("#ch-inds button").forEach(b => b.onclick = () => {
 });
 document.querySelectorAll("#ch-tools button").forEach(b => b.onclick = () => {
   if (b.dataset.tool === "clear") {
-    localStorage.removeItem(chDrawKey());
-    chRestoreDrawings();
+    chClearDrawings();
     toast(`drawings cleared for ${CH.sym}`);
     return;
   }
   chSetTool(CH.tool === b.dataset.tool ? null : b.dataset.tool);
 });
+// drawing edit toolbar: colour swatches + per-object actions
+$("ch-draw-colors").addEventListener("click", e => {
+  const c = e.target.dataset.c, it = chSelItem();
+  if (c && it) { it.color = c; chDrawSave(); chDrawRender(); }
+});
+$("ch-draw-bar").querySelectorAll("button[data-act]").forEach(b =>
+  b.addEventListener("click", () => chDrawAct(b.dataset.act)));
 $("ch-symbol").addEventListener("keydown", e => {
   if (e.key === "Enter") { e.preventDefault(); loadChart($("ch-symbol").value.trim()); }
 });
@@ -2336,10 +2596,22 @@ $("ch-note-text").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     e.preventDefault();
     const text = $("ch-note-text").value.trim();
-    if (text && CH.pendingNote) chPlaceNote(text);
-    else chSetTool(null);
+    if (text && (CH.pendingNote || chRenameId)) chPlaceNote(text);
+    else { chCancelNote(); chSetTool(null); }
   }
-  if (e.key === "Escape") chSetTool(null);
+  if (e.key === "Escape") { chCancelNote(); chSetTool(null); }
+});
+// keyboard: Delete removes the selected drawing, Escape deselects/cancels
+document.addEventListener("keydown", e => {
+  if ($("tab-charts").style.display === "none") return;
+  const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || "");
+  if (typing) return;
+  if ((e.key === "Delete" || e.key === "Backspace") && DRAW.sel) {
+    e.preventDefault(); chDrawAct("del");
+  } else if (e.key === "Escape") {
+    if (CH.tool) chSetTool(null);
+    else if (DRAW.sel) { DRAW.sel = null; chDrawRender(); }
+  }
 });
 $("ch-full").onclick = toggleChartFullscreen;
 $("ch-overlay-retry").onclick = () => loadChart();
