@@ -3,7 +3,7 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-17, after the **V3 UI sprint session** (chart
+**Last updated:** 2026-07-18, after the **V3 chart follow-up session** (chart
 reliability root-caused and fixed, design system, and redesigns of every
 tab — seven commits `7176843`…`79138da` on branch **`v3-ui`**, kept off
 `main` pending the user's review). Three earlier sessions also landed
@@ -11,9 +11,9 @@ this date: V2-4 finish (`50c75aa`), the docs/AI framework (`1029fb0`),
 and developer automation (`7373c51`). As always, trust `git log`, not
 this file, for whether anything landed.
 
-## Verified facts about current state (checked 2026-07-17)
+## Verified facts about current state (checked 2026-07-18)
 
-- Full test suite: **345 tests, 100% passing** (338 from the V2-4-core
+- Full test suite: **373 tests, 100% passing** (338 from the V2-4-core
   commit, plus the endpoint-level halt test and the new `TestManualEntry`
   suite in `tests/test_risk.py`). Static `$("id")` reference check clean.
 - **A `git status` printed "working tree clean" this session while
@@ -124,7 +124,30 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-18, packaging-fix session (branch `v3-ui`, uncommitted).** The
+**2026-07-18, V3.1 chart-stabilization sprint (branch `v3-ui`, committed
+`61a2c60`…`2bcb84a`).** A dedicated sprint that made the charting system
+the strongest part of the app. Seven milestones, each root-caused and
+browser-verified before commit: (1) chart reliability — the "some
+tickers fail / IWM only shows volume" bug traced to three causes
+(drawings driving the price scale, NaN volume 500-ing the endpoint,
+non-finite indicator values) and fixed at the data boundary
+(`validate_candles` sanitization + logging) and the renderer; (2)
+timeframes expanded 6 → 13 (1m…1mo), table-driven; (3) infinite
+historical scroll fixed (the merge was inverted — replaced the window
+instead of prepending; the trigger mixed bar-index and timestamp units);
+(4) editable TradingView-style drawing objects on an overlay canvas
+(select/drag/resize/color/width/lock/hide/duplicate/rename/delete +
+migration); (5) a collapsible chart on the Trade page (the one instance
+relocated between tabs, so everything is shared); (6) live-update
+correctness (the forming candle froze because `chSig` ignored intrabar
+changes) + a flicker-free `series.update()` fast path; (7) a 19-check
+headless-browser regression suite (`scripts/chart_check.py`) wired into
+`verify.ps1`. Verified: all 10 required tickers × 13 timeframes return
+monotonic real data (130/130); `chart_check` 19/19 green; **373 tests**.
+The exe was rebuilt and the packaged charts confirmed working. The
+`v3-ui` merge decision remains the user's to make.
+
+Before that, 2026-07-18 packaging-fix session (committed `61a2c60`). The
 user found the freshly built exe release-blocked: every chart and
 option-chain request failed with "No module named 'yfinance'". Root
 cause (traced, not guessed): the performance pass `f1bae42` made the
@@ -143,11 +166,10 @@ in `_internal`), packaged desktop app served 206 daily SPY candles, 624
 SMCI 5m candles, and a 231-contract chain live over HTTP; full
 browser-flow sweep of the chart system green (load, indicators,
 drawings, trade lines, stale banner, retry, 30s auto-refresh — zero
-console errors); `verify.ps1` green end-to-end; **356 tests**. One
+console errors); `verify.ps1` green end-to-end; **373 tests**. One
 pre-existing quirk found and documented (not fixed): `OptionsPilot.exe
-serve` from the windowed exe never binds its port (`TODO.md`). The
-changes are **uncommitted**, awaiting the user; the `v3-ui` merge
-decision also remains open.
+serve` from the windowed exe never binds its port (`TODO.md`). Committed
+as `61a2c60`; the V3.1 sprint above built on it.
 
 Before that, 2026-07-17, end of the V3 UI sprint (branch `v3-ui`, seven commits,
 each browser-verified before committing — see `NEXT_SESSION.md` for the

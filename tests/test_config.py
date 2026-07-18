@@ -49,7 +49,7 @@ def test_out_of_range_rejected():
 
 def test_bad_timeframe_rejected(tmp_path):
     p = tmp_path / "config.yaml"
-    p.write_text("data:\n  timeframes: [3m]\n", encoding="utf-8")
+    p.write_text("data:\n  timeframes: [7m]\n", encoding="utf-8")
     with pytest.raises(ValidationError, match="Unknown timeframe"):
         load_config(p)
 

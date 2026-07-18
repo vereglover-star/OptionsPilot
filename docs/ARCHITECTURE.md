@@ -433,16 +433,30 @@ repeatedly-reaffirmed architectural constraint; see `CLAUDE.md` and `AI_CONTEXT.
 
 ### 11.1 Charts
 
-The Charts tab (V2-4) is built on vendored `lightweight-charts`:
-- Candlestick + volume chart, five timeframes (5m/15m/1h/4h/1D), zoom/pan/crosshair,
-  an OHLC+change+volume+indicator legend.
+The Charts tab (V2-4, extensively hardened in V3.1) is built on vendored
+`lightweight-charts`:
+- Candlestick + volume chart, **13 timeframes** (1m/2m/3m/5m/10m/15m/30m/
+  1h/2h/4h/1d/1w/1mo — V3.1-2, table-driven: adding one is a single line in
+  `core/models._TF_LABEL`, `data/yfinance_provider._FETCH_SPEC`,
+  `orchestrator._WINDOW_DAYS`, and `data/cached.CANDLE_TTL`, with
+  `test_models::test_every_member_fully_wired` enforcing completeness),
+  zoom/pan/crosshair, an OHLC+change+volume+indicator legend.
 - Overlay indicators (EMA×3, VWAP, Bollinger) and synced RSI/MACD subpanes — all
   computed by `/api/candles`, which calls the *same* `analysis/` functions the
   engine trades with (what you see charted is exactly what the scorer saw).
-- Five drawing tools: horizontal Level (persists per symbol), Trend line, Fib
-  retracement, Zone rectangle, and bar Note (all persist per symbol+timeframe in
-  `localStorage`). Esc cancels an armed tool; Clear removes everything for the
-  current symbol.
+- **Editable drawing objects (V3.1-4)**: horizontal Level, Trend line, Fib
+  retracement, Zone rectangle, and bar Note are first-class objects
+  (`{id,type,tf,points,color,width,text,locked,hidden}`, stored per symbol as
+  `{version:2,items:[]}`, old format migrated) rendered on a dedicated
+  `#ch-draw` overlay canvas. Each can be selected, dragged, endpoint-resized,
+  recolored, re-widthed, locked, hidden, duplicated, renamed (notes), and
+  deleted; tools arm instantly. Interaction runs on capture-phase pointer
+  listeners that freeze chart pan only while a drawing is grabbed. Drawings
+  never drive the price scale (`autoscaleInfoProvider:null`). Esc cancels an
+  armed tool / deselects; Clear removes everything for the symbol.
+- **Trade-tab chart (V3.1-5)**: the single chart instance is relocated
+  between the Charts tab and a collapsible Trade-tab slot, so its symbol,
+  timeframe, drawings, and indicators are shared with zero synchronization.
 - **Position/order trade lines**: loading a chart draws labeled price lines for
   that symbol's open position (entry/stop/target, underlying space) and working
   manual orders' underlying-level triggers — LIMIT orders are premium-space and
@@ -450,15 +464,26 @@ The Charts tab (V2-4) is built on vendored `lightweight-charts`:
 - Trade-from-chart: deep links from watchlist rows, dashboard meters, and position
   cards open the chart; "Trade →" jumps to the order ticket with the symbol loaded.
 - Fullscreen (F key).
-- **Reliability layer (V3-0/V3-7)**: the canvas is never silently blank.
-  Every load carries a generation number (newest wins — rapid symbol/
-  timeframe switches can't interleave or be dropped); first paint shows a
-  loading overlay, failures show an error overlay with Retry, and if the
-  backend served stale disk bars (`stale`/`as_of` in the `/api/candles`
-  payload) a warning banner names the last bar's date. A visible chart
-  refreshes every 30s preserving zoom (`fitContent` only on symbol/
-  timeframe change); the same timer auto-retries a chart stuck on the
-  error overlay.
+- **Reliability layer (V3-0/V3-7/V3.1)**: the canvas is never silently
+  blank. Every load carries a generation number (newest wins — rapid
+  symbol/timeframe switches can't interleave or be dropped); first paint
+  shows a loading overlay, failures show an error overlay with Retry, and
+  if the backend served stale disk bars (`stale`/`as_of` in the
+  `/api/candles` payload) a warning banner names the last bar's date. Data
+  is sanitized at one boundary — `data/base.validate_candles` drops
+  NaN/inf/≤0 OHLC bars, zeroes non-finite volume, and logs every removal
+  with symbol/timeframe context — so a glitched provider bar can neither
+  500 the endpoint nor blank the chart (V3.1-1). The endpoint accepts
+  optional `start`/`end` range parameters so the UI **prepends history as
+  the user pans left** (V3.1-3: older bars merge in front of the visible
+  ones with indicators in lockstep; viewport, zoom, and drawings are
+  preserved; a left-edge pill shows loading / start-of-history). A visible
+  chart refreshes every 30s preserving zoom; the refresh signature
+  includes the last bar's OHLCV so the **forming candle updates intrabar**,
+  and a `series.update()` fast path renders trailing-bar changes with no
+  flicker or reflow (V3.1-6). The same timer auto-retries a chart stuck on
+  the error overlay. `scripts/chart_check.py` (19 headless-browser checks,
+  in `verify.ps1`) guards all of the above.
 
 ### 11.2 WebSockets
 
@@ -639,8 +664,13 @@ flowchart LR
 - The trade coach infers behavioral tags (revenge trading, chased entry, etc.) from
   observable order/timing patterns, not literal intent — an honest approximation,
   documented in `coach/coach.py`'s module docstring.
-- Browser-driven UI test coverage is a smoke check, not deep regression
-  coverage: `scripts/browser_check.py` (§11) proves every tab loads with
-  zero console errors, not that any specific interaction (mode toggle,
-  order placement, coach review rendering) still behaves correctly — see
-  `CONTRIBUTING.md` "Automation" for the open opportunity to extend it.
+- Browser-driven UI test coverage is a smoke check plus a deep chart
+  regression suite, not exhaustive per-flow coverage:
+  `scripts/browser_check.py` (§11) proves every tab loads with zero console
+  errors, and `scripts/chart_check.py` runs 19 headless-browser checks over
+  the chart system (ticker loading, invalid ticker + recovery, all 13
+  timeframes, indicators, the full editable-drawing lifecycle, historical
+  scroll-back, zoom, the stale banner + retry, rapid symbol changes,
+  resize, live intrabar update, single-instance leak guard). Neither
+  replaces manual verification of the non-chart flows (mode toggle, order
+  placement, coach review rendering) — see `CONTRIBUTING.md` "Automation".

@@ -4,9 +4,69 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-18 — Packaged exe shipped without yfinance: lazy import invisible to PyInstaller
+## 2026-07-18 — V3.1: chart-system stabilization sprint (`v3-ui`)
 
-*356 tests (+4). Release-blocking regression found by the user in the
+*373 tests (+17). A dedicated sprint making the charting system
+production-ready — the strongest part of the app instead of the weakest.
+Seven committed milestones, each root-caused (not papered over) and
+browser-verified before commit.*
+
+- **V3.1-1 chart reliability (`b93eac9`).** Root-caused the "some tickers
+  randomly fail / IWM only shows volume" reports. Three distinct causes,
+  each reproduced first: a stored drawing with a stray price drove the
+  price scale and crushed the candles to a ~4px line (fixed with
+  `autoscaleInfoProvider: () => null` — drawings never scale the axis);
+  NaN volume on the forming bar raised in `int()` and, worse, during JSON
+  serialization *after* the endpoint try/except, 500-ing the chart
+  (`validate_candles` now zeroes non-finite volume, drops NaN/inf/≤0 OHLC
+  rows, and logs every removal with symbol/timeframe context); and
+  non-finite values poisoned computed indicators (payload runs through a
+  single `validate_candles` choke point and `math.isfinite` guards). The
+  frontend render block is wrapped so a renderer exception surfaces an
+  error overlay instead of a half-painted canvas.
+- **V3.1-2 expanded timeframes (`0d2c870`).** 1m/2m/3m/5m/10m/15m/30m/
+  1h/2h/4h/1d/1w/1mo (6 → 13), table-driven so a new interval is one line
+  per layer. A single `_TF_LABEL` table is the source of each wire label;
+  `_FETCH_SPEC` maps to native yfinance intervals + resample rules (3m/10m/
+  2h/4h are resampled); `_WINDOW_DAYS`/`CANDLE_TTL` gain matching entries;
+  a test fails if any enum member isn't wired in all four.
+- **V3.1-3 infinite historical scroll (`98551e1`).** The paging machinery
+  existed but the merge was inverted — scrolling left *replaced* the
+  window with an older one (206 → 202 bars) — and the trigger compared a
+  logical bar-index against a Unix timestamp. Fixed: older bars are
+  prepended in front of the visible ones with indicator series in lockstep
+  (206 → 407), the trigger fires within N bars of the left edge, viewport/
+  zoom/drawings are preserved, and a left-edge pill shows "Loading history"
+  / "Start of available history".
+- **V3.1-4 editable drawing objects (`917d0c9`).** Replaced one-shot,
+  uneditable drawings with a first-class object model
+  (`{id,type,tf,points,color,width,text,locked,hidden}`, stored
+  `{version:2,items:[]}`, old format migrated) rendered on a `#ch-draw`
+  overlay canvas: select, drag-move, endpoint-resize, color, width, lock,
+  hide, duplicate, rename (notes), delete, persistence. Tools arm
+  synchronously (instant). Interaction runs on capture-phase pointer
+  listeners that freeze chart pan only while a drawing is grabbed.
+- **V3.1-5 collapsible synced Trade chart (`edfe2bc`).** The one chart
+  instance is relocated between the Charts tab and a collapsible Trade-tab
+  slot, so symbol/timeframe/drawings/indicators are shared for free.
+  Hidden by default, preference remembered; follows the ticket symbol.
+- **V3.1-6 live-update correctness + performance (`5e04506`).** The
+  refresh signature hashed only bar times, so the forming candle froze
+  during market hours; `chSig` now includes the last bar's OHLCV. A
+  live-update fast path pushes only updated/appended trailing bars via
+  `series.update()` — no setData, no reflow, zero flicker; full setData is
+  reserved for symbol/tf switches, history prepends, and window slides.
+- **V3.1-7 automated chart regression suite (`2bcb84a`).**
+  `scripts/chart_check.py` drives 19 headless-browser checks (loading,
+  invalid ticker + recovery, all 13 timeframes, indicators, the full
+  drawing lifecycle, scroll-back, zoom, stale banner + retry, rapid symbol
+  changes, resize, live update, single-instance leak guard); wired into
+  `scripts/verify.ps1`. Verified: all 10 required tickers × 13 timeframes
+  return monotonic real data (130/130).
+
+## 2026-07-18 — Packaged exe shipped without yfinance: lazy import invisible to PyInstaller
+
+*Release-blocking regression found by the user in the
 freshly built exe: every chart, quote, and option-chain request failed
 with "No module named 'yfinance'". Root-caused and fixed at the packaging
 layer; no trading logic changed.*

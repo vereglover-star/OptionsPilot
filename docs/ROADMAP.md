@@ -68,11 +68,13 @@ and multi-chart layouts are explicitly deferred** — see "Deferred" below.
 
 A UX/reliability sprint, not a feature sprint — scoped by the full audit in
 `ROADMAP-V3-UX.md`. Chart reliability root-caused and fixed (never-blank
-canvas, stale-data fallback for display only, 30s zoom-preserving
-refresh), a design-token system + responsive icon-rail nav, and redesigns
-of Dashboard, Trade (ATM quick-picks, risk context, order-entry keys),
-Settings (structured cards replace the JSON dump), the four analytics
-tabs, and an accessibility pass. Seven commits, each browser-verified.
+canvas, stale-data fallback for display only, alias-safe symbol resolution,
+cached payload reuse for instant revisits, automatic left-edge history
+backfill, 30s zoom-preserving refresh), a design-token system + responsive
+icon-rail nav, and redesigns of Dashboard, Trade (ATM quick-picks, risk
+context, order-entry keys), Settings (structured cards replace the JSON
+dump), the four analytics tabs, and an accessibility pass. Seven commits,
+each browser-verified.
 **On `v3-ui`, awaiting user review — not merged to `main`.**
 
 ---

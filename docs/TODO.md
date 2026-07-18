@@ -5,10 +5,17 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [x] **V2-4 drawing/overlay remainder** — done 2026-07-16: fib
-      retracement / zone rectangle / bar-note drawing tools, and
-      position/order lines drawn on the chart (entry/stop/target +
-      working-order trigger levels).
+- [x] **V3.1 chart-stabilization sprint** — done 2026-07-18 (`61a2c60`…
+      `2bcb84a`): per-ticker reliability root-causes fixed, 13 timeframes,
+      infinite scroll-back, TradingView-style editable drawing objects,
+      collapsible synced Trade-tab chart, flicker-free live updates, and
+      a 19-check `chart_check.py` regression suite in `verify.ps1`.
+      Remaining chart-adjacent item: one market-hours pass to confirm the
+      live-update path against a real feed (verified with a simulated tick).
+- [x] **V2-4 drawing/overlay remainder** — done 2026-07-16, then rebuilt
+      2026-07-18 (V3.1-4) into an editable overlay-canvas object model:
+      fib / zone / note / trend / level, all selectable, draggable,
+      resizable, recolorable, lockable, hideable, and persisted.
 - [ ] **V2-4 layout remainder** (only if the user wants it): the full
       three-panel workspace layout (top bar / right sidebar / bottom
       panel) and multi-chart layouts — a large UI restructuring, left as
