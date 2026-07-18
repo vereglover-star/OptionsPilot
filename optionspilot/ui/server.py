@@ -222,7 +222,13 @@ class UIServer:
 
     # ── chart workspace data ─────────────────────────────────────────────────
 
-    def candles_payload(self, symbol: str, timeframe: str) -> dict:
+    def candles_payload(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict:
         """OHLCV + indicator series for the Charts tab, computed by the SAME
         analysis library the engine trades with (guaranteed visual parity).
         Provider-only — no orchestrator state, so no lock is taken and chart
@@ -233,8 +239,10 @@ class UIServer:
 
         symbol = symbol.upper()
         tf = Timeframe.from_string(timeframe)
-        end = utcnow()
-        start = end - timedelta(days=_WINDOW_DAYS[tf])
+        end = end or utcnow()
+        start = start or (end - timedelta(days=_WINDOW_DAYS[tf]))
+        if end < start:
+            start, end = end, start
         # display surface: prefer clearly-flagged stale bars over a blank
         # chart when the live fetch fails (feature-detected so tests that
         # inject bare fake providers keep working)
@@ -266,7 +274,7 @@ class UIServer:
         if icfg.ema:
             for period in icfg.ema_periods[:3]:
                 col(f"ema{period}", ind.ema(close, period))
-        if icfg.vwap and tf is not Timeframe.D1:
+        if icfg.vwap and tf.minutes < Timeframe.D1.minutes:
             col("vwap", ind.vwap(df))
         if icfg.bollinger:
             bb = ind.bollinger(close)
@@ -641,9 +649,14 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                             media_type="image/x-icon")
 
     @app.get("/api/candles")
-    def candles_view(symbol: str, tf: str = "5m"):
+    def candles_view(
+        symbol: str,
+        tf: str = "5m",
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ):
         try:
-            return server.candles_payload(symbol, tf)
+            return server.candles_payload(symbol, tf, start=start, end=end)
         except Exception as exc:  # noqa: BLE001 — surface as a clean 502
             log.error("candles fetch failed: %s", exc)
             return JSONResponse({"error": f"candles unavailable: {exc}"},

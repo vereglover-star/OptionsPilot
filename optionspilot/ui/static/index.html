@@ -539,11 +539,19 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
       <div class="chart-bar">
         <input id="ch-symbol" value="SPY" spellcheck="false" aria-label="Chart symbol">
         <span class="seg" id="ch-tfs" aria-label="Timeframe">
+          <button data-tf="1m">1m</button>
+          <button data-tf="2m">2m</button>
+          <button data-tf="3m">3m</button>
           <button data-tf="5m">5m</button>
+          <button data-tf="10m">10m</button>
           <button data-tf="15m">15m</button>
-          <button data-tf="1h">1h</button>
-          <button data-tf="4h">4h</button>
+          <button data-tf="30m">30m</button>
+          <button data-tf="1h">1H</button>
+          <button data-tf="2h">2H</button>
+          <button data-tf="4h">4H</button>
           <button data-tf="1d" class="active">1D</button>
+          <button data-tf="1w">1W</button>
+          <button data-tf="1mo">1M</button>
         </span>
         <span class="ind-pills" id="ch-inds" aria-label="Indicators">
           <button data-ind="ema" class="active">EMA</button>
@@ -1702,7 +1710,9 @@ const CH = {
   data: null, dataKey: null, timeIndex: null, tool: null,
   pendingPoint: null, pendingNote: null,
   priceLines: [], trendSeries: [], fibLines: [], rectSeries: [],
-  tradeLines: [], gen: 0,
+  tradeLines: [], gen: 0, dataSig: "", cache: new Map(),
+  viewport: null, historyLoading: false, historyExhausted: false,
+  historyArmed: false, restoringViewport: false,
 };
 const CH_COLORS = {
   up: "#00c46a", down: "#ff5252", grid: "#23262c", text: "#82868e",
@@ -1746,6 +1756,16 @@ function chInit() {
     bb_upper: overlay(CH_COLORS.bb), bb_lower: overlay(CH_COLORS.bb),
     bb_mid: overlay(CH_COLORS.bb),
   };
+  CH.main.timeScale().subscribeVisibleLogicalRangeChange(r => {
+    if (!r) return;
+    CH.viewport = chViewport();
+    chRememberViewport(chKey());
+    chMaybeLoadHistory(r);
+  });
+  $("ch-main").addEventListener("wheel", () => { CH.historyArmed = true; });
+  $("ch-main").addEventListener("pointerdown", () => { CH.historyArmed = true; });
+  $("ch-main").addEventListener("touchstart", () => { CH.historyArmed = true; },
+    { passive: true });
   CH.main.subscribeCrosshairMove(chLegend);
   CH.main.subscribeClick(chClick);
 }
@@ -1785,6 +1805,64 @@ function chSyncPane(pane) {
   link(CH.main, pane); link(pane, CH.main);
 }
 
+const chKey = () => `${CH.sym}·${CH.tf}`;
+const chSig = d => {
+  const first = d.candles[0]?.time ?? 0;
+  const last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
+  return `${d.candles.length}|${first}|${last}|${d.stale ? 1 : 0}|${d.as_of ?? 0}`;
+};
+const chCacheEntry = key => {
+  const existing = CH.cache.get(key) || {};
+  CH.cache.set(key, existing);
+  return existing;
+};
+const chViewport = () => {
+  if (!CH.main) return null;
+  const r = CH.main.timeScale().getVisibleRange?.();
+  return r && r.from != null && r.to != null ? {from: r.from, to: r.to} : null;
+};
+const chRememberViewport = key => {
+  chCacheEntry(key).viewport = chViewport();
+};
+function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
+  CH.data = d;
+  CH.dataKey = key;
+  CH.dataSig = chSig(d);
+  CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
+  localStorage.setItem("chSym", CH.sym);
+  localStorage.setItem("chTf", CH.tf);
+  try {
+    CH.candle.setData(d.candles);
+    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
+      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
+    chApplyIndicators();
+    chRestoreDrawings();
+    chLoadTradeLines();
+  } catch (e) {
+    // a renderer exception must surface, never leave a half-painted canvas
+    console.error("chart render failed:", e);
+    CH.dataKey = null;                       // force a clean repaint on retry
+    chOverlay("error", `Chart renderer error: ${e.message}`);
+    return false;
+  }
+  CH.restoringViewport = true;
+  try {
+    if (viewport) CH.main.timeScale().setVisibleRange(viewport);
+    else if (fit) CH.main.timeScale().fitContent();
+  } finally {
+    CH.restoringViewport = false;
+  }
+  const entry = chCacheEntry(key);
+  entry.data = d;
+  entry.sig = CH.dataSig;
+  entry.viewport = chViewport();
+  CH.viewport = entry.viewport;
+  chOverlay(null);
+  chStale(d.stale ? d.as_of : null);
+  chLegend(null);
+  return true;
+}
+
 /* Chart canvas states: the canvas must NEVER sit silently blank.
    - first load of a (symbol, tf): full overlay — spinner, then error+Retry
      on failure.
@@ -1798,7 +1876,7 @@ function chOverlay(state, msg) {
   const o = $("ch-overlay");
   if (!state) { o.classList.remove("show"); return; }
   o.classList.add("show");
-  $("ch-overlay-sym").textContent = `${CH.sym} · ${CH.tf.toUpperCase()}`;
+  $("ch-overlay-sym").textContent = `${CH.sym} · ${tfLabel(CH.tf)}`;
   $("ch-overlay-spin").style.display = state === "loading" ? "" : "none";
   $("ch-overlay-retry").style.display = state === "error" ? "" : "none";
   $("ch-overlay-msg").textContent = state === "loading" ? "Loading chart…"
@@ -1814,14 +1892,102 @@ function chStale(asOf) {
   }
 }
 
+const CH_HISTORY_BARS = 240;
+const CH_HISTORY_TRIGGER_BARS = 24;
+const CH_TF_SECONDS = {
+  "1m": 60, "2m": 120, "3m": 180, "5m": 300, "10m": 600, "15m": 900,
+  "30m": 1800, "1h": 3600, "2h": 7200, "4h": 14400, "1d": 86400,
+  "1w": 604800, "1mo": 2592000,
+};
+const chTfSeconds = () => CH_TF_SECONDS[CH.tf] || 60;
+function chCanLoadHistory(range) {
+  if (!range || typeof range.from !== "number" || !CH.data) return false;
+  if (CH.historyLoading || CH.historyExhausted || !CH.historyArmed) return false;
+  if (CH.restoringViewport) return false;
+  const first = CH.data.candles[0]?.time;
+  if (!first) return false;
+  return range.from <= first + chTfSeconds() * CH_HISTORY_TRIGGER_BARS;
+}
+function chMergeHistory(oldPayload, newerPayload) {
+  const first = newerPayload.candles[0]?.time;
+  if (!first) return newerPayload;
+  const extraCandles = oldPayload.candles.filter(c => c.time < first);
+  if (!extraCandles.length) return newerPayload;
+  const extraIndex = new Map(oldPayload.candles.map((c, i) => [c.time, i]));
+  const merged = {
+    ...newerPayload,
+    candles: [...extraCandles, ...newerPayload.candles],
+    indicators: {},
+    stale: newerPayload.stale || oldPayload.stale,
+    as_of: newerPayload.as_of ?? oldPayload.as_of ?? null,
+  };
+  const names = new Set([
+    ...Object.keys(newerPayload.indicators || {}),
+    ...Object.keys(oldPayload.indicators || {}),
+  ]);
+  for (const name of names) {
+    const base = newerPayload.indicators?.[name] || [];
+    const prepend = extraCandles.map(c => {
+      const i = extraIndex.get(c.time);
+      return i == null ? null : base[i] ?? null;
+    });
+    merged.indicators[name] = [...prepend, ...(base || [])];
+  }
+  return merged;
+}
+async function chLoadHistoryChunk() {
+  if (!CH.data || CH.historyLoading || CH.historyExhausted) return;
+  const first = CH.data.candles[0]?.time;
+  const last = CH.data.candles[CH.data.candles.length - 1]?.time;
+  if (!first || !last) return;
+  const key = chKey();
+  const gen = CH.gen;
+  const viewport = chViewport();
+  const span = Math.max(last - first, chTfSeconds() * CH_HISTORY_BARS);
+  const start = new Date((first - span) * 1000).toISOString();
+  const end = new Date(first * 1000).toISOString();
+  CH.historyLoading = true;
+  try {
+    const r = await fetch(
+      `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
+      `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+    const d = await r.json();
+    if (gen !== CH.gen || key !== chKey()) return;
+    if (d.error || !d.candles || !d.candles.length) {
+      if (d.error) console.error("history load failed:", d.error);
+      return;
+    }
+    const merged = chMergeHistory(CH.data, d);
+    if (merged.candles.length === CH.data.candles.length) {
+      CH.historyExhausted = true;
+      return;
+    }
+    chRenderData(merged, {key, viewport: viewport || chViewport()});
+  } catch (e) {
+    if (gen === CH.gen && key === chKey())
+      console.error("history load failed:", e);
+  } finally {
+    CH.historyLoading = false;
+  }
+}
+function chMaybeLoadHistory(range) {
+  if (chCanLoadHistory(range)) chLoadHistoryChunk();
+}
+
 async function loadChart(symbol) {
   if (symbol) CH.sym = String(symbol).toUpperCase();
   $("ch-symbol").value = CH.sym;
   chInit();
   chPaintControls();
-  const key = `${CH.sym}·${CH.tf}`;
-  const firstPaint = CH.dataKey !== key;      // nothing usable on screen yet
+  const key = chKey();
+  const cached = CH.cache.get(key);
+  const firstPaint = !cached && CH.dataKey !== key;      // nothing usable on screen yet
   const gen = ++CH.gen;
+  CH.historyLoading = false;
+  CH.historyExhausted = false;
+  if (cached?.data && (CH.dataKey !== key || CH.dataSig !== cached.sig)) {
+    chRenderData(cached.data, {key, viewport: cached.viewport || null});
+  }
   if (firstPaint) {
     chOverlay("loading");
     chStale(null);
@@ -1850,29 +2016,20 @@ async function loadChart(symbol) {
            chStale(CH.data.candles[CH.data.candles.length - 1].time); }
     return;
   }
-  CH.data = d;
-  CH.dataKey = key;
-  CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
-  localStorage.setItem("chSym", CH.sym);
-  localStorage.setItem("chTf", CH.tf);
-  try {
-    CH.candle.setData(d.candles);
-    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
-      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
-    chApplyIndicators();
-    chRestoreDrawings();
-    chLoadTradeLines();
-  } catch (e) {
-    // a renderer exception must surface, never leave a half-painted canvas
-    console.error("chart render failed:", e);
-    CH.dataKey = null;                       // force a clean repaint on retry
-    chOverlay("error", `Chart renderer error: ${e.message}`);
+  const sig = chSig(d);
+  const entry = chCacheEntry(key);
+  entry.data = d;
+  entry.sig = sig;
+  entry.viewport = entry.viewport || chViewport();
+  if (CH.dataKey === key && CH.dataSig === sig) {
+    chStale(d.stale ? d.as_of : null);
     return;
   }
-  if (firstPaint) CH.main.timeScale().fitContent();  // refresh keeps the zoom
-  chOverlay(null);
-  chStale(d.stale ? d.as_of : null);
-  chLegend(null);
+  chRenderData(d, {
+    key,
+    viewport: CH.dataKey === key ? chViewport() : cached?.viewport || null,
+    fit: firstPaint && !cached,
+  });
 }
 
 /* keep a visible chart current: refresh on a cadence matched to the
@@ -1924,7 +2081,7 @@ function chLegend(param) {
   const c = cs[i], prev = cs[i - 1] || c;
   const chg = (c.close / prev.close - 1) * 100;
   const bits = [
-    `<b>${CH.sym}</b> · ${CH.tf.toUpperCase()}`,
+    `<b>${CH.sym}</b> · ${tfLabel(CH.tf)}`,
     `O <b>${c.open}</b>`, `H <b>${c.high}</b>`, `L <b>${c.low}</b>`,
     `C <b class="${cls(chg)}">${c.close}</b>`,
     `<span class="${cls(chg)}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span>`,
@@ -1943,6 +2100,13 @@ function chLegend(param) {
 
 /* drawings: horizontal levels persist per symbol; trend lines, fibs,
    zones and notes per symbol+tf */
+// display label for a wire timeframe string, matching the button bar so the
+// legend can't be misread: minutes stay lowercase ("5m"), hours/day/week
+// uppercase ("1H"/"1D"/"1W"), and the month is "1M" (never "1MO", and never
+// colliding with a minute since minutes keep their lowercase m).
+const tfLabel = tf => tf === "1mo" ? "1M"
+  : tf.endsWith("m") ? tf : tf.toUpperCase();
+
 const chDrawKey = () => `chDraw:${CH.sym}`;
 function chLoadDraw() {
   const d = JSON.parse(localStorage.getItem(chDrawKey()) || "{}");

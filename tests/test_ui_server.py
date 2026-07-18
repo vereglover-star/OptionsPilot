@@ -118,11 +118,32 @@ class TestCandlesAPI:
         assert d["indicators"]["bb_upper"][0] is None      # warm-up NaN -> null
         assert d["indicators"]["rsi"][-1] is not None
 
+    def test_candles_respects_requested_range(self, client):
+        calls = []
+        frame = client.provider._candles[Timeframe.M5]
+
+        def get_candles(symbol, timeframe, start, end):
+            calls.append((start, end))
+            return frame[(frame.index >= start) & (frame.index < end)]
+
+        client.provider.get_candles = get_candles
+        start = frame.index[-6].to_pydatetime()
+        end = (frame.index[-1] + timedelta(minutes=5)).to_pydatetime()
+        d = client.get("/api/candles", params={
+            "symbol": "SPY",
+            "tf": "5m",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        }).json()
+        assert calls and calls[0] == (start, end)
+        assert d["candles"]
+        assert d["candles"][-1]["time"] < int(end.timestamp())
+
     def test_unknown_symbol_is_clean_error(self, client):
         r = client.get("/api/candles?symbol=ZZZZ&tf=5m")
         # fake provider raises KeyError for unknown timeframes only; unknown
         # symbol returns the same frames — force an error via bad timeframe
-        r = client.get("/api/candles?symbol=SPY&tf=3m")
+        r = client.get("/api/candles?symbol=SPY&tf=7m")
         assert r.status_code == 502
         assert "unavailable" in r.json()["error"]
 

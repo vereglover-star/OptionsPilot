@@ -26,12 +26,36 @@ class TestCandle:
 
 class TestTimeframe:
     def test_roundtrip(self):
-        for s in ["1m", "5m", "15m", "1h", "4h", "1d"]:
+        for s in ["1m", "2m", "3m", "5m", "10m", "15m", "30m",
+                  "1h", "2h", "4h", "1d", "1w", "1mo"]:
             assert str(Timeframe.from_string(s)) == s
 
     def test_unknown_rejected(self):
         with pytest.raises(ValueError, match="Unknown timeframe"):
-            Timeframe.from_string("3m")
+            Timeframe.from_string("7m")
+
+    def test_month_label_does_not_collide_with_minute(self):
+        # from_string lowercases; the month label must therefore be "1mo"
+        assert Timeframe.from_string("1M") is Timeframe.M1
+        assert Timeframe.from_string("1mo") is Timeframe.MN1
+
+    def test_every_member_fully_wired(self):
+        # Adding a Timeframe member requires a fetch spec, a history window,
+        # and a cache TTL — this is what makes "add an interval later" a
+        # one-line-per-layer change instead of a scattered KeyError hunt.
+        from optionspilot.data.cached import CANDLE_TTL
+        from optionspilot.data.yfinance_provider import _FETCH_SPEC
+        from optionspilot.orchestrator import _WINDOW_DAYS
+
+        for tf in Timeframe:
+            assert tf in _FETCH_SPEC, f"{tf} missing from _FETCH_SPEC"
+            assert tf in _WINDOW_DAYS, f"{tf} missing from _WINDOW_DAYS"
+            assert tf in CANDLE_TTL, f"{tf} missing from CANDLE_TTL"
+            assert str(tf), f"{tf} has no label"
+
+    def test_members_sorted_by_duration(self):
+        mins = [tf.minutes for tf in Timeframe]
+        assert mins == sorted(mins)
 
 
 class TestQuote:

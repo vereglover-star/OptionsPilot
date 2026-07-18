@@ -52,9 +52,15 @@ ET = ZoneInfo("America/New_York")
 MARKET_OPEN = time(9, 30)
 MARKET_CLOSE = time(16, 0)
 
+# History window per timeframe, bounded by what yfinance actually serves
+# (1m ≤ ~7 days back; 2m/5m/15m/30m ≤ 60 days; 1h ≤ 730 days; 1d+ unlimited).
+# 3m resamples from 1m and 10m from 5m, so they inherit those source limits.
 _WINDOW_DAYS = {
-    Timeframe.M1: 5, Timeframe.M5: 10, Timeframe.M15: 25,
-    Timeframe.H1: 60, Timeframe.H4: 100, Timeframe.D1: 300,
+    Timeframe.M1: 5, Timeframe.M2: 10, Timeframe.M3: 5,
+    Timeframe.M5: 10, Timeframe.M10: 25, Timeframe.M15: 25,
+    Timeframe.M30: 40, Timeframe.H1: 60, Timeframe.H2: 90,
+    Timeframe.H4: 100, Timeframe.D1: 300, Timeframe.W1: 1800,
+    Timeframe.MN1: 5400,
 }
 LARGE_MOVE_RVOL = 3.0
 LARGE_MOVE_ATR_MULT = 2.0

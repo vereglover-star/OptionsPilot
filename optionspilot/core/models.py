@@ -15,14 +15,30 @@ from datetime import date, datetime, timezone
 
 
 class Timeframe(enum.Enum):
-    """Chart timeframes. Value is the duration in minutes."""
+    """Chart timeframes. Value is the duration in minutes (nominal for W1/MN1
+    — calendar weeks/months vary; the value is an identifier and sort key,
+    and is what the candle cache stores in its `timeframe` column).
+
+    To add an interval: add the member here and a label below, then give it
+    a fetch spec in `data/yfinance_provider._FETCH_SPEC`, a window in
+    `orchestrator._WINDOW_DAYS`, and a TTL in `data/cached.CANDLE_TTL` —
+    `tests/test_models.py::TestTimeframe::test_every_member_fully_wired`
+    fails until all four agree.
+    """
 
     M1 = 1
+    M2 = 2
+    M3 = 3
     M5 = 5
+    M10 = 10
     M15 = 15
+    M30 = 30
     H1 = 60
+    H2 = 120
     H4 = 240
     D1 = 1440
+    W1 = 10080
+    MN1 = 43200
 
     @property
     def minutes(self) -> int:
@@ -30,17 +46,28 @@ class Timeframe(enum.Enum):
 
     @classmethod
     def from_string(cls, s: str) -> "Timeframe":
-        mapping = {
-            "1m": cls.M1, "5m": cls.M5, "15m": cls.M15,
-            "1h": cls.H1, "4h": cls.H4, "1d": cls.D1,
-        }
         try:
-            return mapping[s.lower()]
+            return _TF_FROM_LABEL[s.lower()]
         except KeyError:
-            raise ValueError(f"Unknown timeframe {s!r}; expected one of {list(mapping)}") from None
+            raise ValueError(
+                f"Unknown timeframe {s!r}; expected one of {list(_TF_FROM_LABEL)}"
+            ) from None
 
     def __str__(self) -> str:
-        return {1: "1m", 5: "5m", 15: "15m", 60: "1h", 240: "4h", 1440: "1d"}[self.value]
+        return _TF_LABEL[self]
+
+
+# Single source of truth for the wire/API label of each timeframe. The month
+# label is "1mo" (yfinance convention) because from_string lowercases and
+# "1M" would collide with one minute.
+_TF_LABEL: dict["Timeframe", str] = {
+    Timeframe.M1: "1m", Timeframe.M2: "2m", Timeframe.M3: "3m",
+    Timeframe.M5: "5m", Timeframe.M10: "10m", Timeframe.M15: "15m",
+    Timeframe.M30: "30m", Timeframe.H1: "1h", Timeframe.H2: "2h",
+    Timeframe.H4: "4h", Timeframe.D1: "1d", Timeframe.W1: "1w",
+    Timeframe.MN1: "1mo",
+}
+_TF_FROM_LABEL = {label: tf for tf, label in _TF_LABEL.items()}
 
 
 class OptionRight(enum.Enum):

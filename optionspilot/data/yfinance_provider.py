@@ -32,14 +32,44 @@ def _yf():
         yf = importlib.import_module("yfinance")
     return yf
 
-_YF_INTERVAL = {
-    Timeframe.M1: "1m",
-    Timeframe.M5: "5m",
-    Timeframe.M15: "15m",
-    Timeframe.H1: "1h",
-    Timeframe.H4: "1h",   # fetched as 1h, resampled to 4h below
-    Timeframe.D1: "1d",
+# Fetch spec per timeframe: (yfinance interval, pandas resample rule or None).
+# Intervals Yahoo doesn't serve natively (3m, 10m, 2h, 4h) are built by
+# resampling the nearest finer native interval. Adding a future interval is
+# one line here (plus the enum/window/TTL entries the models.py docstring
+# lists — test_models enforces completeness).
+_FETCH_SPEC: dict[Timeframe, tuple[str, str | None]] = {
+    Timeframe.M1: ("1m", None),
+    Timeframe.M2: ("2m", None),
+    Timeframe.M3: ("1m", "3min"),
+    Timeframe.M5: ("5m", None),
+    Timeframe.M10: ("5m", "10min"),
+    Timeframe.M15: ("15m", None),
+    Timeframe.M30: ("30m", None),
+    Timeframe.H1: ("1h", None),
+    Timeframe.H2: ("1h", "2h"),
+    Timeframe.H4: ("1h", "4h"),
+    Timeframe.D1: ("1d", None),
+    Timeframe.W1: ("1wk", None),
+    Timeframe.MN1: ("1mo", None),
 }
+
+
+def _symbol_candidates(symbol: str) -> list[str]:
+    """Best-effort Yahoo symbol variants.
+
+    Yahoo Finance uses hyphens where many data sources and users type dots
+    (for example, BRK.B -> BRK-B). We keep the original spelling first so
+    ordinary symbols stay on the fast path, then try the common punctuation
+    variant before giving up.
+    """
+    raw = symbol.upper().strip()
+    variants = [raw]
+    if "." in raw:
+        variants.append(raw.replace(".", "-"))
+    if "-" in raw:
+        variants.append(raw.replace("-", "."))
+    # preserve order while dropping duplicates
+    return list(dict.fromkeys(v for v in variants if v))
 
 
 class YFinanceProvider(MarketDataProvider):
@@ -64,11 +94,18 @@ class YFinanceProvider(MarketDataProvider):
         self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
     ) -> pd.DataFrame:
         self._throttle()
-        raw = _yf().Ticker(symbol).history(
-            start=start, end=end,
-            interval=_YF_INTERVAL[timeframe],
-            auto_adjust=False, actions=False,
-        )
+        interval, resample_rule = _FETCH_SPEC[timeframe]
+        raw = pd.DataFrame()
+        last_symbol = symbol
+        for candidate in _symbol_candidates(symbol):
+            last_symbol = candidate
+            raw = _yf().Ticker(candidate).history(
+                start=start, end=end,
+                interval=interval,
+                auto_adjust=False, actions=False,
+            )
+            if not raw.empty:
+                break
         if raw.empty:
             return validate_candles(pd.DataFrame())
         df = raw.rename(columns={
@@ -77,15 +114,27 @@ class YFinanceProvider(MarketDataProvider):
         })
         if df.index.tz is None:  # daily bars come back tz-naive
             df.index = df.index.tz_localize("UTC")
-        df = validate_candles(df, context=f"{symbol} {timeframe}")
-        if timeframe is Timeframe.H4:
-            df = _resample(df, "4h")
+        df = validate_candles(df, context=f"{last_symbol} {timeframe}")
+        if resample_rule is not None:
+            df = _resample(df, resample_rule)
         return df
 
     def get_quote(self, symbol: str) -> Quote:
         self._throttle()
-        info = _yf().Ticker(symbol).fast_info
-        last = float(info["last_price"])
+        last = 0.0
+        used_symbol = symbol
+        info = None
+        for candidate in _symbol_candidates(symbol):
+            used_symbol = candidate
+            try:
+                info = _yf().Ticker(candidate).fast_info
+                last = float(info["last_price"])
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+            if last > 0:
+                break
+        if last <= 0:
+            raise ValueError(f"could not resolve quote for {symbol!r}")
         # Yahoo bid/ask are often stale or zero outside market hours; fall back
         # to a synthetic quote around last so downstream math stays sane.
         bid = float(info.get("bid") or 0) or last
@@ -99,21 +148,42 @@ class YFinanceProvider(MarketDataProvider):
         Broker/data ABC — callers must feature-detect)."""
         self._throttle()
         try:
-            cap = _yf().Ticker(symbol).fast_info["market_cap"]
-            return float(cap) if cap else None
+            for candidate in _symbol_candidates(symbol):
+                try:
+                    cap = _yf().Ticker(candidate).fast_info["market_cap"]
+                except Exception:  # noqa: BLE001 - try common symbol variants
+                    continue
+                return float(cap) if cap else None
         except Exception:  # noqa: BLE001 — sorting metadata is never critical
             return None
+        return None
 
     def get_expirations(self, symbol: str) -> list[date]:
         self._throttle()
-        return sorted(
-            datetime.strptime(s, "%Y-%m-%d").date()
-            for s in _yf().Ticker(symbol).options
-        )
+        for candidate in _symbol_candidates(symbol):
+            try:
+                return sorted(
+                    datetime.strptime(s, "%Y-%m-%d").date()
+                    for s in _yf().Ticker(candidate).options
+                )
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+        return []
 
     def get_option_chain(self, symbol: str, expiration: date) -> list[OptionContract]:
         self._throttle()
-        chain = _yf().Ticker(symbol).option_chain(expiration.strftime("%Y-%m-%d"))
+        chain = None
+        used_symbol = symbol
+        for candidate in _symbol_candidates(symbol):
+            used_symbol = candidate
+            try:
+                chain = _yf().Ticker(candidate).option_chain(
+                    expiration.strftime("%Y-%m-%d"))
+                break
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+        if chain is None:
+            return []
         out: list[OptionContract] = []
         for frame, right in ((chain.calls, OptionRight.CALL), (chain.puts, OptionRight.PUT)):
             for row in frame.itertuples(index=False):

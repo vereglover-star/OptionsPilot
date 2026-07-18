@@ -41,11 +41,18 @@ log = get_logger("data")
 # timeframes can't grow new bars quickly and don't need refetching to show one.
 CANDLE_TTL: dict[Timeframe, float] = {
     Timeframe.M1: 20.0,
+    Timeframe.M2: 20.0,
+    Timeframe.M3: 20.0,
     Timeframe.M5: 30.0,
+    Timeframe.M10: 45.0,
     Timeframe.M15: 60.0,
+    Timeframe.M30: 90.0,
     Timeframe.H1: 120.0,
+    Timeframe.H2: 180.0,
     Timeframe.H4: 240.0,
     Timeframe.D1: 60.0,
+    Timeframe.W1: 600.0,
+    Timeframe.MN1: 600.0,
 }
 DEFAULT_CANDLE_TTL = 60.0
 

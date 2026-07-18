@@ -106,14 +106,17 @@ def cmd_backtest(args) -> int:
     if args.min_confidence is not None:
         cfg = cfg.model_copy(deep=True)
         cfg.engine.min_confidence = args.min_confidence
+    from optionspilot.orchestrator import _WINDOW_DAYS
+
     provider = YFinanceProvider()
     end = datetime.now(timezone.utc)
     candles = {}
     for s in {*cfg.engine.entry_timeframes, *cfg.engine.htf_trend_timeframes}:
         tf = Timeframe.from_string(s)
-        window = {1: 5, 5: 10, 15: min(args.days, 55), 60: 60, 240: 100, 1440: 300}
+        days = min(args.days, _WINDOW_DAYS[tf]) if tf is Timeframe.M15 \
+            else _WINDOW_DAYS[tf]
         candles[tf] = provider.get_candles(
-            args.symbol, tf, end - timedelta(days=window[tf.minutes]), end)
+            args.symbol, tf, end - timedelta(days=days), end)
         print(f"  {tf}: {len(candles[tf])} bars")
     journal = TradeJournal(Path("data") / f"backtest_{args.symbol.lower()}.db")
     report = Backtester(cfg).run(args.symbol.upper(), candles, journal=journal)
