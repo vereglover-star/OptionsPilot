@@ -271,3 +271,13 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   did nothing until a later session wired it up. When adding a gate, verify
   the call site with a test that would fail if the gate weren't wired in —
   not just a unit test of the gate function in isolation.
+- PyInstaller only bundles what it can see in literal `import` statements.
+  A lazy `importlib.import_module("...")` (added for startup speed in
+  `f1bae42`) silently dropped yfinance from every exe built afterwards —
+  the build succeeded, the dev venv was fine, and the packaged app only
+  failed at runtime on its first data request ("No module named
+  'yfinance'", every chart/chain dead). If you make an import dynamic,
+  add a `--collect-all` flag in `scripts/build_exe.ps1` in the same
+  change; `tests/test_packaging.py` and the build script's packaged
+  `selftest` gate both exist to catch this, so run them rather than
+  assuming a green build means a complete bundle.

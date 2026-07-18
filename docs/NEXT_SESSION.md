@@ -5,7 +5,8 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-17, end of the V3 UI sprint session.
+**Last updated:** 2026-07-18, packaging-fix session (release-blocking
+"No module named 'yfinance'" in the packaged exe — root-caused and fixed).
 
 ## What was completed?
 
@@ -50,10 +51,24 @@ browser → committed separately:
 The audit that scoped all of this is `ROADMAP-V3-UX.md` (committed with
 V3-0).
 
+9. **Packaging fix (2026-07-18, this session, uncommitted).** The user
+   found the freshly built exe unusable: every chart/quote/chain request
+   failed with "No module named 'yfinance'". Root cause: the performance
+   pass (`f1bae42`) made the yfinance import lazy via
+   `importlib.import_module`, which PyInstaller cannot see, so every exe
+   built since then silently shipped without yfinance. Fixed with
+   `--collect-all yfinance` in `scripts/build_exe.ps1`; a new `selftest`
+   CLI command that the build script now runs against the fresh exe
+   (build fails on an incomplete bundle); and `tests/test_packaging.py`
+   (+4 tests — fails the ordinary suite if any dynamic third-party
+   import isn't collected). Exe rebuilt and verified live: candles
+   (daily + 5m) and a 231-contract chain served from the packaged app;
+   full browser flow sweep of the chart system green. **356 tests.**
+
 ## What is currently stable?
 
-Everything on both branches. **352 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
-added in V3-0). `scripts/verify.ps1` ran clean end-to-end as the closing
+Everything on both branches. **356 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
+added in V3-0, +4 packaging-guard tests added 2026-07-18). `scripts/verify.ps1` ran clean end-to-end as the closing
 action of the session, and every milestone additionally got scenario-level
 Playwright verification (chart failure states, the full order-ticket flow —
 including the manual-entry risk gate visibly rejecting an after-hours
@@ -99,6 +114,15 @@ engine's empty-means-skip behavior is load-bearing for trading safety.
 
 ## Known issues
 
+- **The 2026-07-18 packaging fix is uncommitted** (build_exe.ps1,
+  __main__.py `selftest`, tests/test_packaging.py, doc updates, plus the
+  untracked `ARCHITECTURE-MOBILE.md` proposal) — commit when the user
+  says so.
+- `OptionsPilot.exe serve` (the windowed exe running the browser-serve
+  subcommand) starts its internals but never binds the port —
+  pre-existing, discovered 2026-07-18 while verifying the packaging fix.
+  Desktop `ui` mode and dev-repo `python -m optionspilot serve` both
+  work. Tracked in `TODO.md`.
 - The Trade tab's fill-path UX (post-fill stop-loss pre-arm) has no
   market-hours verification from this session (see above).
 - Frontend coverage remains shallow relative to the app's size

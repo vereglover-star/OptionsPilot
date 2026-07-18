@@ -4,7 +4,59 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-17 — V3-7: pre-merge audit — cache threading bug, chart auto-retry, key guard
+## [Uncommitted] 2026-07-18 — Packaged exe shipped without yfinance: lazy import invisible to PyInstaller
+
+*356 tests (+4). Release-blocking regression found by the user in the
+freshly built exe: every chart, quote, and option-chain request failed
+with "No module named 'yfinance'". Root-caused and fixed at the packaging
+layer; no trading logic changed.*
+
+- **Root cause.** The performance pass (`f1bae42`, pre-V3, on `main`)
+  deferred the yfinance import behind `importlib.import_module()` to cut
+  app startup from 3.1s to 0.9s. PyInstaller discovers dependencies by
+  statically scanning `import` statements, so the dynamic import is
+  invisible to it — from that commit on, every exe built by
+  `scripts/build_exe.ps1` silently omitted yfinance (and its entire
+  dependency tree, including `curl_cffi`) from the bundle. The build
+  itself cannot fail for this: the missing module only surfaces at
+  runtime, on the first data request. It stayed latent because no
+  post-`f1bae42` exe had its data path exercised until now — the V3
+  pre-merge audit rebuilt the exe and verified the build *completed*,
+  but the market was closed and launching the exe was left as a listed
+  manual test. Not a V3 UI regression: V3-0's error surfacing is what
+  made the failure visible (verbatim error + Retry) instead of a
+  silently blank canvas, and the dev venv was never affected.
+- **Fix.** `--collect-all yfinance` in `scripts/build_exe.ps1`, which
+  also pulls yfinance's own (statically declared) dependency tree.
+  Verified: `yfinance 1.5.1` and `curl_cffi` physically present in
+  `dist/OptionsPilot/_internal`; the rebuilt exe serves 206 daily SPY
+  candles, 624 SMCI 5m candles (the exact request from the failure
+  logs), and a 231-contract chain, `stale: false` throughout.
+- **Why it can't silently regress.** Three independent guards: (1) a new
+  `selftest` CLI command (`OptionsPilot.exe selftest`) forces every
+  lazily-imported dependency offline and exits nonzero if one is
+  missing; `build_exe.ps1` now runs it against the freshly built exe and
+  fails the build on a bad bundle. (2) New `tests/test_packaging.py`
+  scans the source tree for dynamic third-party imports and fails the
+  ordinary test suite if any isn't explicitly collected by the build
+  script — catching the bug class (someone adds another lazy import)
+  long before anyone builds. (3) A companion test asserts the build
+  script still *runs* the packaged selftest, per the "a gate that isn't
+  wired in protects nothing" lesson.
+- **Chart-system regression sweep** (all green, zero console errors):
+  first-load overlay → candles, rapid timeframe-switch race, invalid
+  symbol → error overlay → Retry → recovery, indicators
+  (EMA/VWAP/BB/RSI/MACD), fib/zone/note drawing tools + persistence +
+  clear, position/order price lines, stale-banner path (forced via
+  request interception) + return-to-live, and the 30s auto-refresh.
+- **Known limitation discovered en route** (pre-existing, not fixed
+  here): `OptionsPilot.exe serve` — the *windowed* exe running the
+  browser-serve subcommand — starts its internals but never binds the
+  port. Desktop `ui` mode (the default; verified) and dev-repo
+  `python -m optionspilot serve` (verified) are unaffected. Logged in
+  `TODO.md`.
+
+## 2026-07-17 — V3-7: pre-merge audit — cache threading bug, chart auto-retry, key guard
 
 *352 tests (+1). A senior-review pass over the whole `v3-ui` changeset
 before merging to `main`, which found and fixed three real issues:*

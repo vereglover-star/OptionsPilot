@@ -124,7 +124,32 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-17, end of the V3 UI sprint (branch `v3-ui`, seven commits,
+**2026-07-18, packaging-fix session (branch `v3-ui`, uncommitted).** The
+user found the freshly built exe release-blocked: every chart and
+option-chain request failed with "No module named 'yfinance'". Root
+cause (traced, not guessed): the performance pass `f1bae42` made the
+yfinance import lazy via `importlib.import_module()`, which PyInstaller's
+static import scan cannot see — every exe built since then silently
+shipped without yfinance and its whole dependency tree. The dev venv was
+never affected, and this is not a V3 UI regression (V3-0's error
+surfacing is what made it visible instead of a blank canvas). Fixed:
+`--collect-all yfinance` in `scripts/build_exe.ps1`; a new `selftest`
+CLI command (forces the lazy imports, offline) that the build script now
+runs against the freshly built exe and fails the build on; and
+`tests/test_packaging.py` (+4) failing the ordinary suite if any dynamic
+third-party import isn't collected by the build script. Verified: exe
+rebuilt (selftest gate PASS, `yfinance 1.5.1` + `curl_cffi` physically
+in `_internal`), packaged desktop app served 206 daily SPY candles, 624
+SMCI 5m candles, and a 231-contract chain live over HTTP; full
+browser-flow sweep of the chart system green (load, indicators,
+drawings, trade lines, stale banner, retry, 30s auto-refresh — zero
+console errors); `verify.ps1` green end-to-end; **356 tests**. One
+pre-existing quirk found and documented (not fixed): `OptionsPilot.exe
+serve` from the windowed exe never binds its port (`TODO.md`). The
+changes are **uncommitted**, awaiting the user; the `v3-ui` merge
+decision also remains open.
+
+Before that, 2026-07-17, end of the V3 UI sprint (branch `v3-ui`, seven commits,
 each browser-verified before committing — see `NEXT_SESSION.md` for the
 per-milestone list and `CHANGELOG.md` for detail).** Key facts a next
 session needs: the chart blank-canvas bug is fixed at the root
@@ -172,8 +197,8 @@ for the record):
   faster than ~500ms as double-clicks — pace scripted two-point drawing
   clicks ≥700ms apart.
 
-**The exe still predates all 2026-07-16/17 UI work** — rebuild + smoke
-test deliberately LAST (user's stated preference), when the app is closed.
+**The exe was rebuilt 2026-07-18** with the packaging fix and verified
+serving live data (see the current stopping point above).
 
 ## Next recommended task
 

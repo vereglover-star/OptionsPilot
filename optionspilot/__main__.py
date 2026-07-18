@@ -7,6 +7,7 @@ Commands:
   journal [--last N]        recent trades + aggregate stats
   backtest SYMBOL [...]     backtest on downloaded history, write reports
   learn                     run a learning cycle over the journal
+  selftest                  verify lazily-imported dependencies are present
 """
 
 from __future__ import annotations
@@ -165,6 +166,23 @@ def cmd_learn(args) -> int:
     return 0
 
 
+def cmd_selftest(args) -> int:
+    # Modules loaded via importlib (the deferred yfinance import) are invisible
+    # to PyInstaller's static analysis, so a packaged exe can be missing them
+    # while building cleanly — the failure then only appears at runtime, on the
+    # first data request. This command forces those imports up front, offline,
+    # so scripts/build_exe.ps1 can gate a build on the bundle actually working.
+    from optionspilot.data.yfinance_provider import _yf
+
+    try:
+        yf = _yf()
+    except Exception as exc:
+        print(f"SELFTEST FAIL: yfinance unavailable: {exc}")
+        return 1
+    print(f"SELFTEST PASS (yfinance {getattr(yf, '__version__', 'unknown')})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="optionspilot",
@@ -190,12 +208,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-confidence", type=float, default=None)
     p = sub.add_parser("learn", help="run a learning cycle over the journal")
     p.add_argument("--min-sample", type=int, default=20)
+    sub.add_parser("selftest",
+                   help="verify lazily-imported dependencies are present "
+                        "(used by scripts/build_exe.ps1 to validate the bundle)")
 
     args = parser.parse_args(argv)
     handler = {
         "run": cmd_run, "ui": cmd_ui, "serve": cmd_serve,
         "scan": cmd_scan, "status": cmd_status,
         "journal": cmd_journal, "backtest": cmd_backtest, "learn": cmd_learn,
+        "selftest": cmd_selftest,
     }[args.command]
     try:
         return handler(args)

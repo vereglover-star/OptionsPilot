@@ -16,9 +16,21 @@ is. This file is the flat, actionable checklist version.
 
 ## Deferred by user decision
 
-- [ ] **Rebuild and smoke-test the exe** — the packaged app predates all
-      2026-07-16 UI/performance work. The user explicitly wants packaging
-      LAST, once feature-complete; don't prioritize it.
+- [x] **Rebuild and smoke-test the exe** — done 2026-07-18 as part of the
+      yfinance packaging fix: rebuilt with `--collect-all yfinance`,
+      packaged selftest gate PASS, then verified live from the packaged
+      desktop app (206 daily SPY candles, 624 SMCI 5m candles,
+      231-contract chain over HTTP against a scratch data dir).
+
+- [ ] **`OptionsPilot.exe serve` from the windowed exe never binds its
+      port** — discovered 2026-07-18 while verifying the packaging fix:
+      the process starts (broker/orchestrator threads spin up) but
+      uvicorn never listens, with no log output. Pre-existing, unrelated
+      to yfinance; desktop `ui` mode and dev-repo `python -m optionspilot
+      serve` both work, so nothing user-facing is broken. Diagnose the
+      windowed-stdio + `uvicorn.run` interaction if `exe serve` ever
+      needs to be a supported path (or document it as unsupported and
+      make it exit with a clear message).
 
 - [x] **Live-verify the V2-3 frontend in a real browser** — done 2026-07-16
       against a scratch data dir: toggle switch + persistence across reload,

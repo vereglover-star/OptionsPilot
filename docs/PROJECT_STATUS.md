@@ -52,6 +52,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3-5 — Analytics presentation | Coach first-run explainer, journal filters + cumulative P&L curve, backtest drawdown/exit-reason panels, learning weight-shift bars | Committed on `v3-ui`, real backtest run |
 | V3-6 — Accessibility | Skip link, toast live region, `scope="col"` on all 51 headers, `aria-current`, `?` shortcut overlay | Committed on `v3-ui`, browser-verified |
 | V3-7 — Pre-merge audit fixes | `CandleCache` thread-safety (the disk cache silently never worked in the threaded live app), chart auto-retry for failed first loads, `?`-overlay order-key guard | Committed on `v3-ui`, each fix individually verified |
+| Packaging fix (2026-07-18) | Exe shipped without yfinance (lazy `importlib` import invisible to PyInstaller since `f1bae42`): `--collect-all yfinance`, new `selftest` CLI as a post-build bundle gate, `tests/test_packaging.py` dynamic-import guard | On `v3-ui`, exe rebuilt + endpoints verified live |
 
 ## Features complete
 
@@ -82,7 +83,21 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. Fixed in-session (2026-07-17, automation session): the
+None open. Fixed in-session (2026-07-18, packaging-fix session): the
+packaged exe shipped without yfinance — every chart/quote/chain request
+failed with "No module named 'yfinance'". The performance pass (`f1bae42`)
+had made the yfinance import lazy via `importlib.import_module`, which
+PyInstaller's static analysis cannot see, so every exe built since then
+silently omitted it. Fixed with `--collect-all yfinance` in
+`scripts/build_exe.ps1`, a `selftest` CLI command the build now runs
+against the fresh exe (fails the build on an incomplete bundle), and
+`tests/test_packaging.py` (fails the suite if any dynamic third-party
+import isn't collected by the build script). One pre-existing limitation
+noted while verifying: `OptionsPilot.exe serve` (the windowed exe running
+the browser-serve subcommand) never binds its port — desktop `ui` mode
+and dev-repo `serve` both work; tracked in `TODO.md`.
+
+Fixed earlier (2026-07-17, automation session): the
 `/favicon.ico` 404 (the one remaining browser console error from the prior
 session), found immediately by the new `scripts/browser_check.py`'s first
 real run. Fixed the same session before it: a halted paper account could
@@ -109,7 +124,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**352 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**356 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check) and `scripts/browser_check.py` (headless browser, every tab, zero
 console errors) both run automatically via `scripts/verify.ps1` — neither
@@ -117,8 +132,8 @@ is deep per-flow regression coverage (see `TODO.md`).
 
 ## Last verified date
 
-**2026-07-17** (V3 session) — `.\scripts\verify.ps1` end to end: full
-pytest run (352/352), static `$("id")` reference check, documentation
+**2026-07-18** (packaging-fix session) — `.\scripts\verify.ps1` end to end: full
+pytest run (356/356), static `$("id")` reference check, documentation
 consistency check, `pip check`, and a headless-browser smoke check across
 all 9 tabs (Playwright + system Edge) with zero console errors — plus
 scenario-level Playwright verification per V3 milestone (chart failure
