@@ -1865,10 +1865,32 @@ function chSyncPane(pane) {
 
 const chKey = () => `${CH.sym}·${CH.tf}`;
 const chSig = d => {
-  const first = d.candles[0]?.time ?? 0;
-  const last = d.candles.length ? d.candles[d.candles.length - 1].time : 0;
-  return `${d.candles.length}|${first}|${last}|${d.stale ? 1 : 0}|${d.as_of ?? 0}`;
+  const n = d.candles.length, first = d.candles[0]?.time ?? 0, L = d.candles[n - 1];
+  // include the last bar's OHLCV: during market hours the forming candle keeps
+  // the same timestamp while its price moves, so a time-only signature would
+  // report "no change" and the live candle would freeze until a new bar opened.
+  const lastSig = L ? `${L.time},${L.open},${L.high},${L.low},${L.close},${L.volume}` : 0;
+  return `${n}|${first}|${lastSig}|${d.stale ? 1 : 0}|${d.as_of ?? 0}`;
 };
+/* Is `next` just `prev` with new/updated trailing bars (same leading bars, same
+   window origin)? Returns the tail bars to push via series.update() for a
+   flicker-free O(1) live update, or null when a full setData is required
+   (symbol/tf switch, history prepend, window slide). */
+function chTailUpdate(prev, next) {
+  if (!prev) return null;
+  const a = prev.candles, b = next.candles;
+  if (!a.length || !b.length || b.length < a.length) return null;
+  if (a[0].time !== b[0].time) return null;                  // window shifted → full
+  for (let i = 0; i < a.length - 1; i++)
+    if (a[i].time !== b[i].time) return null;                // a non-tail bar moved → full
+  if (a[a.length - 1].time !== b[a.length - 1].time) return null;
+  const tail = [];
+  const last = a[a.length - 1], nl = b[a.length - 1];
+  if (last.open !== nl.open || last.high !== nl.high || last.low !== nl.low ||
+      last.close !== nl.close || last.volume !== nl.volume) tail.push(nl);
+  for (let i = a.length; i < b.length; i++) tail.push(b[i]);  // freshly appended bars
+  return tail.length ? tail : null;
+}
 const chCacheEntry = key => {
   const existing = CH.cache.get(key) || {};
   CH.cache.set(key, existing);
@@ -1883,6 +1905,34 @@ const chRememberViewport = key => {
   chCacheEntry(key).viewport = chViewport();
 };
 function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
+  // Live-update fast path: when the same symbol/tf just gained an updated or
+  // freshly-appended trailing bar, push only those bars with series.update().
+  // No setData, no viewport touch → the forming candle and its volume/price
+  // line animate in place with zero flicker and no reflow (Bug 5 + Bug 8).
+  const tail = (CH.dataKey === key && chDrawModelSym === CH.sym)
+    ? chTailUpdate(CH.data, d) : null;
+  if (tail) {
+    CH.data = d; CH.dataSig = chSig(d);
+    CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
+    try {
+      for (const bar of tail) {
+        CH.candle.update(bar);
+        CH.volume.update({ time: bar.time, value: bar.volume,
+          color: bar.close >= bar.open ? CH_COLORS.volUp : CH_COLORS.volDn });
+      }
+      chApplyIndicators();       // small line series; setData preserves the view
+      chDrawRender();
+      chLoadTradeLines();
+    } catch (e) {
+      console.error("chart live-update failed:", e);
+      CH.dataKey = null;         // fall back to a full repaint next tick
+      return false;
+    }
+    const entry = chCacheEntry(key);
+    entry.data = d; entry.sig = CH.dataSig; entry.viewport = chViewport();
+    chStale(d.stale ? d.as_of : null); chLegend(null);
+    return true;
+  }
   CH.data = d;
   CH.dataKey = key;
   CH.dataSig = chSig(d);
