@@ -167,6 +167,27 @@ class TestCandlesAPI:
             for k in ("open", "high", "low", "close"):
                 assert bar[k] == bar[k]                 # no NaN leaked
 
+    def test_candles_endpoint_honors_start_end_for_history_paging(self, client):
+        # Infinite scroll-back depends on /api/candles forwarding an older
+        # [start, end] window to the provider. If the endpoint ever drops
+        # these params again, the frontend re-fetches the same recent window,
+        # the prepend merge finds nothing older, and scrolling "runs out".
+        from datetime import datetime, timezone
+
+        seen = {}
+        orig = client.provider.get_candles
+
+        def spy(symbol, tf, start, end):
+            seen["start"], seen["end"] = start, end
+            return orig(symbol, tf, start, end)
+
+        client.provider.get_candles = spy
+        r = client.get("/api/candles?symbol=SPY&tf=5m"
+                       "&start=2025-01-01T00:00:00Z&end=2025-02-01T00:00:00Z")
+        assert r.status_code == 200
+        assert seen["start"] == datetime(2025, 1, 1, tzinfo=timezone.utc)
+        assert seen["end"] == datetime(2025, 2, 1, tzinfo=timezone.utc)
+
     def test_chart_lib_is_served(self, client):
         r = client.get("/static/lightweight-charts.js")
         assert r.status_code == 200

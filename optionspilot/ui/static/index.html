@@ -425,6 +425,14 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   border-radius:var(--r-sm); padding:5px 10px; margin:6px 0 2px; }
 #ch-stale.show { display:flex; }
 #ch-stale .btn { padding:2px 10px; font-size:var(--fs-sm); }
+/* unobtrusive left-edge indicator while older history streams in (or when
+   the start of available history has been reached) — never blocks the chart */
+#ch-histpill { position:absolute; top:8px; left:8px; z-index:6; display:none;
+  align-items:center; gap:7px; font-size:var(--fs-xs); color:var(--text-dim);
+  background:var(--panel); border:1px solid var(--grid); border-radius:999px;
+  padding:3px 10px; box-shadow:var(--sh-1); pointer-events:none; }
+#ch-histpill.show { display:flex; }
+#ch-histpill .ch-spinner { width:11px; height:11px; border-width:2px; margin:0; }
 .subpane { height:130px; margin-top:6px; border-top:1px solid var(--grid); }
 .chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
   display:flex; flex-direction:column; }
@@ -587,6 +595,7 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
           <button class="btn primary" id="ch-overlay-retry"
                   style="display:none">Retry</button>
         </div>
+        <div id="ch-histpill" role="status" aria-live="polite"></div>
       </div>
       <div id="ch-rsi" class="subpane" style="display:none"></div>
       <div id="ch-macd" class="subpane" style="display:none"></div>
@@ -1904,36 +1913,58 @@ function chCanLoadHistory(range) {
   if (!range || typeof range.from !== "number" || !CH.data) return false;
   if (CH.historyLoading || CH.historyExhausted || !CH.historyArmed) return false;
   if (CH.restoringViewport) return false;
-  const first = CH.data.candles[0]?.time;
-  if (!first) return false;
-  return range.from <= first + chTfSeconds() * CH_HISTORY_TRIGGER_BARS;
+  if (CH.data.candles.length < 20) return false;
+  // range.from is a LOGICAL bar index (index 0 = the first loaded bar), NOT a
+  // timestamp — the callback is subscribeVisibleLogicalRangeChange. As the
+  // user scrolls back in time the left edge approaches 0 and goes negative;
+  // trigger a fetch once it's within CH_HISTORY_TRIGGER_BARS of the oldest bar.
+  return range.from <= CH_HISTORY_TRIGGER_BARS;
 }
-function chMergeHistory(oldPayload, newerPayload) {
-  const first = newerPayload.candles[0]?.time;
-  if (!first) return newerPayload;
-  const extraCandles = oldPayload.candles.filter(c => c.time < first);
-  if (!extraCandles.length) return newerPayload;
-  const extraIndex = new Map(oldPayload.candles.map((c, i) => [c.time, i]));
+/* Merge a freshly-fetched OLDER window (`older`) in front of the currently
+   displayed payload (`existing`). `older` spans further back in time; we
+   prepend only its bars that predate the oldest bar already on screen, and
+   prepend each indicator series in lockstep so every series stays aligned
+   1:1 with candles. Returns `existing` unchanged when nothing genuinely
+   older came back — the caller reads that as "history exhausted". */
+function chMergeHistory(existing, older) {
+  const e0 = existing.candles[0]?.time;
+  if (e0 == null) return older;
+  const extra = older.candles.filter(c => c.time < e0);
+  if (!extra.length) return existing;                 // no older bars -> exhausted
+  const olderIndex = new Map(older.candles.map((c, i) => [c.time, i]));
   const merged = {
-    ...newerPayload,
-    candles: [...extraCandles, ...newerPayload.candles],
+    ...existing,
+    candles: [...extra, ...existing.candles],
     indicators: {},
-    stale: newerPayload.stale || oldPayload.stale,
-    as_of: newerPayload.as_of ?? oldPayload.as_of ?? null,
+    stale: existing.stale,
+    as_of: existing.as_of ?? null,
   };
   const names = new Set([
-    ...Object.keys(newerPayload.indicators || {}),
-    ...Object.keys(oldPayload.indicators || {}),
+    ...Object.keys(existing.indicators || {}),
+    ...Object.keys(older.indicators || {}),
   ]);
   for (const name of names) {
-    const base = newerPayload.indicators?.[name] || [];
-    const prepend = extraCandles.map(c => {
-      const i = extraIndex.get(c.time);
-      return i == null ? null : base[i] ?? null;
+    const base = existing.indicators?.[name] || [];
+    const olderSeries = older.indicators?.[name] || [];
+    const prepend = extra.map(c => {
+      const i = olderIndex.get(c.time);
+      return i == null ? null : olderSeries[i] ?? null;
     });
-    merged.indicators[name] = [...prepend, ...(base || [])];
+    merged.indicators[name] = [...prepend, ...base];
   }
   return merged;
+}
+function chHistPill(state) {
+  const p = $("ch-histpill");
+  if (!state) { p.classList.remove("show"); return; }
+  p.classList.add("show");
+  p.innerHTML = state === "loading"
+    ? '<span class="ch-spinner"></span>Loading history…'
+    : "◄ Start of available history";
+  if (state === "end") setTimeout(() => {
+    if ($("ch-histpill").textContent.includes("Start"))
+      $("ch-histpill").classList.remove("show");
+  }, 2200);
 }
 async function chLoadHistoryChunk() {
   if (!CH.data || CH.historyLoading || CH.historyExhausted) return;
@@ -1947,6 +1978,7 @@ async function chLoadHistoryChunk() {
   const start = new Date((first - span) * 1000).toISOString();
   const end = new Date(first * 1000).toISOString();
   CH.historyLoading = true;
+  chHistPill("loading");
   try {
     const r = await fetch(
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
@@ -1954,18 +1986,25 @@ async function chLoadHistoryChunk() {
     const d = await r.json();
     if (gen !== CH.gen || key !== chKey()) return;
     if (d.error || !d.candles || !d.candles.length) {
+      // a failed history fetch is not proof of exhaustion — leave the flag
+      // clear so the next scroll retries; only an all-older-bars-absent
+      // merge (below) marks the true start of history.
       if (d.error) console.error("history load failed:", d.error);
+      chHistPill(null);
       return;
     }
     const merged = chMergeHistory(CH.data, d);
     if (merged.candles.length === CH.data.candles.length) {
       CH.historyExhausted = true;
+      chHistPill("end");
       return;
     }
     chRenderData(merged, {key, viewport: viewport || chViewport()});
+    chHistPill(null);
   } catch (e) {
     if (gen === CH.gen && key === chKey())
       console.error("history load failed:", e);
+    chHistPill(null);
   } finally {
     CH.historyLoading = false;
   }
@@ -1985,6 +2024,7 @@ async function loadChart(symbol) {
   const gen = ++CH.gen;
   CH.historyLoading = false;
   CH.historyExhausted = false;
+  chHistPill(null);
   if (cached?.data && (CH.dataKey !== key || CH.dataSig !== cached.sig)) {
     chRenderData(cached.data, {key, viewport: cached.viewport || null});
   }
