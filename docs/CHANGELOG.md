@@ -4,7 +4,7 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-18 — V3.1 RC3: final release blockers
+## [`60f16a4`] 2026-07-18 — V3.1 RC3: final release blockers
 
 *376 tests, chart_check 27 → 29. Reproduced the user's exact manual
 workflows before touching code; each fix has a browser test that fails

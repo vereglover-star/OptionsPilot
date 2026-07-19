@@ -129,8 +129,8 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-18, V3.1 RC3 final release blockers (branch `v3-ui`, uncommitted
-pending `verify.ps1`).** Three bugs the user hit in MANUAL testing that the
+**2026-07-18, V3.1 RC3 final release blockers (branch `v3-ui`, committed
+`60f16a4`).** Three bugs the user hit in MANUAL testing that the
 green automated suite had missed — reproduced by driving the real mouse/UI
 before any code changed:
 
