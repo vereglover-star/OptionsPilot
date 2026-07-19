@@ -4,7 +4,7 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-18 — V3.1 RC2: final chart release audit
+## [`6f3643d`] 2026-07-18 — V3.1 RC2: final chart release audit
 
 *376 tests (+2), chart_check 27 (+6). The last stabilization pass before
 `v3-ui` merges to `main`. Four remaining chart bugs, each reproduced in a

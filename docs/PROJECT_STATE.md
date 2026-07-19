@@ -163,8 +163,9 @@ green end to end. Performance was audited on evidence (one fetch per load,
 no canvas/instance leak across 15 reparents, pane-churn loop removed) — no
 speculative optimizations. Market-hours live validation remains the one
 open item (market closed); the forming-candle / new-bar / indicator paths
-are architecturally verified with simulated ticks. **RC2 is uncommitted
-pending `verify.ps1` green.**
+are architecturally verified with simulated ticks. **RC2 committed as
+`6f3643d` after `verify.ps1` passed end to end; `v3-ui` is still not merged
+to `main` (the user's call).**
 
 ### Before that: V3.1 RC1 stabilization polish
 
