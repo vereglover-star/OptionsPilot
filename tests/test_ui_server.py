@@ -188,6 +188,30 @@ class TestCandlesAPI:
         assert seen["start"] == datetime(2025, 1, 1, tzinfo=timezone.utc)
         assert seen["end"] == datetime(2025, 2, 1, tzinfo=timezone.utc)
 
+    def test_candles_payload_reports_market_open(self, client):
+        # The stale-banner suppression (a closed-market cached payload is not
+        # "live data unavailable" — it is simply the last session) depends on
+        # every candles payload reporting whether the market is open. NOW is
+        # frozen to Friday 11:00 ET, inside the regular-hours window.
+        d = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["market_open"] is True
+
+    def test_stale_display_payload_still_reports_market_state(self, client):
+        # When the live fetch fails and the display provider serves disk-cached
+        # bars (stale=True), the payload must still carry market_open so the
+        # frontend can tell a real "you're behind live prices" warning (market
+        # open) from a non-event (market closed, showing the last session).
+        frame = client.provider._candles[Timeframe.M5]
+
+        def stale_ok(symbol, tf, start, end):
+            return frame, True
+
+        client.provider.get_candles_stale_ok = stale_ok
+        d = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["stale"] is True
+        assert d["as_of"] is not None
+        assert d["market_open"] is True          # rides alongside the stale flag
+
     def test_chart_lib_is_served(self, client):
         r = client.get("/static/lightweight-charts.js")
         assert r.status_code == 200

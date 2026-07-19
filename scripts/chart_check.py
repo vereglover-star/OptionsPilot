@@ -219,6 +219,9 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             # 12. stale-cache banner: a controlled route returns stale bars, then
             #     fresh bars on retry. Fully deterministic — no dependence on live
             #     feed freshness (which rate-limiting can legitimately make stale).
+            #     market_open is forced True: the banner means "behind LIVE prices",
+            #     which is only meaningful (and only shown) while the market is open,
+            #     so the test must not depend on the wall-clock day it runs.
             force_stale = [True]
 
             def stale_route(route):
@@ -227,6 +230,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                 if body.get("candles"):
                     body["stale"] = force_stale[0]
                     body["as_of"] = body["candles"][-1]["time"] if force_stale[0] else None
+                    body["market_open"] = True
                 route.fulfill(json=body)
             page.route("**/api/candles*", stale_route)
             page.evaluate("() => loadChart()")
@@ -281,6 +285,43 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                   "live intrabar update is in-place (no new bar, no view jump)")
             page.unroute("**/api/candles*")
 
+            # 15b. new-bar append: a fresh trailing bar (the market-hours
+            #      bar-rollover case) is appended via the incremental fast path —
+            #      candle count grows by exactly one, the view does not jump.
+            tf_secs = {"1d": 86400}
+            def append_route(route):
+                resp = route.fetch()
+                body = resp.json()
+                cs = body.get("candles")
+                if cs:
+                    last = cs[-1]
+                    nb = dict(last)
+                    nb["time"] = last["time"] + tf_secs["1d"]
+                    body["candles"] = cs + [nb]
+                    for name, series in (body.get("indicators") or {}).items():
+                        if series:
+                            body["indicators"][name] = series + [series[-1]]
+                route.fulfill(json=body)
+            pre2 = page.evaluate("() => ({n: CH.data.candles.length, "
+                                 "r: CH.main.timeScale().getVisibleLogicalRange()})")
+            page.route("**/api/candles*", append_route)
+            page.evaluate("() => loadChart()")
+            page.wait_for_function(
+                f"() => CH.data.candles.length === {pre2['n']} + 1", timeout=15000)
+            post2 = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            # a new bar at the realtime edge scrolls the view by ~1 bar to keep
+            # the edge in sight (correct, TradingView-like) — assert the chart is
+            # not REZOOMED (visible width preserved) and only nudged, not recentred.
+            w_pre = pre2["r"]["to"] - pre2["r"]["from"]
+            w_post = post2["to"] - post2["from"]
+            rezoom = abs(w_post - w_pre)
+            shift = abs(post2["from"] - pre2["r"]["from"])
+            check(rezoom < 0.5 and shift <= 2.0,
+                  "new-bar append grows the series without a view jump")
+            page.unroute("**/api/candles*")
+            page.evaluate("() => loadChart()")   # restore the real (un-appended) series
+            wait_loaded("QQQ", "1d")
+
             # 16. single-instance / no-leak guard: no extra chart canvases spawned
             canvas_after = page.evaluate("() => document.querySelectorAll('#ch-main canvas').length")
             check(canvas_after == canvas_before and page.evaluate("() => !!CH.main"),
@@ -311,6 +352,120 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                     page.evaluate("() => chCacheEntry(chKey())")
             check(page.evaluate("() => CH.cache.size <= CH_CACHE_MAX"),
                   "payload cache is bounded (LRU eviction, no unbounded growth)")
+
+            # normalize state after the cache probe mutated CH.sym/CH.tf
+            page.evaluate("() => loadChart('QQQ')")
+            page.click('#ch-tfs button[data-tf="1d"]')
+            wait_loaded("QQQ", "1d")
+
+            # 19. drawing edit-toolbar actions actually mutate the selected object
+            #     (regression: the capture-phase pointerdown on #ch-main used to
+            #     deselect the drawing before the toolbar button's click fired,
+            #     silently killing recolour / duplicate / lock / hide / delete).
+            def toolbar_probe():
+                return page.evaluate("""() => {
+                    DRAW.items = [];
+                    chAddItem('hline', '*', [{time:0, price: CH.data.candles.at(-1).close}]);
+                    DRAW.sel = DRAW.items[0].id; chDrawRender();
+                    const swatch = [...document.querySelectorAll('#ch-draw-colors i')]
+                        .find(e => e.dataset.c !== DRAW.items[0].color);
+                    return {id: DRAW.items[0].id, swatch: swatch && swatch.dataset.c,
+                            color0: DRAW.items[0].color};
+                }""")
+            probe = toolbar_probe()
+            page.click(f'#ch-draw-colors i[data-c="{probe["swatch"]}"]')
+            recolor_ok = page.evaluate("() => DRAW.items[0].color") == probe["swatch"] and \
+                page.evaluate("() => DRAW.sel") == probe["id"]      # still selected
+            page.click('#ch-draw-bar button[data-act="dup"]')
+            dup_ok = page.evaluate("() => DRAW.items.length") == 2
+            page.evaluate("() => { DRAW.sel = DRAW.items[0].id; chDrawRender(); }")
+            page.click('#ch-draw-bar button[data-act="lock"]')
+            lock_ok = page.evaluate("() => DRAW.items[0].locked") is True
+            page.click('#ch-draw-bar button[data-act="del"]')
+            del_ok = page.evaluate("() => DRAW.items.length") == 1
+            check(recolor_ok and dup_ok and lock_ok and del_ok,
+                  "drawing toolbar actions mutate the object (recolour/dup/lock/delete)")
+            page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
+
+            # 20. toggling an indicator subpane must NOT move the main viewport
+            #     (regression: the old two-way pane sync let a new pane's auto-fit
+            #     shove its range onto main, recentering the chart on every toggle).
+            page.evaluate("() => { const n = CH.data.candles.length; "
+                          "CH.main.timeScale().setVisibleLogicalRange({from:n-40, to:n-1}); }")
+            page.wait_for_timeout(200)
+            base_r = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            for ind in ("rsi", "macd"):
+                if not page.evaluate(f"() => CH.inds['{ind}']"):
+                    page.click(f'#ch-inds button[data-ind="{ind}"]')
+                page.wait_for_timeout(300)
+            after_r = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            no_jump = (abs(after_r["from"] - base_r["from"]) + abs(after_r["to"] - base_r["to"])) < 1.0
+            check(no_jump, "indicator toggle leaves the main viewport put (no random jump)")
+
+            # 21. the chart must never strand the user: after an extreme pan into
+            #     whitespace, Reset and Go-To-Latest both recover a populated view.
+            def strand():
+                page.evaluate("() => { const n = CH.data.candles.length; "
+                              "CH.main.timeScale().setVisibleLogicalRange({from:n-2, to:n+120}); }")
+            strand(); stranded = page.evaluate("() => chViewportStranded()")
+            page.click("#ch-reset"); page.wait_for_timeout(200)
+            reset_ok = not page.evaluate("() => chViewportStranded()")
+            strand()
+            page.click("#ch-latest"); page.wait_for_timeout(300)
+            latest_ok = not page.evaluate("() => chViewportStranded()")
+            check(stranded and reset_ok and latest_ok,
+                  "viewport recovery: Reset/Latest rescue a stranded chart")
+
+            # 22. stale banner reflects market state: suppressed while the market
+            #     is CLOSED (cached bars ARE the last session), shown while OPEN.
+            banner = page.evaluate("""() => {
+                const ts = CH.data.candles.at(-1).time;
+                CH.data.market_open = false; chStale(ts);
+                const closed = document.querySelector('#ch-stale').classList.contains('show');
+                CH.data.market_open = true; chStale(ts);
+                const open = document.querySelector('#ch-stale').classList.contains('show');
+                chStale(null);
+                return {closed, open};
+            }""")
+            check(banner["closed"] is False and banner["open"] is True,
+                  "stale banner suppressed when market closed, shown when open")
+
+            # 23. stress: rapidly abuse the chart; any console error fails the run
+            page.evaluate("() => loadChart('SPY')")
+            wait_loaded("SPY", "1d")
+            for i in range(24):
+                page.evaluate(
+                    """(i) => {
+                        const n = CH.data.candles.length;
+                        CH.main.timeScale().setVisibleLogicalRange(
+                            {from: n - 10 - (i*7)%150, to: n - 1 + (i%3)});
+                        if (i % 4 === 0) chAddItem('trend', CH.tf,
+                            [{time: CH.data.candles.at(-20).time, price: CH.data.candles.at(-20).close},
+                             {time: CH.data.candles.at(-1).time, price: CH.data.candles.at(-1).close}]);
+                        if (i % 4 === 1 && DRAW.items.length) {
+                            DRAW.sel = DRAW.items.at(-1).id; chDrawAct('dup'); }
+                        if (i % 4 === 2 && DRAW.items.length) {
+                            DRAW.sel = DRAW.items.at(-1).id; chDrawAct('del'); }
+                        if (i % 5 === 0) chResetView();
+                        if (i % 5 === 3) chGoToLatest();
+                    }""", i)
+                if i % 6 == 0:
+                    page.click(f'#ch-tfs button[data-tf="{["1d","1h","5m","15m"][i//6 % 4]}"]')
+                    page.wait_for_timeout(120)
+            for ind in ("rsi", "macd", "bb", "vwap"):
+                page.click(f'#ch-inds button[data-ind="{ind}"]')
+            page.set_viewport_size({"width": 1000, "height": 760})
+            page.wait_for_timeout(200)
+            page.set_viewport_size({"width": 1500, "height": 950})
+            page.wait_for_timeout(200)
+            page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); }")
+            page.fill("#ch-symbol", "SPY")
+            page.press("#ch-symbol", "Enter")
+            page.click('#ch-tfs button[data-tf="1d"]')   # abuse loop left tf elsewhere
+            wait_loaded("SPY", "1d")
+            check(page.evaluate("() => !!CH.main && CH.data && CH.data.candles.length > 3 && "
+                                "!document.querySelector('#ch-overlay').classList.contains('show')"),
+                  "chart survives a rapid abuse burst and stays rendered")
 
             browser.close()
 

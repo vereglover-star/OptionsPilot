@@ -258,9 +258,16 @@ class UIServer:
         # high) and 500s the response during JSON serialization.
         from optionspilot.data.base import validate_candles
         df = validate_candles(df, context=f"/api/candles {symbol} {timeframe}")
+        # Whether the US market is open right now decides how the frontend reads
+        # a stale (disk-fallback) payload: while the market is CLOSED the newest
+        # cached bar already IS the freshest bar the market ever produced, so a
+        # "live data unavailable" banner would be a category error — the chart
+        # is simply showing the last session. Only an OPEN-market stale payload
+        # means the display has genuinely fallen behind live prices.
+        market_open = self.orch.market_open(utcnow())
         if df.empty:
             return {"symbol": symbol, "timeframe": timeframe, "candles": [],
-                    "indicators": {}, "stale": False}
+                    "indicators": {}, "stale": False, "market_open": market_open}
 
         import math
         icfg = self.cfg.indicators
@@ -304,7 +311,8 @@ class UIServer:
                   " (stale)" if stale else "")
         return {"symbol": symbol, "timeframe": timeframe,
                 "candles": candles, "indicators": series, "stale": stale,
-                "as_of": times[-1] if stale else None}
+                "as_of": times[-1] if stale else None,
+                "market_open": market_open}
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 

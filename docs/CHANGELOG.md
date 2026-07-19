@@ -4,7 +4,62 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-18 — V3.1 RC1: stabilization & hardening polish
+## [Uncommitted] 2026-07-18 — V3.1 RC2: final chart release audit
+
+*376 tests (+2), chart_check 27 (+6). The last stabilization pass before
+`v3-ui` merges to `main`. Four remaining chart bugs, each reproduced in a
+real browser, root-caused, fixed at the architecture level, and re-verified.
+No redesign, no new chart library, no feature work.*
+
+- **Drawing edit-toolbar actions were dead** (recolour / duplicate / lock /
+  hide / width / delete all no-op'd). Root cause: the edit toolbar floats
+  *inside* `#ch-main`, so the capture-phase `pointerdown` there fired before
+  a toolbar button's own click. The click landed on the toolbar, not on the
+  drawing, so `chPointerDown` took its "clicked empty space → deselect"
+  branch and cleared `DRAW.sel`; by the time the button handler ran,
+  `chSelItem()` was null. Fix: the capture handler ignores events originating
+  in `#ch-draw-bar`, leaving the selection intact for the control's handler.
+- **The "Live data unavailable — showing cached bars" banner over-fired.**
+  It shows whenever a live fetch fails and disk-cached bars are served, but
+  while the market is CLOSED those cached bars already ARE the last session —
+  identical to what a live fetch would return — so the banner is a false
+  alarm that flaps every time a background refresh trips Yahoo's rate
+  limiter. Fix: `/api/candles` now reports `market_open` (computed from the
+  existing `Orchestrator.market_open`); the frontend suppresses the banner
+  while closed (a closed market shows a normal last-session chart, exactly
+  as the non-stale closed case does) and shows it — a genuine "you're behind
+  live prices" warning — only while open. Two backend tests lock the field
+  and the stale-path behaviour in.
+- **The chart could strand the user.** Lightweight-charts clamps pan/zoom so
+  the view is never literally empty, but bars could still be shoved to the
+  far edge behind a screen of whitespace ("the chart disappeared"). Added
+  **Reset view** (fit all bars) and **Latest** (jump to the newest bar)
+  controls, bound to **R** and **L**; a whitespace-aware `chViewportStranded()`
+  detector (logical-range based, so it survives the whitespace case that
+  makes `getVisibleRange()` null) that distinguishes a stranded view from a
+  deliberate deep zoom; and a render-time safety net that fits content when a
+  restored viewport lands off-data — but never on a same-key refresh, so it
+  can't yank a viewport the user chose.
+- **Random viewport jumps on indicator toggle.** Enabling RSI/MACD recentred
+  the main chart: the two-way main↔subpane range sync let a freshly-created
+  pane's auto-fit-on-first-`setData` (full history) push its range back onto
+  main. Fix: the **main chart is the sole owner** of the visible time range;
+  subpanes are one-way followers, realigned to main's range after their data
+  is set (`chAlignPane`). Reproduced as [166,205] → [0,191] before the fix,
+  unchanged after.
+- **Tests.** `chart_check.py` +6 checks: toolbar actions mutate the object,
+  indicator toggle leaves the viewport put, Reset/Latest rescue a stranded
+  chart, the banner tracks market state, a rapid-abuse stress burst stays
+  render-clean, and a new-bar append (the market-hours rollover) grows the
+  series without a view jump. `test_ui_server.py` +2 (`market_open`).
+- **Performance / market-hours audit.** Evidence-gathered, not speculative:
+  one candle request per symbol load (no duplicate fetches), stable canvas
+  count across 15 Trade↔Charts reparents (no leak), single chart instance;
+  the pane-sync fix also removed a viewport-churn feedback loop. The live
+  forming-candle / new-bar / indicator paths were exercised with simulated
+  ticks (market closed); see PROJECT_STATE for the market-hours checklist.
+
+## [`3a56145`] 2026-07-18 — V3.1 RC1: stabilization & hardening polish
 
 *374 tests (+1). A release-candidate polish pass over the V3.1 chart work —
 no new features, no redesign. A full code/stability/performance audit,

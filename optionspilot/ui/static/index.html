@@ -604,6 +604,8 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
         <input id="ch-note-text" placeholder="note text — Enter places, Esc cancels"
                style="display:none; width:230px" maxlength="60" aria-label="Note text">
         <span style="margin-left:auto"></span>
+        <button class="btn" id="ch-reset" title="Reset view — fit every loaded bar (R)">Reset view</button>
+        <button class="btn" id="ch-latest" title="Jump to the latest bar (L)">Latest ⇥</button>
         <button class="btn" id="ch-trade" title="Open this symbol in the Trade tab">Trade →</button>
         <button class="btn" id="ch-full" title="Fullscreen (F)" aria-label="Fullscreen">⛶</button>
       </div>
@@ -634,7 +636,7 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
       </div>
       <div id="ch-rsi" class="subpane" style="display:none"></div>
       <div id="ch-macd" class="subpane" style="display:none"></div>
-      <div class="chart-hint">Scroll to zoom · drag to pan · double-click the time axis to reset ·
+      <div class="chart-hint">Scroll to zoom · drag to pan · R resets the view · L jumps to the latest bar ·
         drawings save per symbol · Esc cancels a tool · F toggles fullscreen ·
         open positions and working orders show as labeled price lines</div>
     </div>
@@ -1867,12 +1869,24 @@ function chInitPane(which) {
 
 let _syncing = false;
 function chSyncPane(pane) {
-  // two-way visible-range lock between the main chart and a subpane
-  const link = (a, b) => a.timeScale().subscribeVisibleLogicalRangeChange(r => {
+  // The MAIN chart is the SOLE owner of the visible time range (Bug 4). A
+  // subpane is a pure follower: main drives it, it never drives main. The old
+  // two-way lock let a freshly-created pane's auto-fit-on-first-setData shove
+  // its own (full-history) range back onto main — so every RSI/MACD toggle
+  // silently recentered the chart. One-way removes that conflicting ownership.
+  CH.main.timeScale().subscribeVisibleLogicalRangeChange(r => {
     if (_syncing || r === null) return;
-    _syncing = true; b.timeScale().setVisibleLogicalRange(r); _syncing = false;
+    _syncing = true; pane.timeScale().setVisibleLogicalRange(r); _syncing = false;
   });
-  link(CH.main, pane); link(pane, CH.main);
+}
+function chAlignPane(pane) {
+  // Seed/realign a follower pane to main's current range so its freshly-set
+  // data isn't left sitting at the pane's own auto-fitted range (which would
+  // misalign the time axes). Guarded so it can't feed back as a user scroll.
+  if (!pane || !CH.main) return;
+  const r = CH.main.timeScale().getVisibleLogicalRange?.();
+  if (!r) return;
+  _syncing = true; pane.timeScale().setVisibleLogicalRange(r); _syncing = false;
 }
 
 const chKey = () => `${CH.sym}·${CH.tf}`;
@@ -1925,12 +1939,55 @@ const chViewport = () => {
 const chRememberViewport = key => {
   chCacheEntry(key).viewport = chViewport();
 };
+/* Viewport recovery — the chart must never strand the user in empty space.
+   "Stranded" = the visible time window no longer intersects ANY loaded bar,
+   which aggressive pan/zoom or a restored-but-stale viewport can produce.
+   fitContent()/scrollToRealTime() are the only sanctioned ways (besides a
+   saved-viewport restore) to move the view programmatically, and each is
+   wrapped in restoringViewport so the range-change subscription doesn't treat
+   the move as a user scroll and fire a spurious history fetch — see Bug 4:
+   exactly one subsystem owns the viewport. */
+function chViewportStranded() {
+  if (!CH.main || !CH.data?.candles?.length) return false;
+  // Use the LOGICAL range, not the time range (which returns null in
+  // whitespace). Lightweight-charts clamps pan/zoom so the view is never
+  // literally empty, but it will still let bars get shoved to the far edge
+  // with a screen full of whitespace — "the chart disappeared". Flag that:
+  // almost no bars visible AND the window is whitespace-dominated. The second
+  // clause is what keeps a deliberate deep zoom-in (few bars, but they fill
+  // the window) from being mistaken for a stranded view.
+  const lr = CH.main.timeScale().getVisibleLogicalRange?.();
+  if (!lr || lr.from == null || lr.to == null) return false;
+  const n = CH.data.candles.length;
+  const barsVisible = Math.min(lr.to, n - 1) - Math.max(lr.from, 0);
+  const windowWidth = lr.to - lr.from;
+  return windowWidth > 0 && barsVisible < 3 && barsVisible < windowWidth * 0.25;
+}
+function chResetView() {
+  if (!CH.main) return;
+  CH.restoringViewport = true;
+  try { CH.main.timeScale().fitContent(); } finally { CH.restoringViewport = false; }
+  chRememberViewport(chKey());
+  chDrawRender();
+}
+function chGoToLatest() {
+  if (!CH.main) return;
+  CH.restoringViewport = true;
+  try { CH.main.timeScale().scrollToRealTime(); } finally { CH.restoringViewport = false; }
+  chRememberViewport(chKey());
+  chDrawRender();
+}
 function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
+  // Is this the same (symbol·tf) already on screen? If so we are preserving
+  // the user's live viewport (a refresh or history prepend) and must never
+  // yank it — the stranded safety net below only runs on a genuine switch /
+  // first paint, where a restored cached viewport might not fit new data.
+  const sameKey = CH.dataKey === key;
   // Live-update fast path: when the same symbol/tf just gained an updated or
   // freshly-appended trailing bar, push only those bars with series.update().
   // No setData, no viewport touch → the forming candle and its volume/price
   // line animate in place with zero flicker and no reflow (Bug 5 + Bug 8).
-  const tail = (CH.dataKey === key && chDrawModelSym === CH.sym)
+  const tail = (sameKey && chDrawModelSym === CH.sym)
     ? chTailUpdate(CH.data, d) : null;
   if (tail) {
     CH.data = d; CH.dataSig = chSig(d);
@@ -1979,6 +2036,10 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
   try {
     if (viewport) CH.main.timeScale().setVisibleRange(viewport);
     else if (fit) CH.main.timeScale().fitContent();
+    // safety net: on a switch/first paint a restored cached viewport can land
+    // in whitespace (bars shoved off-edge) — recover to a populated view. Never
+    // on a same-key refresh: that would yank a viewport the user chose.
+    if (!sameKey && chViewportStranded()) CH.main.timeScale().fitContent();
   } finally {
     CH.restoringViewport = false;
   }
@@ -2013,8 +2074,17 @@ function chOverlay(state, msg) {
     : (msg || "Chart data is unavailable right now.");
 }
 function chStale(asOf) {
-  $("ch-stale").classList.toggle("show", asOf != null);
-  if (asOf != null) {
+  // A stale (disk-fallback) payload only means the display has fallen behind
+  // when the market is OPEN. While it's closed, the newest cached bar already
+  // is the last bar the session produced — identical to what a live fetch
+  // would return — so a "live data unavailable" banner is a false alarm and,
+  // worse, flaps on/off every time a background refresh trips Yahoo's rate
+  // limiter. Suppress it when closed; a closed market shows a normal chart of
+  // the last session with no banner, exactly as the non-stale closed case does.
+  const marketOpen = CH.data?.market_open ?? lastStatus?.market_open ?? true;
+  const show = asOf != null && marketOpen;
+  $("ch-stale").classList.toggle("show", show);
+  if (show) {
     const when = new Date(asOf * 1000).toLocaleString(
       [], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     $("ch-stale-msg").textContent =
@@ -2234,13 +2304,17 @@ function chApplyIndicators() {
     CH.overlays[b].setData(ind.bb ? chSeriesData(b) : []);
   $("ch-rsi").style.display = ind.rsi ? "" : "none";
   $("ch-macd").style.display = ind.macd ? "" : "none";
-  if (ind.rsi) { chInitPane("rsi"); CH.rsiLine.setData(chSeriesData("rsi")); }
+  if (ind.rsi) {
+    chInitPane("rsi"); CH.rsiLine.setData(chSeriesData("rsi"));
+    chAlignPane(CH.rsiChart);   // follow main's range, don't impose the pane's auto-fit
+  }
   if (ind.macd) {
     chInitPane("macd");
     CH.macdHist.setData(chSeriesData("macd_hist").map(p => ({ ...p,
       color: p.value >= 0 ? CH_COLORS.volUp : CH_COLORS.volDn })));
     CH.macdLine.setData(chSeriesData("macd"));
     CH.macdSig.setData(chSeriesData("macd_signal"));
+    chAlignPane(CH.macdChart);
   }
 }
 
@@ -2472,6 +2546,14 @@ function chFreezeChart(freeze) {
   CH.main.applyOptions({ handleScroll: !freeze, handleScale: !freeze });
 }
 function chPointerDown(e) {
+  // The edit toolbar floats *inside* #ch-main, so this capture-phase handler
+  // sees clicks on its buttons/swatches first. Those are UI actions on the
+  // selected drawing, not chart-surface interactions — treating them as such
+  // ran the "clicked empty space" branch below and cleared DRAW.sel before the
+  // button's own click handler fired, silently killing every toolbar action
+  // (recolour/duplicate/lock/hide/width). Let such events pass straight to the
+  // control's click handler with the selection intact.
+  if (e.target.closest("#ch-draw-bar")) return;
   if (!CH.main || !CH.data || e.button !== 0) return;
   const { x, y } = chLocal(e);
   if (CH.tool) { chToolClick(x, y); e.stopPropagation(); e.preventDefault(); return; }
@@ -2710,9 +2792,15 @@ document.addEventListener("keydown", e => {
   } else if (e.key === "Escape") {
     if (CH.tool) chSetTool(null);
     else if (DRAW.sel) { DRAW.sel = null; chDrawRender(); }
+  } else if ((e.key === "r" || e.key === "R") && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault(); chResetView();           // never-stranded rescue: fit all bars
+  } else if ((e.key === "l" || e.key === "L") && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault(); chGoToLatest();          // jump back to the latest bar
   }
 });
 $("ch-full").onclick = toggleChartFullscreen;
+$("ch-reset").onclick = chResetView;
+$("ch-latest").onclick = chGoToLatest;
 $("ch-overlay-retry").onclick = () => loadChart();
 $("ch-stale-retry").onclick = () => loadChart();
 $("ch-trade").onclick = () => {

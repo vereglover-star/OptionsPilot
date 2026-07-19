@@ -3,10 +3,12 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-18, after the **V3 chart follow-up session** (chart
-reliability root-caused and fixed, design system, and redesigns of every
-tab — seven commits `7176843`…`79138da` on branch **`v3-ui`**, kept off
-`main` pending the user's review). Three earlier sessions also landed
+**Last updated:** 2026-07-18, after the **V3.1 RC2 final chart release
+audit** (branch `v3-ui`, pending the merge decision — see "Exact stopping
+point" below for the four bugs fixed). Earlier the same day: the V3 chart
+follow-up session (chart reliability root-caused and fixed, design system,
+and redesigns of every tab — seven commits `7176843`…`79138da` on branch
+**`v3-ui`**, kept off `main` pending the user's review). Three earlier sessions also landed
 this date: V2-4 finish (`50c75aa`), the docs/AI framework (`1029fb0`),
 and developer automation (`7373c51`). As always, trust `git log`, not
 this file, for whether anything landed.
@@ -124,8 +126,50 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-18, V3.1 RC1 stabilization polish (branch `v3-ui`).** Treated
-the V3.1 charting work as Release Candidate 1 and ran a full
+**2026-07-18, V3.1 RC2 final chart release audit (branch `v3-ui`).** The
+last stabilization pass before the `v3-ui` → `main` merge decision. Four
+remaining chart bugs, each reproduced in a real browser before any code
+changed, root-caused, fixed at the architecture level, re-verified:
+
+1. **Drawing edit-toolbar actions were dead** (recolour / duplicate / lock
+   / hide / width / delete all no-op'd). The toolbar floats inside
+   `#ch-main`, so the capture-phase `pointerdown` there fired first; the
+   click was on the toolbar, not the drawing, so `chPointerDown` ran its
+   "empty space → deselect" branch and cleared `DRAW.sel` before the
+   button's click handler saw it. Fix: the capture handler ignores events
+   originating in `#ch-draw-bar`.
+2. **The "Live data unavailable" banner over-fired / flapped.** It shows on
+   any failed live fetch that falls back to disk — but with the market
+   CLOSED those disk bars ARE the last session, so it was a false alarm
+   that toggled every time a background refresh hit Yahoo's rate limiter.
+   Fix: `/api/candles` now reports `market_open` (from the existing
+   `Orchestrator.market_open`); the banner is suppressed when closed and
+   shown as a real "behind live prices" warning only when open.
+3. **The chart could strand the user in whitespace.** Added **Reset view**
+   and **Latest** controls (R / L keys), a logical-range `chViewportStranded()`
+   detector that tells a stranded view from a deliberate deep zoom, and a
+   render-time safety net (switch/first-paint only — never a same-key
+   refresh, so it can't yank a chosen viewport).
+4. **Random viewport jumps on RSI/MACD toggle** — the two-way subpane sync
+   let a new pane's auto-fit shove its full-history range onto main
+   ([166,205] → [0,191], reproduced). Fix: the main chart is the sole
+   time-range owner; subpanes are one-way followers realigned via
+   `chAlignPane`.
+
+Tests: `chart_check.py` → **27 checks** (+ toolbar actions, indicator
+no-jump, viewport recovery, market-aware banner, rapid-abuse stress, new-bar
+append); `test_ui_server.py` +2 (`market_open`). **376 tests**, `verify.ps1`
+green end to end. Performance was audited on evidence (one fetch per load,
+no canvas/instance leak across 15 reparents, pane-churn loop removed) — no
+speculative optimizations. Market-hours live validation remains the one
+open item (market closed); the forming-candle / new-bar / indicator paths
+are architecturally verified with simulated ticks. **RC2 is uncommitted
+pending `verify.ps1` green.**
+
+### Before that: V3.1 RC1 stabilization polish
+
+**2026-07-18, V3.1 RC1 stabilization polish (branch `v3-ui`, `3a56145`).**
+Treated the V3.1 charting work as Release Candidate 1 and ran a full
 code/stability/performance audit — no new features, no redesign, the
 chart architecture untouched. Findings fixed: removed four orphaned
 `CH.*Series/priceLines` arrays left dead by V3.1-4; hardened the two

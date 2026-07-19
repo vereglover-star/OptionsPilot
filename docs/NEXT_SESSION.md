@@ -5,9 +5,45 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-18, end of the V3.1 chart-stabilization sprint.
+**Last updated:** 2026-07-18, end of the V3.1 RC2 final chart audit.
 
-## What was completed?
+## What was completed most recently? (V3.1 RC2 — final chart audit)
+
+The **RC2 final chart release audit**, on branch **`v3-ui`** (still not
+merged). Four remaining chart bugs, each reproduced in a real browser,
+root-caused, fixed at the architecture level, and re-verified:
+
+1. **Drawing toolbar actions were dead.** The capture-phase `pointerdown`
+   on `#ch-main` fired before a toolbar button's click; because the click
+   landed on the floating toolbar (not the drawing), `chPointerDown` took
+   its "empty space → deselect" branch and cleared `DRAW.sel`, so every
+   toolbar action (recolour/duplicate/lock/hide/width/delete) no-op'd.
+   Fix: the capture handler now ignores events originating in `#ch-draw-bar`.
+2. **The "Live data unavailable" banner over-fired.** It fires whenever a
+   live fetch fails and disk-cached bars are served — but while the market
+   is CLOSED those cached bars ARE the last session, so the banner is a
+   false alarm that flaps whenever a background refresh trips Yahoo's rate
+   limiter. Fix: `/api/candles` now reports `market_open`; the banner is
+   suppressed when closed, shown (a real "behind live prices" warning) when
+   open.
+3. **The chart could strand the user.** Lightweight-charts clamps pan/zoom
+   so it's never literally empty, but bars could be shoved to the far edge
+   with a screen of whitespace ("the chart disappeared"). Fix: **Reset view**
+   (fitContent) and **Latest** (scrollToRealTime) buttons + **R**/**L**
+   keys, a whitespace-aware `chViewportStranded()` detector, and a
+   render-time safety net that recovers a stranded restored viewport.
+4. **Random viewport jumps.** Toggling RSI/MACD recentred the main chart:
+   the two-way subpane sync let a freshly-created pane's auto-fit shove its
+   full-history range back onto main. Fix: the **main chart is now the sole
+   owner** of the time range — panes are one-way followers (`chAlignPane`).
+
+Tests: `scripts/chart_check.py` grew to **27 checks** (+ toolbar actions,
+indicator-no-jump, viewport recovery, market-aware banner, a rapid-abuse
+stress burst, and a new-bar-append proxy for the market-hours rollover);
+`tests/test_ui_server.py` gained 2 backend tests for the `market_open`
+field. **376 tests**, `verify.ps1` green end to end.
+
+## What was completed before that? (V3.1 chart-stabilization sprint)
 
 The **V3.1 chart-stabilization sprint**, on branch **`v3-ui`** (still not
 merged — the user asked for `v3-ui` to stay isolated until reviewed).
@@ -104,12 +140,12 @@ V3-0).
    (+4 tests — fails the ordinary suite if any dynamic third-party
    import isn't collected). Exe rebuilt and verified live: candles
    (daily + 5m) and a 231-contract chain served from the packaged app;
-   full browser flow sweep of the chart system green. **374 tests.**
+   full browser flow sweep of the chart system green. **376 tests.**
 
 ## What is currently stable?
 
-Everything on both branches. **374 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
-added in V3-0, +4 packaging-guard tests added 2026-07-18). `scripts/verify.ps1` ran clean end-to-end as the closing
+Everything on both branches. **376 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
+added in V3-0, +4 packaging-guard tests + 2 `market_open` tests added 2026-07-18). `scripts/verify.ps1` ran clean end-to-end as the closing
 action of the session, and every milestone additionally got scenario-level
 Playwright verification (chart failure states, the full order-ticket flow —
 including the manual-entry risk gate visibly rejecting an after-hours
@@ -151,7 +187,7 @@ run, the accessibility overlay).
 - `optionspilot/data/base.py` — `validate_candles` is now the single
   sanitization choke point (drops NaN/inf/≤0 OHLC, zeroes bad volume,
   logs); do not weaken it.
-- `scripts/chart_check.py` — the 21-check chart regression suite; run it
+- `scripts/chart_check.py` — the 27-check chart regression suite; run it
   (via `verify.ps1`) after any chart change.
 - `optionspilot/data/cached.py` — `EMPTY_CANDLE_TTL` and
   `get_candles_stale_ok()` are new; the strict `get_candles` contract is
