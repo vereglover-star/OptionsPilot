@@ -5,9 +5,40 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-18, end of the V3.1 RC2 final chart audit.
+**Last updated:** 2026-07-18, end of the V3.1 RC3 final release blockers.
 
-## What was completed most recently? (V3.1 RC2 — final chart audit)
+## What was completed most recently? (V3.1 RC3 — final release blockers)
+
+Three user-reported bugs from **manual** testing that the passing automated
+suite had missed, each reproduced by driving the real mouse/UI before any fix:
+
+1. **"Toolbar actions STILL don't work."** Reproducing with the real mouse
+   (draw a trendline → click it to select → click the toolbar) showed the
+   *source* fix from RC2 works. The culprit was the **packaged exe**: the
+   `dist/OptionsPilot` bundle was built Jul 18 12:02, before RC1/RC2, so its
+   `index.html` predates every toolbar/viewport/banner fix — on that build
+   select/drag/resize work but recolour/duplicate/lock/hide/delete no-op,
+   exactly as reported. Fix: **the exe was rebuilt.** The regression test was
+   rewritten to drive the real mouse end to end and verified to fail on the
+   pre-fix source.
+2. **Stale banner "appears far too often."** With the market open and the
+   feed flapping stale/fresh (rate-limiting), the banner re-raised on every
+   stale tick for data whose newest bar never changed. Fix: a per-(symbol·tf)
+   high-water mark (`CH.freshHigh`) — a stale payload only warns when its
+   newest bar is genuinely older than the freshest bar already shown.
+3. **Timeframe switching zoomed into one candle.** Per-(symbol·tf) cached
+   viewports were restored on switch, snapping back to a stale tight zoom.
+   Fix: one owner for viewport restoration — a switch always fits; only a
+   same-key refresh preserves the live viewport. The per-key viewport cache
+   was removed.
+
+Also fixed while hardening the tests: a rapid symbol burst ending on an
+already-cached symbol could leave the "loading" overlay and skeleton legend
+stuck if that symbol's refresh came back empty — a non-first-paint load now
+clears the overlay and restores the legend. `chart_check.py` → **29 checks**
+(real-mouse toolbar, anti-flap banner, tf-switch tiny-zoom). **376 tests.**
+
+## What was completed before that? (V3.1 RC2 — final chart audit)
 
 The **RC2 final chart release audit**, on branch **`v3-ui`** (still not
 merged). Four remaining chart bugs, each reproduced in a real browser,
@@ -187,7 +218,7 @@ run, the accessibility overlay).
 - `optionspilot/data/base.py` — `validate_candles` is now the single
   sanitization choke point (drops NaN/inf/≤0 OHLC, zeroes bad volume,
   logs); do not weaken it.
-- `scripts/chart_check.py` — the 27-check chart regression suite; run it
+- `scripts/chart_check.py` — the 29-check chart regression suite; run it
   (via `verify.ps1`) after any chart change.
 - `optionspilot/data/cached.py` — `EMPTY_CANDLE_TTL` and
   `get_candles_stale_ok()` are new; the strict `get_candles` contract is

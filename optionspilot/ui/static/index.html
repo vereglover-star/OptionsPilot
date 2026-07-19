@@ -1826,8 +1826,6 @@ function chInit() {
   };
   CH.main.timeScale().subscribeVisibleLogicalRangeChange(r => {
     if (!r) return;
-    CH.viewport = chViewport();
-    chRememberViewport(chKey());
     chDrawRender();                 // drawings track the moving coordinate system
     chMaybeLoadHistory(r);
   });
@@ -1936,17 +1934,16 @@ const chViewport = () => {
   const r = CH.main.timeScale().getVisibleRange?.();
   return r && r.from != null && r.to != null ? {from: r.from, to: r.to} : null;
 };
-const chRememberViewport = key => {
-  chCacheEntry(key).viewport = chViewport();
-};
 /* Viewport recovery — the chart must never strand the user in empty space.
    "Stranded" = the visible time window no longer intersects ANY loaded bar,
-   which aggressive pan/zoom or a restored-but-stale viewport can produce.
-   fitContent()/scrollToRealTime() are the only sanctioned ways (besides a
-   saved-viewport restore) to move the view programmatically, and each is
+   which aggressive pan/zoom can produce. fitContent()/scrollToRealTime() are
+   the only sanctioned ways to move the view programmatically, and each is
    wrapped in restoringViewport so the range-change subscription doesn't treat
-   the move as a user scroll and fire a spurious history fetch — see Bug 4:
-   exactly one subsystem owns the viewport. */
+   the move as a user scroll and fire a spurious history fetch. Viewport
+   restoration has exactly one owner — loadChart's `switching` decision (fit on
+   a symbol/tf switch, preserve the live viewport on a same-key refresh); the
+   payload cache deliberately does NOT persist or restore per-key viewports
+   (that was Bug 3: a stale per-tf zoom snapping back on switch). */
 function chViewportStranded() {
   if (!CH.main || !CH.data?.candles?.length) return false;
   // Use the LOGICAL range, not the time range (which returns null in
@@ -1967,14 +1964,12 @@ function chResetView() {
   if (!CH.main) return;
   CH.restoringViewport = true;
   try { CH.main.timeScale().fitContent(); } finally { CH.restoringViewport = false; }
-  chRememberViewport(chKey());
   chDrawRender();
 }
 function chGoToLatest() {
   if (!CH.main) return;
   CH.restoringViewport = true;
   try { CH.main.timeScale().scrollToRealTime(); } finally { CH.restoringViewport = false; }
-  chRememberViewport(chKey());
   chDrawRender();
 }
 function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
@@ -2007,8 +2002,8 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
       return false;
     }
     const entry = chCacheEntry(key);
-    entry.data = d; entry.sig = CH.dataSig; entry.viewport = chViewport();
-    chStale(d.stale ? d.as_of : null); chLegend(null);
+    entry.data = d; entry.sig = CH.dataSig;
+    chStale(chStaleAsOf(d)); chLegend(null);
     return true;
   }
   CH.data = d;
@@ -2046,10 +2041,8 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
   const entry = chCacheEntry(key);
   entry.data = d;
   entry.sig = CH.dataSig;
-  entry.viewport = chViewport();
-  CH.viewport = entry.viewport;
   chOverlay(null);
-  chStale(d.stale ? d.as_of : null);
+  chStale(chStaleAsOf(d));
   chLegend(null);
   return true;
 }
@@ -2073,14 +2066,34 @@ function chOverlay(state, msg) {
   $("ch-overlay-msg").textContent = state === "loading" ? "Loading chart…"
     : (msg || "Chart data is unavailable right now.");
 }
+/* Decide whether a payload's staleness is worth warning about. A stale
+   (disk-fallback) payload means "this fetch fell back to disk", which is NOT
+   the same as "the chart is behind live prices". If the newest bar we're
+   holding is no older than the freshest bar we've already shown from a
+   successful fetch, we still have the current data — one background fetch just
+   failed to re-confirm it — so the banner must not fire. Without this, a feed
+   that flaps stale/fresh/stale (exactly what Yahoo rate-limiting produces)
+   re-raised the yellow warning on every stale tick for data that never changed
+   (Bug 2). freshHigh is the high-water mark of successfully-fetched bars for
+   the current (symbol·tf); it resets on a switch. */
+function chStaleAsOf(d) {
+  const newest = d.candles?.length ? d.candles[d.candles.length - 1].time : null;
+  if (!d.stale) {                       // a live fetch succeeded → data is current
+    if (newest != null) CH.freshHigh = Math.max(CH.freshHigh ?? 0, newest);
+    return null;
+  }
+  // stale payload: only "behind" if it's older than the freshest bar we've
+  // already shown live. Same-or-newer newest bar ⇒ we still hold current data.
+  if (CH.freshHigh != null && newest != null && newest >= CH.freshHigh) return null;
+  return d.as_of;
+}
 function chStale(asOf) {
   // A stale (disk-fallback) payload only means the display has fallen behind
   // when the market is OPEN. While it's closed, the newest cached bar already
   // is the last bar the session produced — identical to what a live fetch
-  // would return — so a "live data unavailable" banner is a false alarm and,
-  // worse, flaps on/off every time a background refresh trips Yahoo's rate
-  // limiter. Suppress it when closed; a closed market shows a normal chart of
-  // the last session with no banner, exactly as the non-stale closed case does.
+  // would return — so a "live data unavailable" banner is a false alarm.
+  // Suppress it when closed; a closed market shows a normal chart of the last
+  // session with no banner, exactly as the non-stale closed case does.
   const marketOpen = CH.data?.market_open ?? lastStatus?.market_open ?? true;
   const show = asOf != null && marketOpen;
   $("ch-stale").classList.toggle("show", show);
@@ -2211,19 +2224,40 @@ async function loadChart(symbol) {
   chPaintControls();
   const key = chKey();
   const cached = CH.cache.get(key);
-  const firstPaint = !cached && CH.dataKey !== key;      // nothing usable on screen yet
+  // A "switch" is any load where the (symbol·tf) on screen changes — a new
+  // symbol or a new timeframe. Switches must land on a SENSIBLE DEFAULT view
+  // (fit all bars), never a restored per-key viewport: restoring one re-applied
+  // whatever zoom you last left on that timeframe, so flipping 5m→1m→5m dropped
+  // you back onto a 5-candle sliver (Bug 3). Only a same-key refresh preserves
+  // the viewport you're currently looking at. This is the ONE owner of viewport
+  // restoration — the cache no longer gets a vote.
+  const switching = CH.dataKey !== key;
+  const firstPaint = !cached && switching;               // nothing usable on screen yet
+  if (switching) CH.freshHigh = null;                    // stale high-water is per (symbol·tf)
   const gen = ++CH.gen;
   CH.historyLoading = false;
   CH.historyExhausted = false;
   chHistPill(null);
-  if (cached?.data && (CH.dataKey !== key || CH.dataSig !== cached.sig)) {
-    chRenderData(cached.data, {key, viewport: cached.viewport || null});
+  if (cached?.data && (switching || CH.dataSig !== cached.sig)) {
+    chRenderData(cached.data, switching
+      ? {key, fit: true}
+      : {key, viewport: chViewport()});
   }
   if (firstPaint) {
     chOverlay("loading");
     chStale(null);
     $("ch-legend").innerHTML =
       `<span class="skel" style="width:280px; height:14px"></span>`;
+  } else {
+    // We already have data on screen for this load (a cached switch or a
+    // same-key refresh), so no full-screen overlay or skeleton belongs here.
+    // Clear the "loading"/"error" overlay AND restore the legend that a
+    // SUPERSEDED sibling load left up — e.g. during a rapid symbol burst where
+    // earlier first-paint symbols set the "loading" overlay and a skeleton
+    // legend, and this final, already-cached symbol would otherwise leave both
+    // stuck if its own refresh fetch came back empty.
+    chOverlay(null);
+    chLegend(null);
   }
   let d;
   try {
@@ -2251,16 +2285,13 @@ async function loadChart(symbol) {
   const entry = chCacheEntry(key);
   entry.data = d;
   entry.sig = sig;
-  entry.viewport = entry.viewport || chViewport();
   if (CH.dataKey === key && CH.dataSig === sig) {
-    chStale(d.stale ? d.as_of : null);
+    chStale(chStaleAsOf(d));
     return;
   }
-  chRenderData(d, {
-    key,
-    viewport: CH.dataKey === key ? chViewport() : cached?.viewport || null,
-    fit: firstPaint && !cached,
-  });
+  chRenderData(d, switching
+    ? {key, fit: true}
+    : {key, viewport: chViewport()});
 }
 
 /* keep a visible chart current: refresh on a cadence matched to the

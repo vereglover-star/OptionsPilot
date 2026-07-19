@@ -5,12 +5,11 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-18, V3.1 chart-stabilization sprint
+**Last verified:** 2026-07-18, V3.1 RC3 final release blockers
 (`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 27-check
-chart regression suite, all green — plus a 10-ticker × 13-timeframe data
-sweep (130/130) and a rebuilt exe with packaged charts confirmed; see
-`PROJECT_STATE.md`).
+consistency, `pip check`, a headless-browser smoke check, and the 29-check
+chart regression suite, all green — plus a rebuilt exe whose toolbar and
+timeframe switching were driven by hand; see `PROJECT_STATE.md`).
 
 ---
 
@@ -23,15 +22,17 @@ git history.
 
 ## Current phase
 
-**V3.1 RC1 (release candidate), on branch `v3-ui` — awaiting user
+**V3.1 RC3 (release candidate), on branch `v3-ui` — awaiting user
 approval/merge and market-hours validation.** The V3.1 sprint made the
 charting system production-ready (chart-reliability root-cause fixes,
 13 timeframes, infinite historical scroll, TradingView-style editable
-drawings, a synced Trade-tab chart, flicker-free live updates, a 19-check
-automated chart regression suite), and an RC1 polish pass then audited it
-for stability/performance: dead code removed, localStorage-corruption and
-WS-frame hardening, a bounded LRU payload cache, and refresh guards that
-never disrupt an in-progress interaction. No new features. Preceded by:
+drawings, a synced Trade-tab chart, flicker-free live updates). RC1 hardened
+it (localStorage/WS guards, bounded cache); RC2 fixed the toolbar
+capture-phase deselect, a market-aware stale banner, viewport recovery, and
+single-owner viewport; RC3 closed the final blockers — root-caused the
+"toolbar still broken" report to a STALE EXE and rebuilt it, killed the
+stale-banner flapping (high-water mark), fixed timeframe-switch tiny-zoom,
+and hardened rapid-switch overlay/legend state. No new features. Preceded by:
 **V2 rewrite,
 post-V2-4.** The original 8-phase v1 roadmap (foundation
 through hardening) is complete and stable. V2 layers a professional desktop
@@ -73,6 +74,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1-7 — Chart test suite | `scripts/chart_check.py` 19-check headless-browser regression suite wired into `verify.ps1`; 10 tickers × 13 timeframes = 130/130 | `2bcb84a`, 19/19 green |
 | V3.1 RC1 — Stabilization polish | Dead-code removal, `safeParse` localStorage-corruption guard, refresh-mid-interaction + wake refreshes, bounded LRU payload cache, WS frame-parse guard + reconnect-contract test; +2 chart_check checks (21) | `3a56145`, 21/21 browser + 374-test suite green |
 | V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376 tests green |
+| V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `<pending>`, 29/29 browser + 376 tests green |
 
 ## Features complete
 
@@ -158,6 +160,6 @@ browser checks are still focused regressions, not exhaustive UI coverage
 end to end: full pytest run (376/376), static `$("id")` reference check,
 documentation consistency check, `pip check`, a headless-browser smoke
 check across all 9 tabs (Playwright + system Edge) with zero console
-errors, and the 27-check chart regression suite (`chart_check.py`) —
+errors, and the 29-check chart regression suite (`chart_check.py`) —
 plus a 10-ticker × 13-timeframe provider sweep (130/130 monotonic) and a
 rebuilt exe whose packaged charts/chains were confirmed serving live data.

@@ -216,20 +216,39 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(page.evaluate("() => $('ch-legend').textContent.includes('O ')"),
                   "zoom (visible-range change) keeps the chart rendered")
 
-            # 12. stale-cache banner: a controlled route returns stale bars, then
-            #     fresh bars on retry. Fully deterministic — no dependence on live
-            #     feed freshness (which rate-limiting can legitimately make stale).
-            #     market_open is forced True: the banner means "behind LIVE prices",
-            #     which is only meaningful (and only shown) while the market is open,
-            #     so the test must not depend on the wall-clock day it runs.
+            # 12. stale-cache banner: a controlled route returns GENUINELY-BEHIND
+            #     stale bars (trailing bars dropped, so the newest bar is older
+            #     than the fresh one we already loaded), then fresh bars on retry.
+            #     market_open is forced True: the banner means "behind LIVE
+            #     prices", only meaningful while the market is open. Genuinely
+            #     behind (not just flagged stale on the same newest bar) is what
+            #     the banner is FOR — see check 12b for the anti-flap counterpart.
+            # Capture ONE real payload, then serve deterministic copies from it —
+            # the routes below never re-hit the live feed (keeps the suite off
+            # Yahoo's rate limiter and makes the banner behaviour reproducible).
+            import copy
+            _baseline = {}
+
+            def _base(route):
+                if not _baseline:
+                    _baseline["b"] = route.fetch().json()
+                return copy.deepcopy(_baseline["b"])
+
             force_stale = [True]
 
             def stale_route(route):
-                resp = route.fetch()
-                body = resp.json()
+                body = _base(route)
                 if body.get("candles"):
-                    body["stale"] = force_stale[0]
-                    body["as_of"] = body["candles"][-1]["time"] if force_stale[0] else None
+                    if force_stale[0] and len(body["candles"]) > 6:
+                        body["candles"] = body["candles"][:-5]   # drop the freshest bars
+                        for k, v in list((body.get("indicators") or {}).items()):
+                            if v:
+                                body["indicators"][k] = v[:-5]
+                        body["stale"] = True
+                        body["as_of"] = body["candles"][-1]["time"]
+                    else:
+                        body["stale"] = False
+                        body["as_of"] = None
                     body["market_open"] = True
                 route.fulfill(json=body)
             page.route("**/api/candles*", stale_route)
@@ -237,14 +256,50 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.wait_for_function(
                 "() => document.querySelector('#ch-stale').classList.contains('show')",
                 timeout=30000)
-            check(True, "stale payload shows the cached-bars banner")
+            check(True, "stale payload (genuinely behind) shows the cached-bars banner")
             force_stale[0] = False
             page.click("#ch-stale-retry")
             page.wait_for_function(
                 "() => !document.querySelector('#ch-stale').classList.contains('show')",
                 timeout=30000)
             check(True, "Retry-live clears the stale banner")
-            page.unroute("**/api/candles*")
+            page.unroute("**/api/candles*", stale_route)
+
+            # 12b. anti-flap (Bug 2): once we've loaded a fresh bar, a feed that
+            #      flaps stale/fresh on the SAME newest bar must NOT re-raise the
+            #      warning — we still hold the current data, one refetch just
+            #      failed. Alternate stale/fresh (same newest bar) and assert the
+            #      banner never appears. Same captured payload → no live fetches.
+            page.evaluate("() => loadChart()")   # fresh load sets the high-water mark
+            wait_loaded("QQQ", "1d")
+            flap = [True]
+
+            def flap_route(route):
+                body = _base(route)
+                if body.get("candles"):
+                    body["stale"] = flap[0]      # same newest bar either way
+                    body["as_of"] = body["candles"][-1]["time"] if flap[0] else None
+                    body["market_open"] = True
+                route.fulfill(json=body)
+            page.route("**/api/candles*", flap_route)
+            page.evaluate("""() => { window.__flapShows = 0;
+                const bar = document.querySelector('#ch-stale');
+                let last = bar.classList.contains('show');
+                window.__flapObs = new MutationObserver(() => {
+                    const now = bar.classList.contains('show');
+                    if (now && !last) window.__flapShows++; last = now;
+                }); window.__flapObs.observe(bar, {attributes:true, attributeFilter:['class']}); }""")
+            for i in range(6):
+                flap[0] = (i % 2 == 0)
+                page.evaluate("() => loadChart()")
+                page.wait_for_timeout(250)
+            flap_shows = page.evaluate("() => window.__flapShows")
+            check(flap_shows == 0,
+                  f"stale banner does not flap on unchanged data (re-shows={flap_shows})")
+            page.unroute("**/api/candles*", flap_route)
+            page.evaluate("() => { if (window.__flapObs) window.__flapObs.disconnect(); }")
+            page.evaluate("() => loadChart()")
+            wait_loaded("QQQ", "1d")
 
             # 13. cache invalidation / rapid symbol changes
             canvas_before = page.evaluate("() => document.querySelectorAll('#ch-main canvas').length")
@@ -358,33 +413,66 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.click('#ch-tfs button[data-tf="1d"]')
             wait_loaded("QQQ", "1d")
 
-            # 19. drawing edit-toolbar actions actually mutate the selected object
-            #     (regression: the capture-phase pointerdown on #ch-main used to
-            #     deselect the drawing before the toolbar button's click fired,
-            #     silently killing recolour / duplicate / lock / hide / delete).
-            def toolbar_probe():
-                return page.evaluate("""() => {
-                    DRAW.items = [];
-                    chAddItem('hline', '*', [{time:0, price: CH.data.candles.at(-1).close}]);
-                    DRAW.sel = DRAW.items[0].id; chDrawRender();
-                    const swatch = [...document.querySelectorAll('#ch-draw-colors i')]
-                        .find(e => e.dataset.c !== DRAW.items[0].color);
-                    return {id: DRAW.items[0].id, swatch: swatch && swatch.dataset.c,
-                            color0: DRAW.items[0].color};
-                }""")
-            probe = toolbar_probe()
-            page.click(f'#ch-draw-colors i[data-c="{probe["swatch"]}"]')
-            recolor_ok = page.evaluate("() => DRAW.items[0].color") == probe["swatch"] and \
-                page.evaluate("() => DRAW.sel") == probe["id"]      # still selected
-            page.click('#ch-draw-bar button[data-act="dup"]')
+            # 19. drawing edit-toolbar actions, driven ENTIRELY BY REAL MOUSE —
+            #     draw a trendline by clicking two canvas points, click the line to
+            #     select it, then click the toolbar controls, all via page.mouse at
+            #     real coordinates. The previous version set DRAW.sel in JS, which
+            #     bypassed the real select→toolbar-click path and so could not have
+            #     caught the capture-phase deselect bug the user hit manually.
+            page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
+            box = page.evaluate(
+                "() => { const r = $('ch-main').getBoundingClientRect();"
+                " return {x:r.left, y:r.top, w:r.width, h:r.height}; }")
+            ax, ay = box["x"] + box["w"] * 0.35, box["y"] + box["h"] * 0.35
+            bx, by = box["x"] + box["w"] * 0.62, box["y"] + box["h"] * 0.52
+            page.click('#ch-tools button[data-tool="trend"]')
+            page.mouse.click(ax, ay); page.wait_for_timeout(60)
+            page.mouse.click(bx, by); page.wait_for_timeout(120)
+            drawn = page.evaluate("() => DRAW.items.length") == 1
+            # select by clicking the midpoint of the line (real mouse)
+            page.mouse.click((ax + bx) / 2, (ay + by) / 2); page.wait_for_timeout(120)
+            selected = page.evaluate("() => !!DRAW.sel") and \
+                page.evaluate("() => document.querySelector('#ch-draw-bar').classList.contains('show')")
+
+            def mouse_click_selector(sel):
+                r = page.evaluate(
+                    "(s) => { const e = document.querySelector(s); if(!e) return null;"
+                    " const b = e.getBoundingClientRect();"
+                    " return {x:b.left+b.width/2, y:b.top+b.height/2}; }", sel)
+                assert r, f"element not found: {sel}"
+                page.mouse.click(r["x"], r["y"]); page.wait_for_timeout(100)
+
+            color0 = page.evaluate("() => DRAW.items[0].color")
+            target_c = page.evaluate(
+                "() => { const cur = DRAW.items[0].color;"
+                " const t = [...document.querySelectorAll('#ch-draw-colors i')]"
+                ".find(e => e.dataset.c !== cur); return t ? t.dataset.c : null; }")
+            mouse_click_selector(f'#ch-draw-colors i[data-c="{target_c}"]')
+            recolor_ok = page.evaluate("() => DRAW.items[0].color") == target_c and \
+                page.evaluate("() => !!DRAW.sel")            # selection survived the click
+            w0 = page.evaluate("() => DRAW.items[0].width")
+            mouse_click_selector('#ch-draw-bar button[data-act="width"]')
+            width_ok = page.evaluate("() => DRAW.items[0].width") != w0
+            mouse_click_selector('#ch-draw-bar button[data-act="dup"]')
             dup_ok = page.evaluate("() => DRAW.items.length") == 2
+            # re-select the surviving item, then lock / hide / delete by real mouse
+            page.mouse.click((ax + bx) / 2, (ay + by) / 2); page.wait_for_timeout(100)
+            if page.evaluate("() => !DRAW.sel"):             # dup copy may sit off the line
+                page.evaluate("() => { DRAW.sel = DRAW.items[0].id; chDrawRender(); }")
+            mouse_click_selector('#ch-draw-bar button[data-act="lock"]')
+            lock_ok = page.evaluate("() => DRAW.items.find(i=>i.id===DRAW.sel).locked") is True
+            mouse_click_selector('#ch-draw-bar button[data-act="hide"]')
+            hide_ok = page.evaluate("() => DRAW.items.some(i => i.hidden)") is True
+            n_before_del = page.evaluate("() => DRAW.items.length")
             page.evaluate("() => { DRAW.sel = DRAW.items[0].id; chDrawRender(); }")
-            page.click('#ch-draw-bar button[data-act="lock"]')
-            lock_ok = page.evaluate("() => DRAW.items[0].locked") is True
-            page.click('#ch-draw-bar button[data-act="del"]')
-            del_ok = page.evaluate("() => DRAW.items.length") == 1
-            check(recolor_ok and dup_ok and lock_ok and del_ok,
-                  "drawing toolbar actions mutate the object (recolour/dup/lock/delete)")
+            mouse_click_selector('#ch-draw-bar button[data-act="del"]')
+            del_ok = page.evaluate("() => DRAW.items.length") == n_before_del - 1
+            check(drawn and selected and recolor_ok and width_ok and dup_ok and
+                  lock_ok and hide_ok and del_ok,
+                  "toolbar actions via REAL MOUSE (draw→select→recolour/width/dup/lock/hide/delete)")
+            page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
+            page.click('#ch-tools button[data-tool="trend"]')  # disarm the tool if still armed
+            page.evaluate("() => chSetTool(null)")
             page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
 
             # 20. toggling an indicator subpane must NOT move the main viewport
@@ -415,6 +503,38 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             latest_ok = not page.evaluate("() => chViewportStranded()")
             check(stranded and reset_ok and latest_ok,
                   "viewport recovery: Reset/Latest rescue a stranded chart")
+
+            # 21b. switching timeframes must never leave a degenerate zoom
+            #      (Bug 3: a stale per-tf viewport snapped back onto a handful of
+            #      candles). Zoom 5m down to a few bars, flip away and back, and to
+            #      other tfs — every landing must show a healthy bar count.
+            def visible_bars():
+                return page.evaluate("""() => {
+                    const lr = CH.main.timeScale().getVisibleLogicalRange();
+                    const n = CH.data.candles.length;
+                    if (!lr) return 0;
+                    return Math.min(lr.to, n-1) - Math.max(lr.from, 0);
+                }""")
+            def switch_tf(tf):
+                page.click(f'#ch-tfs button[data-tf="{tf}"]')
+                try:
+                    wait_loaded("QQQ", tf)
+                except Exception:  # noqa: BLE001
+                    pass
+                page.wait_for_timeout(150)
+            switch_tf("5m")
+            page.evaluate("() => { const n = CH.data.candles.length; "
+                          "CH.main.timeScale().setVisibleLogicalRange({from:n-5, to:n-1}); }")
+            page.wait_for_timeout(150)
+            tf_bars = []
+            for tf in ("1m", "5m", "3m", "5m", "1d", "5m"):   # includes returns to 5m
+                switch_tf(tf)
+                tf_bars.append((tf, round(visible_bars(), 1)))
+            no_tiny_zoom = all(b >= 10 for _, b in tf_bars)
+            check(no_tiny_zoom,
+                  f"timeframe switching never zooms into a sliver {tf_bars}")
+            page.click('#ch-tfs button[data-tf="1d"]')
+            wait_loaded("QQQ", "1d")
 
             # 22. stale banner reflects market state: suppressed while the market
             #     is CLOSED (cached bars ARE the last session), shown while OPEN.

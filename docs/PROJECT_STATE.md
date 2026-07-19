@@ -3,9 +3,12 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-18, after the **V3.1 RC2 final chart release
-audit** (branch `v3-ui`, pending the merge decision — see "Exact stopping
-point" below for the four bugs fixed). Earlier the same day: the V3 chart
+**Last updated:** 2026-07-18, after the **V3.1 RC3 final release blockers**
+(branch `v3-ui`, pending the merge decision — see "Exact stopping point"
+below). RC3 root-caused the still-reported toolbar failure to a stale exe
+(rebuilt it), fixed stale-banner flapping and timeframe-switch tiny-zoom, and
+hardened rapid-switch overlay/legend state. Before it, the RC2 final chart
+audit (four bugs). Earlier the same day: the V3 chart
 follow-up session (chart reliability root-caused and fixed, design system,
 and redesigns of every tab — seven commits `7176843`…`79138da` on branch
 **`v3-ui`**, kept off `main` pending the user's review). Three earlier sessions also landed
@@ -125,6 +128,41 @@ Deferred: stock/share positions (options only for now).
   portfolio-level risk.
 
 ## Exact stopping point
+
+**2026-07-18, V3.1 RC3 final release blockers (branch `v3-ui`, uncommitted
+pending `verify.ps1`).** Three bugs the user hit in MANUAL testing that the
+green automated suite had missed — reproduced by driving the real mouse/UI
+before any code changed:
+
+1. **Toolbar actions "still broken."** The real-mouse workflow (draw → click
+   to select → click toolbar) proved the RC2 source fix works; the failure
+   was a **stale packaged exe** (`dist/OptionsPilot` built Jul 18 12:02,
+   before RC1/RC2 — its bundled `index.html` has none of the fixes; on it
+   select/drag/resize work but the toolbar actions no-op, exactly as
+   reported). The RC2 regression test had set `DRAW.sel` in JS, bypassing the
+   real select→click path, so it couldn't catch this. Fix: **rebuilt the
+   exe**; rewrote the test to drive the real mouse (verified fail-before:
+   colour unchanged, selection cleared).
+2. **Stale banner flapping ("appears far too often").** Market open + a
+   rate-limited feed alternating stale/fresh re-raised the warning on every
+   stale tick though the newest bar never changed (4 re-shows in 8 refreshes).
+   Fix: a per-(symbol·tf) high-water mark (`CH.freshHigh`); a stale payload
+   warns only when its newest bar is genuinely older than the freshest bar
+   already shown. Verified: 0 re-shows on unchanged data, still warns when
+   genuinely behind.
+3. **Timeframe switch zoomed into one candle.** Per-key cached viewports were
+   restored on switch, snapping to a stale tight zoom. Fix: viewport
+   restoration has ONE owner — a switch (symbol or tf) fits; only a same-key
+   refresh preserves the live viewport. The per-key viewport cache was
+   removed. Verified: every switch shows tens-to-hundreds of bars.
+
+Also fixed (found while hardening tests): a rapid symbol burst ending on an
+already-cached symbol left the loading overlay + skeleton legend stuck when
+that symbol's refresh returned empty — a non-first-paint load now clears the
+overlay and restores the legend. `chart_check.py` → 29 checks (real-mouse
+toolbar, anti-flap, tf tiny-zoom). **376 tests**, all green.
+
+### Before that: V3.1 RC2 final chart release audit
 
 **2026-07-18, V3.1 RC2 final chart release audit (branch `v3-ui`).** The
 last stabilization pass before the `v3-ui` → `main` merge decision. Four

@@ -4,6 +4,57 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-18 — V3.1 RC3: final release blockers
+
+*376 tests, chart_check 27 → 29. Reproduced the user's exact manual
+workflows before touching code; each fix has a browser test that fails
+before it and passes after. The key process lesson: RC2's toolbar test set
+`DRAW.sel` in JS, bypassing the real select→click path, so it couldn't have
+caught what the user hit — the RC3 tests drive the real mouse.*
+
+- **Drawing toolbar actions "still broken" — root cause was a STALE EXE, not
+  the source.** Driving the *real* mouse (draw a trendline, click it to
+  select, click the toolbar) confirmed the source fix works. But the shipped
+  `dist/OptionsPilot` bundle was built Jul 18 12:02 — before RC1/RC2 — so its
+  `index.html` has none of the toolbar/viewport/banner fixes. On that build,
+  select/drag/resize work while recolour/duplicate/lock/hide/delete no-op —
+  exactly the reported symptoms. Fix: **the exe was rebuilt** from fixed
+  source. The regression test was rewritten to drive the real mouse end to
+  end (draw→select→recolour/width/duplicate/lock/hide/delete), verified to
+  fail on the pre-fix source (colour unchanged, selection cleared) and pass
+  after.
+- **"Live data unavailable" appeared far too often — banner flapping.** With
+  the market open and the feed intermittently rate-limited (stale/fresh/
+  stale), the yellow banner re-raised on every stale tick even though the
+  newest bar never changed — the same current data, warned about repeatedly.
+  Root cause: the banner keyed off each fetch's instantaneous `stale` flag.
+  Fix: a per-(symbol·tf) high-water mark (`CH.freshHigh`) of the newest bar
+  we've shown from a successful fetch; a stale payload only warns when its
+  newest bar is genuinely OLDER than that. Same-or-newer ⇒ we still hold the
+  current data ⇒ no banner. Verified: alternating stale/fresh on the same bar
+  now yields zero banner re-shows (was 4/8); a genuinely-older bar still
+  warns.
+- **Timeframe switching zoomed into a sliver (one candle).** Each (symbol·tf)
+  cached its own viewport and restoring it on switch snapped the chart back to
+  whatever tight zoom you last left there — so 5m→1m→5m dropped you onto ~5
+  candles. Fix: viewport restoration now has exactly ONE owner — a switch
+  (symbol or timeframe) always lands on a sensible default (fit); only a
+  same-key refresh preserves the live viewport. The per-key viewport cache was
+  removed entirely (dead once switches stopped restoring it). Verified: every
+  switch across 1m/2m/3m/5m/…/1d now shows tens-to-hundreds of bars, never a
+  sliver.
+- **Stuck loading-overlay / skeleton legend on a rapid symbol burst.** Found
+  while hardening the tests: a rapid switch (SPY→…→QQQ) where earlier
+  first-paint symbols raise the "loading" overlay + skeleton legend, and the
+  final already-cached symbol's refresh comes back empty, left the overlay and
+  legend stuck even though data was on screen. Fix: a non-first-paint load now
+  clears the overlay and restores the legend from the data it already holds.
+- **Tests.** `chart_check.py` → 29 checks: the real-mouse toolbar test
+  (replacing the JS-state one), an anti-flap banner test, and a
+  timeframe-switch tiny-zoom test; the stale-banner test now simulates a
+  GENUINELY-behind feed (dropped trailing bars) and its routes serve one
+  captured payload instead of re-hitting the live feed (deterministic).
+
 ## [`6f3643d`] 2026-07-18 — V3.1 RC2: final chart release audit
 
 *376 tests (+2), chart_check 27 (+6). The last stabilization pass before
