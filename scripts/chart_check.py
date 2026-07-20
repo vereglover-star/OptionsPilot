@@ -198,6 +198,43 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(page.evaluate("() => DRAW.items.length") == saved,
                   f"drawings persist across reload ({saved})")
 
+            # 9b. drawing engine v3: timeframe-INDEPENDENT visibility (PART 1),
+            #     Ray tool (PART 2), and the unified programmatic API (PART 5).
+            wait_loaded("QQQ", "1d")
+            page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
+            box = page.evaluate("() => { const r=$('ch-main').getBoundingClientRect();"
+                                " return {x:r.left,y:r.top,w:r.width,h:r.height}; }")
+            # draw a trend by real mouse on 1m
+            page.click('#ch-tfs button[data-tf="1m"]'); wait_loaded("QQQ", "1m")
+            ax, ay = box["x"]+box["w"]*0.40, box["y"]+box["h"]*0.40
+            bx, by = box["x"]+box["w"]*0.60, box["y"]+box["h"]*0.50
+            page.click('#ch-tools button[data-tool="trend"]')
+            page.mouse.click(ax, ay); page.wait_for_timeout(60)
+            page.mouse.click(bx, by); page.wait_for_timeout(120)
+            v1m = page.evaluate("() => chDrawVisible().length")
+            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("QQQ", "5m")
+            v5m = page.evaluate("() => chDrawVisible().length")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
+            v1d = page.evaluate("() => chDrawVisible().length")
+            tf_independent = v1m >= 1 and v5m >= 1 and v1d >= 1     # never disappears
+            # Ray via real mouse (two-click, extends past the 2nd point)
+            page.click('#ch-tools button[data-tool="ray"]')
+            page.mouse.click(box["x"]+box["w"]*0.45, box["y"]+box["h"]*0.60); page.wait_for_timeout(60)
+            page.mouse.click(box["x"]+box["w"]*0.55, box["y"]+box["h"]*0.55); page.wait_for_timeout(120)
+            ray_ok = page.evaluate(
+                "() => { const r=DRAW.items.find(i=>i.type==='ray'); return !!r &&"
+                " chItemContains(r, chX(r.points[1].time), chY(r.points[1].price)); }")
+            # unified programmatic API with a source tag + visibility policy
+            prog = page.evaluate("""() => { const c=CH.data.candles.at(-1).close;
+                const it = window.chAddDrawing({type:'hline', points:[{time:0,price:c}],
+                    source:'ai', visibility:{min:'1m',max:'5m'}, select:false});
+                return it && it.source==='ai' && chDrawVisibleOn(it,'1m')
+                    && chDrawVisibleOn(it,'5m') && !chDrawVisibleOn(it,'1d'); }""")
+            check(tf_independent and ray_ok and prog,
+                  f"drawing engine v3: tf-independent(1m={v1m},5m={v5m},1d={v1d}) + Ray + unified API")
+            page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
+            page.evaluate("() => chSetTool(null)")
+
             # 10. historical scroll-back prepends older bars
             wait_loaded("QQQ", "1d")
             oldest_before = page.evaluate("() => CH.data.candles[0].time")

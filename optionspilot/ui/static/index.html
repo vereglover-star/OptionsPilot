@@ -596,6 +596,7 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
         <span class="draw-tools" id="ch-tools" aria-label="Drawing tools">
           <button data-tool="hline" title="Horizontal line: click a price level">─ Level</button>
           <button data-tool="trend" title="Trend line: click two points">╱ Trend</button>
+          <button data-tool="ray" title="Ray: click two points; extends infinitely past the second">⟋ Ray</button>
           <button data-tool="fib" title="Fib retracement: click swing start, then swing end">ƒ Fib</button>
           <button data-tool="rect" title="Zone: click two opposite corners">▭ Zone</button>
           <button data-tool="note" title="Note: click a bar, type text, Enter">✎ Note</button>
@@ -2391,38 +2392,101 @@ const tfLabel = tf => tf === "1mo" ? "1M"
    to the #ch-draw overlay canvas so any of them can be selected, dragged,
    reshaped, recolored, locked, hidden, duplicated, renamed, or deleted. */
 const CH_PALETTE = ["#f7b32b", "#3d8bff", "#c084fc", "#22d3ee", "#00c46a", "#ff5252", "#e6e8eb"];
-const DRAW_DEFAULT_COLOR = { hline: "#f7b32b", trend: "#f7b32b", fib: "#c084fc",
-  rect: "#3d8bff", note: "#22d3ee" };
+const DRAW_DEFAULT_COLOR = { hline: "#f7b32b", ray: "#f7b32b", trend: "#f7b32b",
+  fib: "#c084fc", rect: "#3d8bff", note: "#22d3ee" };
 const HANDLE_R = 4, HIT_TOL = 6;
 const chDrawKey = () => `chDraw:${CH.sym}`;
 let DRAW = { items: [], sel: null };
 let chDrag = null, chRenameId = null, chDrawModelSym = null;
 
+/* Timeframe ordering (finest → coarsest). A drawing's visibility policy is
+   expressed in these terms so it is timeframe-INDEPENDENT: the object is stored
+   once and the renderer decides, per timeframe, whether to show it — it never
+   mutates or destroys the object on a timeframe switch (the PART-1 bug: a trend
+   drawn on 1m vanished on 5m because the model was tf-LOCKED). */
+const CH_TF_ORDER = ["1m","2m","3m","5m","10m","15m","30m","1h","2h","4h","1d","1w","1mo"];
+const chTfRank = tf => { const i = CH_TF_ORDER.indexOf(tf); return i < 0 ? 0 : i; };
+/* visibility policy: "all" (every timeframe) or {min,max} inclusive tf bounds.
+   One resolver for user, AI, and replay drawings alike — no special cases. */
+function chDrawVisibleOn(it, tf = CH.tf) {
+  if (it.hidden) return false;
+  const v = it.visibility;
+  if (!v || v === "all") return true;
+  const r = chTfRank(tf);
+  if (v.min && r < chTfRank(v.min)) return false;
+  if (v.max && r > chTfRank(v.max)) return false;
+  return true;
+}
+
 const chDrawId = () => "d" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+/* Normalize any stored/legacy item into the v3 shape. v3 drops the tf-lock:
+   a drawing carries `createdTf` (metadata) + a `visibility` policy (defaults to
+   "all"), `source` (user/ai/replay), and freeform `meta`. Anchors were already
+   absolute {time,price}, so old drawings simply become all-timeframe. */
+function chDrawNormalize(it) {
+  if (!it || typeof it !== "object") return null;
+  const type = it.type;
+  if (!DRAW_DEFAULT_COLOR[type] || !Array.isArray(it.points)) return null;
+  return {
+    id: it.id || chDrawId(),
+    symbol: it.symbol || CH.sym,
+    type,
+    points: it.points.map(p => ({ time: p.time, price: p.price })),
+    color: it.color || DRAW_DEFAULT_COLOR[type] || CH_PALETTE[0],
+    width: it.width || 1,
+    text: it.text || "",
+    locked: !!it.locked,
+    hidden: !!it.hidden,
+    // legacy tf-locked items (tf !== "*") become all-timeframe so they stop
+    // disappearing; their old tf is preserved as createdTf metadata.
+    visibility: it.visibility || "all",
+    createdTf: it.createdTf || (it.tf && it.tf !== "*" ? it.tf : CH.tf),
+    source: it.source || "user",
+    meta: it.meta || null,
+  };
+}
 function chDrawMigrate(raw) {
   if (!raw) return [];
-  if (raw.version === 2 && Array.isArray(raw.items)) return raw.items;
+  if ((raw.version === 3 || raw.version === 2) && Array.isArray(raw.items))
+    return raw.items.map(chDrawNormalize).filter(Boolean);
+  // v1 (bucketed by tf) → flat normalized list
   const items = [];
-  const mk = (type, tf, points, text = "") => items.push({ id: chDrawId(),
-    type, tf, points, color: DRAW_DEFAULT_COLOR[type], width: 1, text,
-    locked: false, hidden: false });
-  for (const p of (raw.hlines || [])) mk("hline", "*", [{ time: 0, price: p }]);
+  const mk = (type, points, text = "") =>
+    items.push(chDrawNormalize({ type, points, text }));
+  for (const p of (raw.hlines || [])) mk("hline", [{ time: 0, price: p }]);
   const two = (bucket, type) => { for (const tf in (raw[bucket] || {}))
     for (const t of raw[bucket][tf])
-      mk(type, tf, [{ time: t.t1, price: t.p1 }, { time: t.t2, price: t.p2 }]); };
+      mk(type, [{ time: t.t1, price: t.p1 }, { time: t.t2, price: t.p2 }]); };
   two("trends", "trend"); two("fibs", "fib"); two("rects", "rect");
   for (const tf in (raw.notes || {})) for (const n of raw.notes[tf])
-    mk("note", tf, [{ time: n.time, price: n.price ?? 0 }], n.text);
-  return items;
+    mk("note", [{ time: n.time, price: n.price ?? 0 }], n.text);
+  return items.filter(Boolean);
 }
 function chDrawLoadModel() {
   DRAW = { items: chDrawMigrate(safeParse(chDrawKey(), null)), sel: null };
 }
 const chDrawSave = () =>
-  localStorage.setItem(chDrawKey(), JSON.stringify({ version: 2, items: DRAW.items }));
-const chDrawVisible = () =>
-  DRAW.items.filter(it => !it.hidden && (it.tf === "*" || it.tf === CH.tf));
+  localStorage.setItem(chDrawKey(), JSON.stringify({ version: 3, items: DRAW.items }));
+const chDrawVisible = () => DRAW.items.filter(it => chDrawVisibleOn(it));
 const chSelItem = () => DRAW.items.find(it => it.id === DRAW.sel) || null;
+
+/* ONE creation entry point for every drawing — user tools, and (later) the AI
+   scanner and replay engine — so there is exactly one drawing engine and no
+   parallel implementations (PART 5). Exposed on window for programmatic use. */
+function chAddDrawing(spec) {
+  const it = chDrawNormalize({
+    ...spec,
+    id: chDrawId(),
+    createdTf: spec.createdTf || CH.tf,
+    source: spec.source || "user",
+  });
+  if (!it) return null;
+  DRAW.items.push(it);
+  DRAW.sel = spec.select === false ? DRAW.sel : it.id;
+  chDrawSave(); chDrawRender();
+  return it;
+}
+window.chAddDrawing = chAddDrawing;
 
 /* data <-> pixel helpers (logical index keeps off-screen endpoints correct so
    trend/rect lines extrapolate instead of vanishing when partly scrolled off) */
@@ -2495,6 +2559,14 @@ function chDrawOne(ctx, it, w, selected) {
     if (![x1, y1, x2, y2].some(v => v == null)) {
       ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
       if (selected) { chHandle(ctx, x1, y1); chHandle(ctx, x2, y2); } }
+  } else if (it.type === "ray") {
+    // a ray starts at point[0], passes through point[1], and extends infinitely
+    // PAST point[1] (one direction) — clamp that extension to the canvas edge.
+    const [a, b] = it.points, x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
+    if (![x1, y1, x2, y2].some(v => v == null)) {
+      const end = chRayEdge(x1, y1, x2, y2, w, $("ch-main").clientHeight);
+      ctx.setLineDash([]); ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(end.x, end.y); ctx.stroke();
+      if (selected) { chHandle(ctx, x1, y1); chHandle(ctx, x2, y2); } }
   } else if (it.type === "rect") {
     const [a, b] = it.points, x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
     if (![x1, y1, x2, y2].some(v => v == null)) {
@@ -2543,12 +2615,31 @@ function chNearSeg(x1, y1, x2, y2, px, py) {
   const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / L2));
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)) <= HIT_TOL;
 }
+/* where a ray from (x1,y1) through (x2,y2) leaves the [0,w]×[0,h] canvas */
+function chRayEdge(x1, y1, x2, y2, w, h) {
+  const dx = x2 - x1, dy = y2 - y1;
+  if (dx === 0 && dy === 0) return { x: x2, y: y2 };
+  let t = Infinity;
+  if (dx > 0) t = Math.min(t, (w - x1) / dx); else if (dx < 0) t = Math.min(t, (0 - x1) / dx);
+  if (dy > 0) t = Math.min(t, (h - y1) / dy); else if (dy < 0) t = Math.min(t, (0 - y1) / dy);
+  if (!isFinite(t)) t = 1;
+  return { x: x1 + dx * t, y: y1 + dy * t };
+}
+/* near a ray: the segment a→b, plus its infinite extension past b */
+function chNearRay(x1, y1, x2, y2, px, py) {
+  if ([x1, y1, x2, y2].some(v => v == null)) return false;
+  const dx = x2 - x1, dy = y2 - y1, L2 = dx * dx + dy * dy || 1;
+  const t = Math.max(0, ((px - x1) * dx + (py - y1) * dy) / L2);   // no upper clamp → extends past b
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy)) <= HIT_TOL;
+}
 function chItemContains(it, x, y) {
   if (it.type === "hline") { const yy = chY(it.points[0].price); return yy != null && Math.abs(yy - y) <= HIT_TOL; }
   if (it.type === "note") { const xx = chX(it.points[0].time), yy = chY(chNotePrice(it));
     return xx != null && yy != null && Math.abs(xx - x) <= 12 && Math.abs((yy - 10) - y) <= 14; }
   if (it.type === "trend") { const [a, b] = it.points;
     return chNearSeg(chX(a.time), chY(a.price), chX(b.time), chY(b.price), x, y); }
+  if (it.type === "ray") { const [a, b] = it.points;
+    return chNearRay(chX(a.time), chY(a.price), chX(b.time), chY(b.price), x, y); }
   if (it.type === "rect") { const [a, b] = it.points;
     const x1 = chX(a.time), y1 = chY(a.price), x2 = chX(b.time), y2 = chY(b.price);
     if ([x1, y1, x2, y2].some(v => v == null)) return false;
@@ -2657,10 +2748,10 @@ function chToolClick(x, y) {
   CH.pendingPoint = null; chSetTool(null);
 }
 function chAddItem(type, tf, points, text = "") {
-  const it = { id: chDrawId(), type, tf, points, color: DRAW_DEFAULT_COLOR[type],
-               width: 1, text, locked: false, hidden: false };
-  DRAW.items.push(it); DRAW.sel = it.id; chDrawSave(); chDrawRender();
-  return it;
+  // Thin wrapper kept for the existing tool call sites: every drawing is
+  // visible on all timeframes by default (createdTf is metadata only).
+  return chAddDrawing({ type, points, text,
+    createdTf: tf && tf !== "*" ? tf : CH.tf });
 }
 
 /* selection toolbar */
