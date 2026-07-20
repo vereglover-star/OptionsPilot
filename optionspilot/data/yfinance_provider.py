@@ -91,10 +91,16 @@ class YFinanceProvider(MarketDataProvider):
             self._last_request = _time.monotonic()
 
     def get_candles(
-        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime,
+        *, extended_hours: bool = False,
     ) -> pd.DataFrame:
         self._throttle()
         interval, resample_rule = _FETCH_SPEC[timeframe]
+        # Pre-/after-market bars come back only when prepost=True, and only for
+        # intraday intervals — daily+ bars are RTH aggregates upstream, so the
+        # flag is a no-op there. This is display-only: the engine/trading path
+        # never sets it (see CachedProvider), so paper execution is unchanged.
+        prepost = extended_hours and timeframe.minutes < Timeframe.D1.minutes
         raw = pd.DataFrame()
         last_symbol = symbol
         for candidate in _symbol_candidates(symbol):
@@ -102,7 +108,7 @@ class YFinanceProvider(MarketDataProvider):
             raw = _yf().Ticker(candidate).history(
                 start=start, end=end,
                 interval=interval,
-                auto_adjust=False, actions=False,
+                auto_adjust=False, actions=False, prepost=prepost,
             )
             if not raw.empty:
                 break

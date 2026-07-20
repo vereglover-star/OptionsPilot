@@ -235,6 +235,42 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
             page.evaluate("() => chSetTool(null)")
 
+            # 9c. extended hours (PART 4): the toggle adds pre/after-market bars
+            #     with session tags on intraday, is a no-op (disabled) on daily,
+            #     and the preference is applied. Uses a controlled route so the
+            #     session mix is deterministic regardless of the live feed.
+            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("QQQ", "5m")
+            if page.evaluate("() => CH.ext"):        # start from RTH-only
+                page.click('#ch-ext'); wait_loaded("QQQ", "5m")
+            rth_bars = page.evaluate("() => CH.data.candles.length")
+            rth_session = page.evaluate("() => !!CH.data.candles[0].session")
+
+            def ext_route(route):
+                url = route.request.url
+                body = route.fetch().json()
+                if "ext=1" in url and body.get("candles"):
+                    # tag alternating sessions so ext mode is deterministic
+                    for i, bar in enumerate(body["candles"]):
+                        bar["session"] = ("pre", "rth", "post")[i % 3]
+                    body["extended_hours"] = True
+                route.fulfill(json=body)
+            page.route("**/api/candles*", ext_route)
+            page.click('#ch-ext'); page.wait_for_timeout(200)
+            page.wait_for_function("() => CH.data && CH.data.extended_hours === true", timeout=30000)
+            ext_flag = page.evaluate("() => CH.data.extended_hours === true")
+            ext_session = page.evaluate("() => !!CH.data.candles[0].session")
+            ext_active = page.evaluate("() => $('ch-ext').classList.contains('active')")
+            no_err_bands = page.evaluate(
+                "() => { try { chSessionBands(document.querySelector('#ch-draw').getContext('2d'),"
+                " 800, 400); return true; } catch(e){ return false; } }")
+            page.unroute("**/api/candles*", ext_route)
+            page.click('#ch-ext'); page.wait_for_timeout(150)    # back to RTH-only
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
+            daily_disabled = page.evaluate("() => $('ch-ext').disabled === true")
+            check(not rth_session and ext_flag and ext_session and ext_active
+                  and no_err_bands and daily_disabled,
+                  "extended hours: session tags + shading intraday, disabled on daily")
+
             # 10. historical scroll-back prepends older bars
             wait_loaded("QQQ", "1d")
             oldest_before = page.evaluate("() => CH.data.candles[0].time")

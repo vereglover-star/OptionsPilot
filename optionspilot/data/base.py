@@ -81,8 +81,17 @@ class MarketDataProvider(abc.ABC):
         timeframe: Timeframe,
         start: datetime,
         end: datetime,
+        *,
+        extended_hours: bool = False,
     ) -> pd.DataFrame:
-        """Historical candles in the canonical shape (see module docstring)."""
+        """Historical candles in the canonical shape (see module docstring).
+
+        `extended_hours` is a DISPLAY-only opt-in: when True (and the interval
+        is intraday) the frame includes pre-/after-market bars. The engine and
+        every trading path leave it False so execution stays RTH-only.
+        Providers that cannot supply extended-hours data may ignore it and
+        return RTH bars; callers must not assume extra sessions are present.
+        """
 
     @abc.abstractmethod
     def get_quote(self, symbol: str) -> Quote:

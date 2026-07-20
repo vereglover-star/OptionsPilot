@@ -228,6 +228,7 @@ class UIServer:
         timeframe: str,
         start: datetime | None = None,
         end: datetime | None = None,
+        extended_hours: bool = False,
     ) -> dict:
         """OHLCV + indicator series for the Charts tab, computed by the SAME
         analysis library the engine trades with (guaranteed visual parity).
@@ -235,6 +236,7 @@ class UIServer:
         loads never contend with a running scan."""
         from optionspilot.analysis import indicators as ind
         from optionspilot.core.models import Timeframe
+        from optionspilot.data import sessions
         from optionspilot.orchestrator import _WINDOW_DAYS
 
         symbol = symbol.upper()
@@ -246,11 +248,21 @@ class UIServer:
         # display surface: prefer clearly-flagged stale bars over a blank
         # chart when the live fetch fails (feature-detected so tests that
         # inject bare fake providers keep working)
+        # Extended hours only exists for intraday intervals; daily+ bars are RTH
+        # aggregates so the flag is forced off there (keeps the cache key and the
+        # session tagging honest).
+        ext = extended_hours and tf.minutes < Timeframe.D1.minutes
         stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
+        # Only thread the kwarg when actually requesting extended hours, so plain
+        # 4-arg providers (test fakes, legacy adapters) are unaffected.
         if stale_ok is not None:
-            df, stale = stale_ok(symbol, tf, start, end)
+            df, stale = (stale_ok(symbol, tf, start, end, extended_hours=True)
+                         if ext else stale_ok(symbol, tf, start, end))
         else:
-            df, stale = self.orch.provider.get_candles(symbol, tf, start, end), False
+            df = (self.orch.provider.get_candles(symbol, tf, start, end,
+                                                 extended_hours=True)
+                  if ext else self.orch.provider.get_candles(symbol, tf, start, end))
+            stale = False
         # One sanitization choke point for everything derived below: candles
         # AND indicator series. Providers validate their own output, but this
         # endpoint must stay robust to any that don't — a single non-finite
@@ -297,22 +309,29 @@ class UIServer:
             col("macd_hist", m["macd_hist"])
 
         times = [int(ts.timestamp()) for ts in df.index]
+        # Per-bar session labels only when extended hours are shown (in RTH-only
+        # mode every bar is regular, so the field is omitted to keep the payload
+        # lean; the frontend defaults a missing session to "rth").
+        sess = sessions.labels(df.index) if ext else None
         # validate_candles() above already dropped non-finite bars; these
         # guards are the last line of defense — one rogue float would 500 the
         # whole endpoint during JSON serialization (allow_nan=False).
-        candles = [
-            {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
-             "low": round(r.low, 4), "close": round(r.close, 4),
-             "volume": int(r.volume) if math.isfinite(r.volume) else 0}
-            for t, r in zip(times, df.itertuples(index=False))
-            if all(math.isfinite(v) for v in (r.open, r.high, r.low, r.close))
-        ]
-        log.debug("candles %s %s: %d bars%s", symbol, timeframe, len(candles),
-                  " (stale)" if stale else "")
+        candles = []
+        for i, (t, r) in enumerate(zip(times, df.itertuples(index=False))):
+            if not all(math.isfinite(v) for v in (r.open, r.high, r.low, r.close)):
+                continue
+            bar = {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
+                   "low": round(r.low, 4), "close": round(r.close, 4),
+                   "volume": int(r.volume) if math.isfinite(r.volume) else 0}
+            if sess is not None:
+                bar["session"] = sess[i]
+            candles.append(bar)
+        log.debug("candles %s %s: %d bars%s%s", symbol, timeframe, len(candles),
+                  " (stale)" if stale else "", " ext" if ext else "")
         return {"symbol": symbol, "timeframe": timeframe,
                 "candles": candles, "indicators": series, "stale": stale,
                 "as_of": times[-1] if stale else None,
-                "market_open": market_open}
+                "market_open": market_open, "extended_hours": ext}
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
@@ -662,9 +681,11 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         tf: str = "5m",
         start: datetime | None = None,
         end: datetime | None = None,
+        ext: bool = False,
     ):
         try:
-            return server.candles_payload(symbol, tf, start=start, end=end)
+            return server.candles_payload(symbol, tf, start=start, end=end,
+                                          extended_hours=ext)
         except Exception as exc:  # noqa: BLE001 — surface as a clean 502
             log.error("candles fetch failed: %s", exc)
             return JSONResponse({"error": f"candles unavailable: {exc}"},

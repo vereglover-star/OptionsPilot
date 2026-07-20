@@ -139,6 +139,60 @@ class TestCandlesAPI:
         assert d["candles"]
         assert d["candles"][-1]["time"] < int(end.timestamp())
 
+    def test_extended_hours_tags_sessions_and_flags_payload(self, client):
+        # ext=1 must tag each bar with its session and set extended_hours;
+        # the default (RTH-only) must do neither. Session labels come from the
+        # bar's US/Eastern clock time, independent of the provider.
+        import pandas as pd
+        idx = pd.DatetimeIndex([
+            pd.Timestamp("2026-07-17 08:00", tz="America/New_York"),   # pre
+            pd.Timestamp("2026-07-17 10:00", tz="America/New_York"),   # rth
+            pd.Timestamp("2026-07-17 17:00", tz="America/New_York"),   # post
+        ]).tz_convert("UTC")
+        frame = pd.DataFrame(
+            {"open": [1.0, 1.1, 1.2], "high": [1.2, 1.3, 1.4],
+             "low": [0.9, 1.0, 1.1], "close": [1.1, 1.2, 1.3],
+             "volume": [10, 20, 30]}, index=idx)
+        seen = {}
+
+        def get_candles(symbol, timeframe, start, end, *, extended_hours=False):
+            seen["ext"] = extended_hours
+            return frame
+
+        client.provider.get_candles = get_candles
+        # RTH-only (default): no session field, extended_hours False, flag not
+        # forwarded as True
+        d0 = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d0["extended_hours"] is False
+        assert "session" not in d0["candles"][0]
+        # extended hours: session tags present, flag set, provider told ext=True
+        d1 = client.get("/api/candles?symbol=SPY&tf=5m&ext=1").json()
+        assert d1["extended_hours"] is True
+        assert seen["ext"] is True
+        assert [b["session"] for b in d1["candles"]] == ["pre", "rth", "post"]
+
+    def test_extended_hours_forced_off_on_daily(self, client):
+        # daily bars are RTH aggregates upstream; ext must be a no-op there so
+        # the cache key and session tagging stay honest — even if the client
+        # asks for ext=1, the provider is called WITHOUT it and no session
+        # tags are emitted.
+        import pandas as pd
+        idx = pd.date_range("2026-06-01", periods=5, freq="D", tz="UTC")
+        frame = pd.DataFrame(
+            {"open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 10},
+            index=idx)
+        seen = {}
+
+        def get_candles(symbol, timeframe, start, end, *, extended_hours=False):
+            seen["ext"] = extended_hours
+            return frame
+
+        client.provider.get_candles = get_candles
+        d = client.get("/api/candles?symbol=SPY&tf=1d&ext=1").json()
+        assert d["extended_hours"] is False
+        assert seen["ext"] is False
+        assert "session" not in d["candles"][0]
+
     def test_unknown_symbol_is_clean_error(self, client):
         r = client.get("/api/candles?symbol=ZZZZ&tf=5m")
         # fake provider raises KeyError for unknown timeframes only; unknown

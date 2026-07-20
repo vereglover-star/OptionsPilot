@@ -130,9 +130,16 @@ class CachedProvider(MarketDataProvider):
     # ── candles ──────────────────────────────────────────────────────────────
 
     def get_candles(self, symbol: str, timeframe: Timeframe,
-                    start: datetime, end: datetime) -> pd.DataFrame:
+                    start: datetime, end: datetime,
+                    *, extended_hours: bool = False) -> pd.DataFrame:
         symbol = symbol.upper()
-        key = ("candles", symbol, timeframe)
+        # Extended-hours frames are keyed (and memoized) separately so they never
+        # mix with the RTH-only frames the engine/trading path reads. They are a
+        # display-only surface, so they also bypass the on-disk store (which is
+        # keyed by symbol+tf and has no session dimension) — the short-lived mem
+        # cache is enough to serve chart refreshes.
+        key = ("candles", symbol, timeframe, extended_hours)
+        use_store = self._store is not None and not extended_hours
         ttl = CANDLE_TTL.get(timeframe, DEFAULT_CANDLE_TTL)
         fresh = self._fresh(ttl)
 
@@ -148,17 +155,22 @@ class CachedProvider(MarketDataProvider):
             df = None
             with self._lock:
                 cold = key not in self._mem
-            if cold and self._store is not None:
+            if cold and use_store:
                 # cold start: reuse the on-disk cache if its last bar is still
                 # inside the freshness window (e.g. an app restart mid-session)
                 df = self._warm_from_store(symbol, timeframe, start, end, ttl)
             if df is None:
-                df = self._inner.get_candles(symbol, timeframe, start, end)
+                # only pass the kwarg when set, so plain 4-arg providers
+                # (test fakes, any legacy adapter) keep working unchanged
+                df = (self._inner.get_candles(symbol, timeframe, start, end,
+                                              extended_hours=True)
+                      if extended_hours
+                      else self._inner.get_candles(symbol, timeframe, start, end))
                 if df.empty:
                     log.warning("empty candle fetch %s %s (upstream failure "
                                 "or no data) — cached for %.0fs only",
                                 symbol, timeframe, EMPTY_CANDLE_TTL)
-                elif self._store is not None:
+                elif use_store:
                     try:
                         self._store.store(symbol, timeframe, df)
                     except Exception as exc:  # noqa: BLE001 — cache is best-effort
@@ -170,6 +182,7 @@ class CachedProvider(MarketDataProvider):
 
     def get_candles_stale_ok(self, symbol: str, timeframe: Timeframe,
                              start: datetime, end: datetime,
+                             *, extended_hours: bool = False,
                              ) -> tuple[pd.DataFrame, bool]:
         """Candles for DISPLAY surfaces (the Charts tab): same as
         `get_candles`, but when the live fetch fails/returns empty, fall
@@ -180,10 +193,13 @@ class CachedProvider(MarketDataProvider):
         on `get_candles` staying strict. A chart showing clearly-labeled
         yesterday's bars is useful; a trade placed on them is not.
         """
-        df = self.get_candles(symbol, timeframe, start, end)
+        df = self.get_candles(symbol, timeframe, start, end,
+                              extended_hours=extended_hours)
         if not df.empty:
             return df, False
-        if self._store is not None:
+        # No disk fallback for extended-hours (the store has no session
+        # dimension); its RTH bars would be a misleading "stale" surface.
+        if self._store is not None and not extended_hours:
             try:
                 cached = self._store.load(symbol.upper(), timeframe, start, end)
             except Exception as exc:  # noqa: BLE001 — fallback is best-effort

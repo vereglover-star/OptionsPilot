@@ -399,10 +399,10 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   text-transform:uppercase; }
 .chart-bar input:focus { outline:none; border-color:var(--accent); }
 .ind-pills { display:inline-flex; gap:6px; flex-wrap:wrap; }
-.ind-pills button, .draw-tools button { all:unset; cursor:pointer; padding:5px 10px; border-radius:999px;
+.ind-pills button, .draw-tools button, button#ch-ext { all:unset; cursor:pointer; padding:5px 10px; border-radius:999px;
   border:1px solid var(--grid); color:var(--muted); font-size:var(--fs-sm); transition:all var(--t-fast); }
-.ind-pills button:hover, .draw-tools button:hover { color:var(--ink); border-color:var(--accent); }
-.ind-pills button.active { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }
+.ind-pills button:hover, .draw-tools button:hover, button#ch-ext:hover { color:var(--ink); border-color:var(--accent); }
+.ind-pills button.active, button#ch-ext.active { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }
 .draw-tools { display:inline-flex; gap:6px; }
 .draw-tools button.active { background:var(--warn-soft); border-color:var(--warn); color:var(--warn); }
 .chart-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:var(--fs-sm);
@@ -593,6 +593,8 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
           <button data-ind="rsi">RSI</button>
           <button data-ind="macd">MACD</button>
         </span>
+        <button id="ch-ext" class="ind-pills"
+                title="Extended hours: include pre-market and after-hours (intraday only)">Ext</button>
         <span class="draw-tools" id="ch-tools" aria-label="Drawing tools">
           <button data-tool="hline" title="Horizontal line: click a price level">─ Level</button>
           <button data-tool="trend" title="Trend line: click two points">╱ Trend</button>
@@ -1774,6 +1776,8 @@ const CH = {
   sym: localStorage.getItem("chSym") || "SPY",
   tf: localStorage.getItem("chTf") || "1d",
   inds: safeParse("chInds", {ema:true, vwap:false, bb:false, rsi:false, macd:false}),
+  ext: localStorage.getItem("chExt") === "1",   // include pre/after-market bars
+  freshHigh: null,
   main: null, candle: null, volume: null, overlays: {},
   rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
   macdLine: null, macdSig: null,
@@ -2187,7 +2191,8 @@ async function chLoadHistoryChunk() {
   try {
     const r = await fetch(
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
-      `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`);
+      `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
+      (CH.ext ? "&ext=1" : ""));
     const d = await r.json();
     if (gen !== CH.gen || key !== chKey()) return;
     if (d.error || !d.candles || !d.candles.length) {
@@ -2263,7 +2268,8 @@ async function loadChart(symbol) {
   let d;
   try {
     const r = await fetch(
-      `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}`);
+      `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
+      (CH.ext ? "&ext=1" : ""));
     d = await r.json();
   } catch {
     if (gen !== CH.gen) return;               // superseded by a newer request
@@ -2541,9 +2547,37 @@ function chText(ctx, x, y, s, align) {
 }
 function chDrawRender() {
   if (!CH.main || !CH.candle || !$("ch-draw")) return;
-  const { ctx, w } = chDrawCtx();
+  const { ctx, w, h } = chDrawCtx();
+  chSessionBands(ctx, w, h);   // behind the drawings; only when ext-hours shown
   for (const it of chDrawVisible()) chDrawOne(ctx, it, w, it.id === DRAW.sel);
   chDrawBar();
+}
+/* Extended-hours session shading: subtle translucent bands over pre-market and
+   after-hours candle runs, so the sessions are visually distinct (TradingView-
+   style) without hiding price. Driven off the per-bar `session` tag the backend
+   sends only in ext-hours mode; a no-op otherwise. Rendered on the same overlay
+   canvas as drawings, so it tracks pan/zoom for free. */
+function chSessionBands(ctx, w, h) {
+  const c = CH.data?.candles;
+  if (!CH.ext || !c || !c.length || !c[0].session) return;
+  const tint = { pre: "rgba(61,139,255,0.07)", post: "rgba(192,132,252,0.07)" };
+  ctx.save(); ctx.setLineDash([]);
+  let i = 0;
+  while (i < c.length) {
+    const s = c[i].session;
+    if (s === "pre" || s === "post") {
+      let j = i;
+      while (j + 1 < c.length && c[j + 1].session === s) j++;
+      const x1 = chX(c[i].time), x2 = chX(c[j].time);
+      if (x1 != null && x2 != null) {
+        const half = i === j ? 3 : 0;   // widen a lone bar so it's visible
+        ctx.fillStyle = tint[s];
+        ctx.fillRect(Math.min(x1, x2) - half, 0, Math.abs(x2 - x1) + half * 2, h);
+      }
+      i = j + 1;
+    } else { i++; }
+  }
+  ctx.restore();
 }
 function chDrawOne(ctx, it, w, selected) {
   ctx.save();
@@ -2861,6 +2895,13 @@ function chPaintControls() {
     b.classList.toggle("active", b.dataset.tf === CH.tf));
   document.querySelectorAll("#ch-inds button").forEach(b =>
     b.classList.toggle("active", !!CH.inds[b.dataset.ind]));
+  // Extended hours only exists intraday; grey the toggle out on daily+ so its
+  // no-op state is legible (the backend forces it off there anyway).
+  const intraday = chTfRank(CH.tf) < chTfRank("1d");
+  const ext = $("ch-ext");
+  ext.classList.toggle("active", CH.ext && intraday);
+  ext.disabled = !intraday;
+  ext.style.opacity = intraday ? "" : "0.45";
   $("ch-trade").textContent = `Trade ${CH.sym} →`;
 }
 
@@ -2871,6 +2912,12 @@ function toggleChartFullscreen() {
 document.querySelectorAll("#ch-tfs button").forEach(b => b.onclick = () => {
   CH.tf = b.dataset.tf; chPaintControls(); loadChart();
 });
+$("ch-ext").onclick = () => {
+  CH.ext = !CH.ext;
+  localStorage.setItem("chExt", CH.ext ? "1" : "0");
+  chPaintControls();
+  loadChart();                 // re-fetch with/without pre/after-market bars
+};
 document.querySelectorAll("#ch-inds button").forEach(b => b.onclick = () => {
   CH.inds[b.dataset.ind] = !CH.inds[b.dataset.ind];
   localStorage.setItem("chInds", JSON.stringify(CH.inds));
