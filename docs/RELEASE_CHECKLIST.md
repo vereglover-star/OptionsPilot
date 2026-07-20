@@ -1,7 +1,7 @@
 # RELEASE_CHECKLIST.md — the exact process for shipping a release
 
 There is no formal release process yet (no GitHub Releases have been cut;
-the version is `0.3.0`, bumped from `0.1.0` at the V3.2 milestone). This document is
+the version is `0.3.1`, bumped from `0.1.0` at V3.2 and patched at V3.2.1). This document is
 the process for when that changes, built around `scripts/release.ps1`,
 which automates everything on this list except the explicitly-marked
 manual steps.

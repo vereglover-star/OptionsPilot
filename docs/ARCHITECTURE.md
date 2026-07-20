@@ -482,7 +482,7 @@ The Charts tab (V2-4, extensively hardened in V3.1) is built on vendored
   includes the last bar's OHLCV so the **forming candle updates intrabar**,
   and a `series.update()` fast path renders trailing-bar changes with no
   flicker or reflow (V3.1-6). The same timer auto-retries a chart stuck on
-  the error overlay. `scripts/chart_check.py` (31 headless-browser checks,
+  the error overlay. `scripts/chart_check.py` (33 headless-browser checks,
   in `verify.ps1`) guards all of the above.
 
 ### 11.2 WebSockets
@@ -667,7 +667,7 @@ flowchart LR
 - Browser-driven UI test coverage is a smoke check plus a deep chart
   regression suite, not exhaustive per-flow coverage:
   `scripts/browser_check.py` (§11) proves every tab loads with zero console
-  errors, and `scripts/chart_check.py` runs 31 headless-browser checks over
+  errors, and `scripts/chart_check.py` runs 33 headless-browser checks over
   the chart system (ticker loading, invalid ticker + recovery, all 13
   timeframes, indicators, the full editable-drawing lifecycle, historical
   scroll-back, zoom, the stale banner + retry, rapid symbol changes,

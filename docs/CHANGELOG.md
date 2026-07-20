@@ -4,7 +4,53 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] 2026-07-19 — V3.2: chart-system completion + Extended Hours
+## [Uncommitted] 2026-07-20 — V3.2.1: critical chart regression fixes
+
+*Version 0.3.0 → 0.3.1. 387 tests, chart_check 31 → 33. Three release-blocker
+regressions that the V3.2 tests reported as "fixed" but the real app still hit —
+because the tests measured internal state, not what the user sees. The V3.2.1
+tests assert user-visible behaviour (actual coordinates, actual viewport).*
+
+- **Drawings STILL disappeared across timeframes (Bug 1).** V3.2 made the
+  visibility *filter* timeframe-independent, and the test checked
+  `chDrawVisible().length` — which passed. But a drawing anchored on 1m has bar
+  times that are NOT bars on 5m/1d, so `chX()` fell through to
+  `timeToCoordinate()`, which returns null for a non-bar time → the drawing
+  painted nothing (painted_px = 0). Root cause verified by pixel count, not the
+  filter. Fix: `chX()` maps any timestamp to a fractional logical index
+  (`chLogicalAt`, interpolating between bracketing bars) and — because the
+  vendored lightweight-charts' `logicalToCoordinate` returns 0 for FRACTIONAL
+  indices but maps INTEGER ones fine (even off-screen, extrapolating) —
+  interpolates the pixel between the two bracketing integer-bar coordinates.
+  Drawings now render on every timeframe.
+- **Timeframe switching lost chart context (Bug 3).** V3.1-RC3 made switches
+  `fitContent` (to kill a stale-zoom bug); that threw the user's place away — a
+  switch jumped to an unrelated date (measured 82-day drift). Fix: capture the
+  focal date region before the switch and re-center the new resolution on it
+  (`chCaptureFocal`/`chApplyFocal`), clamping each endpoint to the nearest real
+  bar so a finer timeframe's shorter history lands on the "closest candle"
+  instead of exploding the window. Recent focal now preserved with ~0 drift; a
+  focal older than the destination's history lands on its earliest bar.
+- **Viewport auto-reset fought the user (Bug 2).** A same-key refresh restored
+  the *time* range, which is null when panned into whitespace past the newest
+  candle — so the chart snapped back. Fix: same-key refresh preserves the
+  LOGICAL range (always defined), captured before `setData`. The stranded
+  auto-fit net now fires only on a symbol-switch/first-paint fallback, never
+  over a refresh or a deliberate focal restore — Latest/Reset remain the only
+  auto-recenters.
+- **Root cause tying Bugs 1+3 together: history-load corruption.** `setData`
+  fires the visible-range subscription (its auto-fit) *before*
+  `restoringViewport` was set, so `chMaybeLoadHistory` ran mid-switch and
+  prepended history, shifting logical indices and corrupting drawings AND the
+  viewport (n grew 468→806→1248). Fix: set `restoringViewport` before `setData`,
+  and disarm history on a switch (history loads on a user SCROLL, never on a
+  timeframe/symbol switch).
+- **Tests.** `chart_check` 9b now asserts a drawing's anchor coordinates
+  RESOLVE (finite, distinct) on every timeframe — it fails on the old x=0 bug.
+  New 9d (focal-date preserved across a cascade, no jump/sliver) and 9e
+  (viewport not yanked by a refresh while panned past newest; Latest works).
+
+## [`62cbcb4`+`409cfc0`+`9721e1f`] 2026-07-19 — V3.2: chart-system completion + Extended Hours
 
 *Version bumped 0.1.0 → 0.3.0. 387 tests, chart_check 29 → 31. The final
 evolution of the chart subsystem before Replay Mode / AI Visualization /

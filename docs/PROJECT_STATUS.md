@@ -5,17 +5,18 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-19, V3.2 chart-system completion + Extended Hours
+**Last verified:** 2026-07-20, V3.2.1 critical chart regression fixes
 (`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 31-check
-chart regression suite, all green — plus a rebuilt exe whose drawing engine
-and Extended Hours were driven by hand; see `PROJECT_STATE.md`).
+consistency, `pip check`, a headless-browser smoke check, and the 33-check
+chart regression suite, all green — plus a rebuilt exe whose cross-timeframe
+drawings, focal-preserving switches, and viewport stability were driven by
+hand; see `PROJECT_STATE.md`).
 
 ---
 
 ## Current version
 
-`0.3.0` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
+`0.3.1` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
 at the V3.2 milestone (the footer reads it from `/api/status`). No public
 release process yet; the packaged artifact is a Windows desktop exe built on
 demand via `scripts/build_exe.ps1`, not versioned/released independently of
@@ -23,15 +24,21 @@ the git history.
 
 ## Current phase
 
-**V3.2 chart-system completion + Extended Hours, on branch `v3-ui` —
-awaiting user approval/merge and market-hours validation.** V3.2 finishes the
-chart subsystem: a timeframe-INDEPENDENT drawing engine (drawings no longer
-vanish on a tf switch — each carries a visibility policy, `createdTf`, a
-`source` tag, and `meta`; one `chAddDrawing` API serves user/AI/replay alike),
-a TradingView-style **Ray** tool, and **Extended Hours** (pre-market +
-after-hours candles via yfinance `prepost`, per-bar session tags, session
-shading, and a persisted toggle — display-only, the trading path stays
-RTH-only). Preceded by RC1–RC3 (chart stabilization: toolbar, stale-banner
+**V3.2.1 critical chart regression fixes, on branch `v3-ui` — awaiting user
+approval/merge and market-hours validation.** V3.2.1 fixed three release
+blockers the user reproduced in the real app that V3.2's (internal-state) tests
+missed: drawings still vanished across timeframes (`chX` returned null for
+off-bar timestamps — now interpolates the pixel between bracketing integer
+bars); timeframe switches lost the user's place (now preserve the focal date,
+clamped to the closest candle); and the viewport snapped on refresh while panned
+past newest (now preserves the logical range). Underlying root cause: `setData`
+triggered a history load mid-switch and corrupted logical indices. Built on
+V3.2, which finished the chart subsystem: a timeframe-independent drawing engine
+(visibility policy, `createdTf`, `source`, `meta`; one `chAddDrawing` API for
+user/AI/replay), a TradingView-style **Ray** tool, and **Extended Hours**
+(pre/after-market candles via yfinance `prepost`, session tags + shading,
+persisted toggle — display-only, trading path stays RTH-only). Preceded by
+RC1–RC3 (chart stabilization: toolbar, stale-banner
 flapping, tf-switch tiny-zoom, viewport ownership). Further back:
 **V2 rewrite,
 post-V2-4.** The original 8-phase v1 roadmap (foundation
@@ -77,6 +84,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376-test suite green |
 | V3.2 — Drawing engine + Ray (PARTS 1/2/5) | Timeframe-INDEPENDENT drawing model (visibility policy, `createdTf`, `source`, `meta`; v1/v2→v3 migration so old drawings stop vanishing on a tf switch); one `chAddDrawing` API for user/AI/replay; TradingView-style **Ray** tool (two-click, infinite one-way extension) reusing the existing edit machinery | `62cbcb4`, browser-verified, chart_check 9b |
 | V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 387 tests green |
+| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 387 tests green |
 
 ## Features complete
 
@@ -162,6 +170,6 @@ browser checks are still focused regressions, not exhaustive UI coverage
 end to end: full pytest run (387/387), static `$("id")` reference check,
 documentation consistency check, `pip check`, a headless-browser smoke
 check across all 9 tabs (Playwright + system Edge) with zero console
-errors, and the 31-check chart regression suite (`chart_check.py`) —
+errors, and the 33-check chart regression suite (`chart_check.py`) —
 plus a 10-ticker × 13-timeframe provider sweep (130/130 monotonic) and a
 rebuilt exe whose packaged charts/chains were confirmed serving live data.

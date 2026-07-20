@@ -5,9 +5,37 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-19, end of the V3.2 chart-system completion sprint.
+**Last updated:** 2026-07-20, end of the V3.2.1 critical chart regression fixes.
 
-## What was completed most recently? (V3.2 — chart completion + Extended Hours)
+## What was completed most recently? (V3.2.1 — critical chart regression fixes)
+
+Three release-blocker regressions the user still hit in the real app despite
+V3.2's passing tests — because those tests measured internal state, not
+user-visible behaviour. Version 0.3.0 → 0.3.1. chart_check 31 → 33.
+
+1. **Drawings still disappeared across timeframes (Bug 1).** V3.2 fixed the
+   visibility *filter* (`chDrawVisible().length` passed) but a 1m-anchored
+   drawing's bar times aren't bars on 5m/1d, so `chX()` → `timeToCoordinate()`
+   returned null and it painted nothing. Fix: `chX()` interpolates the pixel
+   between the two bracketing INTEGER-bar coordinates (the vendored
+   lightweight-charts `logicalToCoordinate` returns 0 for fractional indices but
+   maps integers fine, even off-screen). Now renders on every timeframe.
+2. **Timeframe switch lost context (Bug 3).** RC3's "fit on switch" threw the
+   user's place away. Fix: capture the focal date before the switch and
+   re-center the new resolution on it (`chCaptureFocal`/`chApplyFocal`), clamping
+   each endpoint to the nearest real bar (finer tfs have shorter history → land
+   on the closest candle). Recent focal preserved with ~0 drift.
+3. **Viewport fought the user (Bug 2).** Same-key refresh restored the time
+   range (null in whitespace past newest → snap). Fix: preserve the LOGICAL
+   range (captured before `setData`); the stranded auto-fit fires only on a
+   symbol-switch fallback. Latest/Reset remain the only auto-recenters.
+
+Underlying both 1+3: `setData` fired the range-change subscription before
+`restoringViewport` was set, so history loaded mid-switch and corrupted logical
+indices (n grew 468→1248). Fixed by setting the guard before `setData` and
+disarming history on a switch. Tests now assert real coordinates/viewport.
+
+## What was completed before that? (V3.2 — chart completion + Extended Hours)
 
 The final evolution of the chart subsystem, on branch **`v3-ui`** (still not
 merged). Version bumped **0.1.0 → 0.3.0**. **387 tests**, chart_check **31**,

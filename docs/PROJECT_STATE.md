@@ -130,6 +130,41 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
+**2026-07-20, V3.2.1 critical chart regression fixes (branch `v3-ui`,
+uncommitted at time of writing).** Three release-blockers the user reproduced in
+the real app that V3.2's tests had reported "fixed" — the tests measured
+internal state, not user-visible behaviour. Reproduced each by pixel/viewport
+inspection before touching code:
+
+- **Bug 1 — drawings still vanished across timeframes.** V3.2 fixed the
+  visibility *filter*, but a 1m-anchored drawing's bar times aren't bars on
+  5m/1d, so `chX()` fell to `timeToCoordinate()` → null → painted_px = 0.
+  Probed the vendored lightweight-charts: `logicalToCoordinate` returns 0 for
+  FRACTIONAL indices but maps INTEGER ones (even off-screen, extrapolating).
+  Fix: `chX()` interpolates the pixel between the two bracketing integer bars
+  (`chLogicalAt`). Renders on every tf now (verified by painted-pixel count +
+  distinct/finite coordinates).
+- **Bug 3 — timeframe switch lost context.** RC3's fit-on-switch jumped to an
+  unrelated date (82-day drift). Fix: `chCaptureFocal`/`chApplyFocal` capture
+  the focal date and re-center the new resolution on it, clamping each endpoint
+  to the nearest real bar (finer tfs have shorter history → closest candle).
+  Recent focal drift ~0 across a 1h→30m→15m→5m cascade.
+- **Bug 2 — viewport auto-reset fought the user.** Same-key refresh restored the
+  *time* range, null in whitespace past newest → snap. Fix: preserve the LOGICAL
+  range (captured before `setData`); stranded auto-fit only on a symbol-switch
+  fallback. Latest/Reset unaffected.
+- **Shared root cause:** `setData` fires the range subscription before
+  `restoringViewport` was set → `chMaybeLoadHistory` ran mid-switch, prepending
+  history and shifting logical indices (n 468→1248), corrupting drawings AND
+  viewport. Fixed by guarding before `setData` + disarming history on a switch.
+
+Version 0.3.0 → 0.3.1. chart_check 31 → 33 (9b now asserts drawings RENDER, +9d
+focal preservation, +9e viewport stability). 387 tests. Known limitations:
+extended-hours VWAP not separately RTH-anchored; session classification
+time-of-day only; live-update paths still market-hours-unverified.
+
+### Before that: V3.2 chart-system completion + Extended Hours
+
 **2026-07-19, V3.2 chart-system completion + Extended Hours (branch `v3-ui`,
 committed `62cbcb4` + `409cfc0` + docs/version).** The final chart subsystem
 sprint before Replay/AI-Viz/Mobile/Broker work:

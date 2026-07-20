@@ -1965,6 +1965,44 @@ function chViewportStranded() {
   const windowWidth = lr.to - lr.from;
   return windowWidth > 0 && barsVisible < 3 && barsVisible < windowWidth * 0.25;
 }
+/* Timeframe-switch context preservation (Bug 3): capture the date/time region
+   the user is looking at BEFORE the switch, then re-center the new timeframe on
+   the same region afterward. Professional platforms (TradingView/ToS) keep your
+   place across a resolution change instead of jumping to the newest candle or
+   an unrelated date. Captured from the CURRENT series; applied against the NEW
+   series via chLogicalAt (absolute time → fractional logical index). */
+function chCaptureFocal() {
+  if (!CH.main || !CH.data?.candles?.length) return null;
+  const lr = CH.main.timeScale().getVisibleLogicalRange?.();
+  if (!lr || lr.from == null || lr.to == null) return null;
+  const c = CH.data.candles, n = c.length;
+  const timeAt = lg => c[Math.max(0, Math.min(n - 1, Math.round(lg)))].time;
+  return { t0: timeAt(lr.from), t1: timeAt(lr.to), tc: timeAt((lr.from + lr.to) / 2) };
+}
+function chApplyFocal(focal) {
+  const ts = CH.main.timeScale();
+  const c = CH.data?.candles;
+  if (!focal || !c?.length) { ts.fitContent(); return; }
+  const n = c.length, MIN_BARS = 12, clamp = v => Math.max(0, Math.min(n - 1, v));
+  let from = chLogicalAt(focal.t0), to = chLogicalAt(focal.t1);
+  if (from == null || to == null) { ts.fitContent(); return; }
+  // Clamp EACH endpoint to the nearest real bar first. The destination
+  // timeframe often reaches less far back (1m ~2d, 5m ~7d, 30m ~40d, 1h ~2mo…),
+  // so an out-of-range endpoint becomes the CLOSEST candle instead of dragging
+  // the window into empty extrapolated space (a straddling window used to
+  // explode to thousands of bars and then "fit everything"). Endpoints fully in
+  // range are untouched — the same DATE WINDOW is preserved, which naturally
+  // shows more candles on a finer tf and fewer on a coarser one.
+  from = clamp(from); to = clamp(to);
+  if (to - from < MIN_BARS) {          // collapsed to a sliver → widen around the focal centre
+    let m = clamp(chLogicalAt(focal.tc) ?? (from + to) / 2);
+    from = m - MIN_BARS / 2; to = m + MIN_BARS / 2;
+    if (from < 0) { to -= from; from = 0; }
+    if (to > n - 1) { from -= (to - (n - 1)); to = n - 1; }
+    from = Math.max(0, from);
+  }
+  ts.setVisibleLogicalRange({ from, to });
+}
 function chResetView() {
   if (!CH.main) return;
   CH.restoringViewport = true;
@@ -1977,7 +2015,8 @@ function chGoToLatest() {
   try { CH.main.timeScale().scrollToRealTime(); } finally { CH.restoringViewport = false; }
   chDrawRender();
 }
-function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
+function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
+                          focal = null, fit = false} = {}) {
   // Is this the same (symbol·tf) already on screen? If so we are preserving
   // the user's live viewport (a refresh or history prepend) and must never
   // yank it — the stranded safety net below only runs on a genuine switch /
@@ -2011,12 +2050,25 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
     chStale(chStaleAsOf(d)); chLegend(null);
     return true;
   }
+  // Capture the on-screen logical range BEFORE setData resets the time scale —
+  // a same-key refresh restores it EXACTLY so the chart never moves under the
+  // user, even when they've panned past the newest candle into whitespace
+  // (getVisibleLogicalRange is defined there; getVisibleRange/time is not —
+  // that null was Bug 2's snap-back). Appended bars don't shift existing
+  // indices, so the restore is a no-op visually.
+  const keepLR = (keepLogical && CH.main)
+    ? CH.main.timeScale().getVisibleLogicalRange?.() : null;
   CH.data = d;
   CH.dataKey = key;
   CH.dataSig = chSig(d);
   CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
   localStorage.setItem("chSym", CH.sym);
   localStorage.setItem("chTf", CH.tf);
+  // restoringViewport must be set BEFORE setData: setData auto-fits and fires
+  // the visible-range subscription synchronously, which would run
+  // chMaybeLoadHistory unguarded and prepend history mid-switch (the V3.2.1
+  // corruption). It stays set through the deliberate viewport restore below.
+  CH.restoringViewport = true;
   try {
     CH.candle.setData(d.candles);
     CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
@@ -2027,19 +2079,27 @@ function chRenderData(d, {key = chKey(), viewport = null, fit = false} = {}) {
     chLoadTradeLines();
   } catch (e) {
     // a renderer exception must surface, never leave a half-painted canvas
+    CH.restoringViewport = false;
     console.error("chart render failed:", e);
     CH.dataKey = null;                       // force a clean repaint on retry
     chOverlay("error", `Chart renderer error: ${e.message}`);
     return false;
   }
-  CH.restoringViewport = true;
   try {
-    if (viewport) CH.main.timeScale().setVisibleRange(viewport);
+    // Exactly one viewport owner per render, by intent:
+    //   focal       — timeframe switch: re-center the same date region (Bug 3)
+    //   time        — history prepend: bar times are stable across the prepend
+    //   keepLogical — same-key refresh/live: don't move under the user (Bug 2)
+    //   fit         — symbol switch / first paint: a sensible default
+    if (focal) chApplyFocal(focal);
+    else if (time) CH.main.timeScale().setVisibleRange(time);
+    else if (keepLR) CH.main.timeScale().setVisibleLogicalRange(keepLR);
     else if (fit) CH.main.timeScale().fitContent();
-    // safety net: on a switch/first paint a restored cached viewport can land
-    // in whitespace (bars shoved off-edge) — recover to a populated view. Never
-    // on a same-key refresh: that would yank a viewport the user chose.
-    if (!sameKey && chViewportStranded()) CH.main.timeScale().fitContent();
+    // Last-resort net for a TRULY impossible view (fit produced nothing usable
+    // on a symbol switch/first paint). Never on a same-key refresh and never
+    // over a deliberate focal restore — the user owns the viewport (Bug 2).
+    if (!sameKey && !focal && fit && chViewportStranded())
+      CH.main.timeScale().fitContent();
   } finally {
     CH.restoringViewport = false;
   }
@@ -2209,7 +2269,7 @@ async function chLoadHistoryChunk() {
       chHistPill("end");
       return;
     }
-    chRenderData(merged, {key, viewport: viewport || chViewport()});
+    chRenderData(merged, {key, time: viewport || chViewport()});
     chHistPill(null);
   } catch (e) {
     if (gen === CH.gen && key === chKey())
@@ -2229,25 +2289,37 @@ async function loadChart(symbol) {
   chInit();
   chPaintControls();
   const key = chKey();
+  const prevKey = CH.dataKey;
   const cached = CH.cache.get(key);
-  // A "switch" is any load where the (symbol·tf) on screen changes — a new
-  // symbol or a new timeframe. Switches must land on a SENSIBLE DEFAULT view
-  // (fit all bars), never a restored per-key viewport: restoring one re-applied
-  // whatever zoom you last left on that timeframe, so flipping 5m→1m→5m dropped
-  // you back onto a 5-candle sliver (Bug 3). Only a same-key refresh preserves
-  // the viewport you're currently looking at. This is the ONE owner of viewport
-  // restoration — the cache no longer gets a vote.
-  const switching = CH.dataKey !== key;
+  // Viewport ownership by intent (see chRenderData):
+  //   • same-key refresh/live → keepLogical (never move under the user, Bug 2)
+  //   • timeframe switch (same symbol) → focal: re-center the SAME date region
+  //     on the new resolution (Bug 3) — never a restored per-tf zoom, never a
+  //     jump to newest/random history, never a one-candle sliver
+  //   • symbol switch / first paint → fit (a sensible default)
+  const switching = prevKey !== key;
   const firstPaint = !cached && switching;               // nothing usable on screen yet
-  if (switching) CH.freshHigh = null;                    // stale high-water is per (symbol·tf)
+  const [prevSym] = (prevKey || "").split("·");     // "SYM·tf"
+  const tfSwitch = switching && prevSym === CH.sym && !!CH.data?.candles?.length;
+  const focal = tfSwitch ? chCaptureFocal() : null;      // capture BEFORE any re-render
+  const viewOpts = () => focal ? { key, focal }
+    : switching ? { key, fit: true }
+    : { key, keepLogical: true };
+  if (switching) {
+    CH.freshHigh = null;         // stale high-water is per (symbol·tf)
+    CH.historyArmed = false;     // history loads on a user SCROLL, never on a
+                                 // symbol/timeframe switch — arming carries over
+                                 // from an earlier draw/scroll and would make the
+                                 // switch's setData/focal restore prepend history,
+                                 // shifting logical indices and corrupting drawings
+                                 // and the viewport (V3.2.1 root cause).
+  }
   const gen = ++CH.gen;
   CH.historyLoading = false;
   CH.historyExhausted = false;
   chHistPill(null);
   if (cached?.data && (switching || CH.dataSig !== cached.sig)) {
-    chRenderData(cached.data, switching
-      ? {key, fit: true}
-      : {key, viewport: chViewport()});
+    chRenderData(cached.data, viewOpts());
   }
   if (firstPaint) {
     chOverlay("loading");
@@ -2296,9 +2368,7 @@ async function loadChart(symbol) {
     chStale(chStaleAsOf(d));
     return;
   }
-  chRenderData(d, switching
-    ? {key, fit: true}
-    : {key, viewport: chViewport()});
+  chRenderData(d, viewOpts());
 }
 
 /* keep a visible chart current: refresh on a cadence matched to the
@@ -2496,11 +2566,46 @@ window.chAddDrawing = chAddDrawing;
 
 /* data <-> pixel helpers (logical index keeps off-screen endpoints correct so
    trend/rect lines extrapolate instead of vanishing when partly scrolled off) */
+/* Fractional logical index of an absolute timestamp within the CURRENT series,
+   interpolating between the bracketing bars and extrapolating past either end.
+   This is the key to timeframe-INDEPENDENT drawings: a drawing anchored on 1m
+   has bar times that are NOT bars on 5m/1d, so `timeToCoordinate` returns null
+   and the drawing vanished (Bug 1). Mapping the timestamp to a fractional
+   logical index and using logicalToCoordinate (which interpolates AND
+   extrapolates) places it correctly on any timeframe. Also used to preserve the
+   focal date across a timeframe switch (Bug 3). */
+function chLogicalAt(time) {
+  const c = CH.data?.candles;
+  if (!c || !c.length) return null;
+  const n = c.length, first = c[0].time, last = c[n - 1].time;
+  if (time <= first) { const dt = n > 1 ? c[1].time - first : 1;
+    return dt ? (time - first) / dt : 0; }
+  if (time >= last)  { const dt = n > 1 ? last - c[n - 2].time : 1;
+    return (n - 1) + (dt ? (time - last) / dt : 0); }
+  let lo = 0, hi = n - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1;
+    if (c[mid].time <= time) lo = mid; else hi = mid; }
+  const span = c[hi].time - c[lo].time || 1;
+  return lo + (time - c[lo].time) / span;
+}
 function chX(time) {
   if (!CH.main) return null;
+  const ts = CH.main.timeScale();
   const idx = CH.timeIndex?.get(time);
-  if (idx != null) return CH.main.timeScale().logicalToCoordinate(idx);
-  return CH.main.timeScale().timeToCoordinate(time);
+  if (idx != null) return ts.logicalToCoordinate(idx);   // exact bar on this tf
+  // Not a bar on this timeframe (a 1m-anchored drawing shown on 5m, etc.).
+  // lightweight-charts' logicalToCoordinate rejects FRACTIONAL indices (returns
+  // 0) but maps INTEGER indices fine — even off-screen, extrapolating past both
+  // ends. So take the two bracketing integer bars and linearly interpolate their
+  // pixel coordinates by the time fraction. This is what actually makes a
+  // drawing render on every timeframe (Bug 1) — the earlier "fractional logical"
+  // attempt silently collapsed to x=0.
+  const lg = chLogicalAt(time);
+  if (lg == null) return ts.timeToCoordinate(time);
+  const lo = Math.floor(lg);
+  const xlo = ts.logicalToCoordinate(lo), xhi = ts.logicalToCoordinate(lo + 1);
+  if (xlo == null || xhi == null) return ts.timeToCoordinate(time);
+  return xlo + (xhi - xlo) * (lg - lo);
 }
 const chY = price => CH.candle?.priceToCoordinate(price) ?? null;
 const chPriceAt = y => CH.candle?.coordinateToPrice(y) ?? null;

@@ -198,42 +198,99 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(page.evaluate("() => DRAW.items.length") == saved,
                   f"drawings persist across reload ({saved})")
 
-            # 9b. drawing engine v3: timeframe-INDEPENDENT visibility (PART 1),
-            #     Ray tool (PART 2), and the unified programmatic API (PART 5).
+            # 9b. drawing engine v3: drawings must actually RENDER on every
+            #     timeframe — not merely pass the visibility filter (the V3.2.1
+            #     bug: a 1m-anchored trend passed chDrawVisible() but chX()
+            #     returned 0 for its off-bar timestamps on 5m/1d, so it painted
+            #     nothing). We assert the trend's anchor coordinates RESOLVE (are
+            #     finite and distinct) across every timeframe. Plus Ray (PART 2)
+            #     and the unified programmatic API (PART 5).
             wait_loaded("QQQ", "1d")
             page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
             box = page.evaluate("() => { const r=$('ch-main').getBoundingClientRect();"
                                 " return {x:r.left,y:r.top,w:r.width,h:r.height}; }")
-            # draw a trend by real mouse on 1m
             page.click('#ch-tfs button[data-tf="1m"]'); wait_loaded("QQQ", "1m")
             ax, ay = box["x"]+box["w"]*0.40, box["y"]+box["h"]*0.40
-            bx, by = box["x"]+box["w"]*0.60, box["y"]+box["h"]*0.50
+            bx, by = box["x"]+box["w"]*0.62, box["y"]+box["h"]*0.52
             page.click('#ch-tools button[data-tool="trend"]')
             page.mouse.click(ax, ay); page.wait_for_timeout(60)
             page.mouse.click(bx, by); page.wait_for_timeout(120)
-            v1m = page.evaluate("() => chDrawVisible().length")
-            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("QQQ", "5m")
-            v5m = page.evaluate("() => chDrawVisible().length")
-            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
-            v1d = page.evaluate("() => chDrawVisible().length")
-            tf_independent = v1m >= 1 and v5m >= 1 and v1d >= 1     # never disappears
+            # a coarser timeframe than the 1m the trend was drawn on: its bar
+            # times are NOT bars here, so this is exactly the failing case.
+            def trend_renders():
+                return page.evaluate("""() => { const t=DRAW.items.find(i=>i.type==='trend');
+                    if(!t) return false; const x1=chX(t.points[0].time), x2=chX(t.points[1].time);
+                    return x1!=null && x2!=null && Number.isFinite(x1) && Number.isFinite(x2)
+                        && Math.abs(x1-x2) > 5; }""")   # finite AND a real (non-degenerate) line
+            renders = {}
+            for t in ("1m", "5m", "15m", "1h", "1d", "1m"):
+                page.click(f'#ch-tfs button[data-tf="{t}"]'); wait_loaded("QQQ", t)
+                renders[t] = trend_renders()
+            tf_independent = all(renders.values())
             # Ray via real mouse (two-click, extends past the 2nd point)
+            page.click('#ch-tfs button[data-tf="1m"]'); wait_loaded("QQQ", "1m")
             page.click('#ch-tools button[data-tool="ray"]')
             page.mouse.click(box["x"]+box["w"]*0.45, box["y"]+box["h"]*0.60); page.wait_for_timeout(60)
             page.mouse.click(box["x"]+box["w"]*0.55, box["y"]+box["h"]*0.55); page.wait_for_timeout(120)
+            page.click('#ch-tfs button[data-tf="1h"]'); wait_loaded("QQQ", "1h")  # render on another tf
             ray_ok = page.evaluate(
-                "() => { const r=DRAW.items.find(i=>i.type==='ray'); return !!r &&"
-                " chItemContains(r, chX(r.points[1].time), chY(r.points[1].price)); }")
-            # unified programmatic API with a source tag + visibility policy
+                "() => { const r=DRAW.items.find(i=>i.type==='ray'); if(!r) return false;"
+                " const x=chX(r.points[1].time); return x!=null && Number.isFinite(x); }")
             prog = page.evaluate("""() => { const c=CH.data.candles.at(-1).close;
                 const it = window.chAddDrawing({type:'hline', points:[{time:0,price:c}],
                     source:'ai', visibility:{min:'1m',max:'5m'}, select:false});
                 return it && it.source==='ai' && chDrawVisibleOn(it,'1m')
                     && chDrawVisibleOn(it,'5m') && !chDrawVisibleOn(it,'1d'); }""")
             check(tf_independent and ray_ok and prog,
-                  f"drawing engine v3: tf-independent(1m={v1m},5m={v5m},1d={v1d}) + Ray + unified API")
+                  f"drawings RENDER on every timeframe {renders} + Ray + unified API")
             page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
             page.evaluate("() => chSetTool(null)")
+
+            # 9d. timeframe switch preserves the focal date (V3.2.1 Bug 3): zoom
+            #     to a RECENT window on 1h, switch across resolutions, and assert
+            #     the visible centre stays on the same date (never jumps to a
+            #     random date, the newest candle, or one candle). Recent so the
+            #     date exists in every timeframe's (differing) history window.
+            page.click('#ch-tfs button[data-tf="1h"]'); wait_loaded("QQQ", "1h")
+            page.evaluate("() => { const n=CH.data.candles.length;"
+                          " CH.main.timeScale().setVisibleLogicalRange({from:n-28, to:n-8}); }")
+            page.wait_for_timeout(250)
+
+            def focal_time():
+                return page.evaluate("""() => { const lr=CH.main.timeScale().getVisibleLogicalRange();
+                    const mid=Math.round((lr.from+lr.to)/2); const c=CH.data.candles,n=c.length;
+                    return c[Math.max(0,Math.min(n-1,mid))].time; }""")
+            f0 = focal_time()
+            drifts = {}
+            for t in ("30m", "15m", "5m", "1h"):
+                page.click(f'#ch-tfs button[data-tf="{t}"]'); wait_loaded("QQQ", t)
+                page.wait_for_timeout(150)
+                drifts[t] = round(abs(focal_time() - f0) / 3600, 1)
+            # also assert we did NOT jump to a one-candle sliver
+            not_sliver = page.evaluate("""() => { const lr=CH.main.timeScale().getVisibleLogicalRange();
+                const n=CH.data.candles.length; return (Math.min(lr.to,n-1)-Math.max(lr.from,0)) >= 8; }""")
+            check(all(v < 30 for v in drifts.values()) and not_sliver,
+                  f"timeframe switch preserves the focal date {drifts} (no jump, no sliver)")
+
+            # 9e. the chart must not fight the user: panning past the newest
+            #     candle then a same-key refresh must NOT snap the viewport
+            #     (V3.2.1 Bug 2). Latest / Reset remain the only auto-recenters.
+            page.click('#ch-tfs button[data-tf="1h"]'); wait_loaded("QQQ", "1h")
+            page.evaluate("() => { const n=CH.data.candles.length;"
+                          " CH.main.timeScale().setVisibleLogicalRange({from:n-25, to:n+35}); }")
+            page.wait_for_timeout(200)
+            vb = page.evaluate("() => { const lr=CH.main.timeScale().getVisibleLogicalRange();"
+                               " return [Math.round(lr.from), Math.round(lr.to)]; }")
+            page.evaluate("() => loadChart()"); page.wait_for_timeout(500)
+            va = page.evaluate("() => { const lr=CH.main.timeScale().getVisibleLogicalRange();"
+                               " return [Math.round(lr.from), Math.round(lr.to)]; }")
+            stable = abs(vb[0]-va[0]) <= 2 and abs(vb[1]-va[1]) <= 2
+            page.evaluate("() => chGoToLatest()"); page.wait_for_timeout(150)
+            latest_ok = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange().to"
+                                      " >= CH.data.candles.length - 3")
+            check(stable and latest_ok,
+                  f"viewport not yanked by a refresh while panned past newest {vb}->{va}; Latest still works")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
 
             # 9c. extended hours (PART 4): the toggle adds pre/after-market bars
             #     with session tags on intraday, is a no-op (disabled) on daily,
