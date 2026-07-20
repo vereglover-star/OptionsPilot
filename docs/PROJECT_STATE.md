@@ -3,12 +3,13 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-18, after the **V3.1 RC3 final release blockers**
-(branch `v3-ui`, pending the merge decision — see "Exact stopping point"
-below). RC3 root-caused the still-reported toolbar failure to a stale exe
-(rebuilt it), fixed stale-banner flapping and timeframe-switch tiny-zoom, and
-hardened rapid-switch overlay/legend state. Before it, the RC2 final chart
-audit (four bugs). Earlier the same day: the V3 chart
+**Last updated:** 2026-07-19, after the **V3.2 chart-system completion +
+Extended Hours** sprint (branch `v3-ui`, pending the merge decision — see
+"Exact stopping point" below). V3.2 made the drawing engine timeframe-
+independent (drawings no longer vanish on a tf switch), added a Ray tool and
+one unified `chAddDrawing` API for user/AI/replay, shipped Extended Hours
+(pre/after-market candles + session shading, display-only), and bumped the
+version 0.1.0 → 0.3.0. Before it, RC1–RC3 stabilized the chart. Earlier the same day: the V3 chart
 follow-up session (chart reliability root-caused and fixed, design system,
 and redesigns of every tab — seven commits `7176843`…`79138da` on branch
 **`v3-ui`**, kept off `main` pending the user's review). Three earlier sessions also landed
@@ -128,6 +129,39 @@ Deferred: stock/share positions (options only for now).
   portfolio-level risk.
 
 ## Exact stopping point
+
+**2026-07-19, V3.2 chart-system completion + Extended Hours (branch `v3-ui`,
+committed `62cbcb4` + `409cfc0` + docs/version).** The final chart subsystem
+sprint before Replay/AI-Viz/Mobile/Broker work:
+
+- **Drawing engine v3 (PARTS 1/2/5, `62cbcb4`).** Root cause of drawings
+  vanishing on a tf switch: the model was timeframe-LOCKED (`chDrawVisible`
+  filtered `it.tf === CH.tf`). Now every drawing is stored once with a
+  `visibility` policy ("all" default / {min,max} tf bounds), `createdTf`,
+  `source` (user/ai/replay), and `meta`; the renderer decides visibility
+  per-tf and never destroys the object. Legacy drawings migrate to "all". One
+  `chAddDrawing` API (on `window`) is the sole creation path for user, AI, and
+  replay drawings. **Ray** tool added (two-click, infinite one-way extension),
+  reusing the edit machinery. Verified real-mouse in a browser: a 1m trend
+  stays visible on 5m/1d; Ray hit-tests its extension; programmatic AI drawing
+  + {min,max} policy render correctly; all persist across reload.
+- **Extended Hours (PART 4, `409cfc0`).** Confirmed FIRST that yfinance
+  supplies pre/after-market bars via `prepost=True` for all intraday intervals
+  (04:00–20:00 ET). `extended_hours` is a display-only flag threaded
+  provider→cache→payload→`/api/candles?ext=1`, kept OFF the trading path (paper
+  execution unchanged); ext frames are cache-keyed separately and skip the disk
+  store. `data/sessions.py` labels bars pre/rth/post; the payload tags them and
+  computes indicators on the session-correct series. Frontend: persisted "Ext"
+  toggle (disabled on daily) + overlay session shading. Verified: ext 5m = 1134
+  bars {pre,rth,post} vs 468 RTH; daily forces it off; zero console errors.
+- **Version (PART 8):** 0.1.0 → 0.3.0.
+
+Known limitations: session classification is time-of-day only (no holiday/
+half-day calendar — documented in `data/sessions.py`); extended-hours VWAP is
+computed over the displayed series (not separately RTH-anchored); live-update
+correctness for ext bars is architecturally ready but market-hours-unverified.
+
+### Before that: V3.1 RC3 final release blockers
 
 **2026-07-18, V3.1 RC3 final release blockers (branch `v3-ui`, committed
 `60f16a4`).** Three bugs the user hit in MANUAL testing that the

@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace), and the V3 product-quality sprint is underway on
-branch `v3-ui`. **376 tests, 100% passing.** See
+branch `v3-ui`. **387 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -212,7 +212,7 @@ scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
                  make_icon.py, fetch_symbols.py
 docs/            see "Documentation" below
-tests/           pytest suite (376 tests)
+tests/           pytest suite (387 tests)
 ```
 
 ## Documentation

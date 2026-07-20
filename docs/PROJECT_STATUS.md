@@ -5,34 +5,34 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-18, V3.1 RC3 final release blockers
+**Last verified:** 2026-07-19, V3.2 chart-system completion + Extended Hours
 (`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 29-check
-chart regression suite, all green — plus a rebuilt exe whose toolbar and
-timeframe switching were driven by hand; see `PROJECT_STATE.md`).
+consistency, `pip check`, a headless-browser smoke check, and the 31-check
+chart regression suite, all green — plus a rebuilt exe whose drawing engine
+and Extended Hours were driven by hand; see `PROJECT_STATE.md`).
 
 ---
 
 ## Current version
 
-`0.1.0` (`pyproject.toml`) — pre-1.0, actively developed. No public release
-process yet; the packaged artifact is a Windows desktop exe built on demand
-via `scripts/build_exe.ps1`, not versioned/released independently of the
-git history.
+`0.3.0` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
+at the V3.2 milestone (the footer reads it from `/api/status`). No public
+release process yet; the packaged artifact is a Windows desktop exe built on
+demand via `scripts/build_exe.ps1`, not versioned/released independently of
+the git history.
 
 ## Current phase
 
-**V3.1 RC3 (release candidate), on branch `v3-ui` — awaiting user
-approval/merge and market-hours validation.** The V3.1 sprint made the
-charting system production-ready (chart-reliability root-cause fixes,
-13 timeframes, infinite historical scroll, TradingView-style editable
-drawings, a synced Trade-tab chart, flicker-free live updates). RC1 hardened
-it (localStorage/WS guards, bounded cache); RC2 fixed the toolbar
-capture-phase deselect, a market-aware stale banner, viewport recovery, and
-single-owner viewport; RC3 closed the final blockers — root-caused the
-"toolbar still broken" report to a STALE EXE and rebuilt it, killed the
-stale-banner flapping (high-water mark), fixed timeframe-switch tiny-zoom,
-and hardened rapid-switch overlay/legend state. No new features. Preceded by:
+**V3.2 chart-system completion + Extended Hours, on branch `v3-ui` —
+awaiting user approval/merge and market-hours validation.** V3.2 finishes the
+chart subsystem: a timeframe-INDEPENDENT drawing engine (drawings no longer
+vanish on a tf switch — each carries a visibility policy, `createdTf`, a
+`source` tag, and `meta`; one `chAddDrawing` API serves user/AI/replay alike),
+a TradingView-style **Ray** tool, and **Extended Hours** (pre-market +
+after-hours candles via yfinance `prepost`, per-bar session tags, session
+shading, and a persisted toggle — display-only, the trading path stays
+RTH-only). Preceded by RC1–RC3 (chart stabilization: toolbar, stale-banner
+flapping, tf-switch tiny-zoom, viewport ownership). Further back:
 **V2 rewrite,
 post-V2-4.** The original 8-phase v1 roadmap (foundation
 through hardening) is complete and stable. V2 layers a professional desktop
@@ -73,8 +73,10 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1-6 — Live updates + perf | `chSig` includes last-bar OHLCV (forming candle no longer freezes); `series.update()` fast path for trailing bars (no flicker, no reflow) | `5e04506`, simulated intrabar tick, zero view jump |
 | V3.1-7 — Chart test suite | `scripts/chart_check.py` 19-check headless-browser regression suite wired into `verify.ps1`; 10 tickers × 13 timeframes = 130/130 | `2bcb84a`, 19/19 green |
 | V3.1 RC1 — Stabilization polish | Dead-code removal, `safeParse` localStorage-corruption guard, refresh-mid-interaction + wake refreshes, bounded LRU payload cache, WS frame-parse guard + reconnect-contract test; +2 chart_check checks (21) | `3a56145`, 21/21 browser + 374-test suite green |
-| V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376 tests green |
-| V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376 tests green |
+| V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376-test suite green |
+| V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376-test suite green |
+| V3.2 — Drawing engine + Ray (PARTS 1/2/5) | Timeframe-INDEPENDENT drawing model (visibility policy, `createdTf`, `source`, `meta`; v1/v2→v3 migration so old drawings stop vanishing on a tf switch); one `chAddDrawing` API for user/AI/replay; TradingView-style **Ray** tool (two-click, infinite one-way extension) reusing the existing edit machinery | `62cbcb4`, browser-verified, chart_check 9b |
+| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 387 tests green |
 
 ## Features complete
 
@@ -146,7 +148,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**376 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**387 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and
@@ -157,9 +159,9 @@ browser checks are still focused regressions, not exhaustive UI coverage
 ## Last verified date
 
 **2026-07-18** (V3.1 RC2 final chart audit) — `.\scripts\verify.ps1`
-end to end: full pytest run (376/376), static `$("id")` reference check,
+end to end: full pytest run (387/387), static `$("id")` reference check,
 documentation consistency check, `pip check`, a headless-browser smoke
 check across all 9 tabs (Playwright + system Edge) with zero console
-errors, and the 29-check chart regression suite (`chart_check.py`) —
+errors, and the 31-check chart regression suite (`chart_check.py`) —
 plus a 10-ticker × 13-timeframe provider sweep (130/130 monotonic) and a
 rebuilt exe whose packaged charts/chains were confirmed serving live data.

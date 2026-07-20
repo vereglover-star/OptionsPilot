@@ -5,9 +5,34 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-18, end of the V3.1 RC3 final release blockers.
+**Last updated:** 2026-07-19, end of the V3.2 chart-system completion sprint.
 
-## What was completed most recently? (V3.1 RC3 — final release blockers)
+## What was completed most recently? (V3.2 — chart completion + Extended Hours)
+
+The final evolution of the chart subsystem, on branch **`v3-ui`** (still not
+merged). Version bumped **0.1.0 → 0.3.0**. **387 tests**, chart_check **31**,
+`verify.ps1` green; the exe was rebuilt and driven by hand.
+
+1. **Timeframe-independent drawing engine (PARTS 1/2/5).** Drawings vanished on
+   a tf switch because the model was tf-LOCKED. The v3 model stores each drawing
+   once with a `visibility` policy ("all" default, or {min,max} tf bounds),
+   `createdTf`, a `source` tag, and `meta`; the renderer decides per-tf whether
+   to show it and never destroys it. Legacy drawings migrate to visibility
+   "all". One `chAddDrawing(spec)` API (on `window`) serves user tools now and
+   the AI scanner / replay engine later — one engine, no special cases.
+2. **Ray tool (PART 2).** Two-click, extends infinitely past the second point;
+   reuses the existing edit/persist machinery.
+3. **Extended Hours (PART 4).** Confirmed yfinance supplies pre-/after-market
+   candles via `prepost=True`. `extended_hours` is a display-only flag threaded
+   provider→cache→payload→`/api/candles?ext=1` (trading path stays RTH-only);
+   `data/sessions.py` classifies bars; the frontend has a persisted "Ext"
+   toggle (disabled on daily) with pre/after-market session shading.
+
+**Recommended next:** Replay Mode (inherits the drawing engine + session
+architecture), then AI Visualization (draws via `chAddDrawing({source:"ai"})`),
+then Mobile / Broker integrations. See `ROADMAP-V2.md`.
+
+## What was completed before that? (V3.1 RC3 — final release blockers)
 
 Three user-reported bugs from **manual** testing that the passing automated
 suite had missed, each reproduced by driving the real mouse/UI before any fix:
@@ -36,7 +61,7 @@ Also fixed while hardening the tests: a rapid symbol burst ending on an
 already-cached symbol could leave the "loading" overlay and skeleton legend
 stuck if that symbol's refresh came back empty — a non-first-paint load now
 clears the overlay and restores the legend. `chart_check.py` → **29 checks**
-(real-mouse toolbar, anti-flap banner, tf-switch tiny-zoom). **376 tests.**
+(real-mouse toolbar, anti-flap banner, tf-switch tiny-zoom). **376-test suite.**
 
 ## What was completed before that? (V3.1 RC2 — final chart audit)
 
@@ -72,7 +97,7 @@ Tests: `scripts/chart_check.py` grew to **27 checks** (+ toolbar actions,
 indicator-no-jump, viewport recovery, market-aware banner, a rapid-abuse
 stress burst, and a new-bar-append proxy for the market-hours rollover);
 `tests/test_ui_server.py` gained 2 backend tests for the `market_open`
-field. **376 tests**, `verify.ps1` green end to end.
+field. **376-test suite**, `verify.ps1` green end to end.
 
 ## What was completed before that? (V3.1 chart-stabilization sprint)
 
@@ -171,11 +196,11 @@ V3-0).
    (+4 tests — fails the ordinary suite if any dynamic third-party
    import isn't collected). Exe rebuilt and verified live: candles
    (daily + 5m) and a 231-contract chain served from the packaged app;
-   full browser flow sweep of the chart system green. **376 tests.**
+   full browser flow sweep of the chart system green. **376-test suite.**
 
 ## What is currently stable?
 
-Everything on both branches. **376 tests pass** (+6 cached-provider tests and a CandleCache threading regression test
+Everything on both branches. **376-test suite passes** (+6 cached-provider tests and a CandleCache threading regression test
 added in V3-0, +4 packaging-guard tests + 2 `market_open` tests added 2026-07-18). `scripts/verify.ps1` ran clean end-to-end as the closing
 action of the session, and every milestone additionally got scenario-level
 Playwright verification (chart failure states, the full order-ticket flow —

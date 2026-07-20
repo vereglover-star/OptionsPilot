@@ -305,7 +305,7 @@ with an inline comment there since 2026-07-16, matching `trading_mode`.
 | GET | `/api/journal` | Trade history + stats |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
-| GET | `/api/candles?symbol=&tf=&start=&end=` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock). `tf` is any of the 13 timeframes (1m/2m/3m/5m/10m/15m/30m/1h/2h/4h/1d/1w/1mo). Optional ISO `start`/`end` request an arbitrary window — the UI uses this to prepend history as the user pans left (V3.1-3). Since V3-0 the payload also carries `stale`/`as_of`: when the live fetch fails, disk-cached bars of any age are served flagged stale (display-only fallback — the engine's strict `get_candles` path is unchanged). Since V3.1 RC2 it also carries `market_open` (bool, from `Orchestrator.market_open`): the Charts tab suppresses the "Live data unavailable — showing cached bars" banner when the market is closed (the cached bars ARE the last session, so the banner would be a false alarm) and shows it only when a stale payload arrives during market hours. Bars are sanitized by `validate_candles` (NaN/inf/≤0 dropped, non-finite volume zeroed) so a glitched provider bar can't 500 the endpoint (V3.1-1) |
+| GET | `/api/candles?symbol=&tf=&start=&end=` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock). `tf` is any of the 13 timeframes (1m/2m/3m/5m/10m/15m/30m/1h/2h/4h/1d/1w/1mo). Optional ISO `start`/`end` request an arbitrary window — the UI uses this to prepend history as the user pans left (V3.1-3). Since V3-0 the payload also carries `stale`/`as_of`: when the live fetch fails, disk-cached bars of any age are served flagged stale (display-only fallback — the engine's strict `get_candles` path is unchanged). Since V3.1 RC2 it also carries `market_open` (bool, from `Orchestrator.market_open`): the Charts tab suppresses the "Live data unavailable — showing cached bars" banner when the market is closed (the cached bars ARE the last session, so the banner would be a false alarm) and shows it only when a stale payload arrives during market hours. Bars are sanitized by `validate_candles` (NaN/inf/≤0 dropped, non-finite volume zeroed) so a glitched provider bar can't 500 the endpoint (V3.1-1). Since V3.2, `?ext=1` requests Extended Hours (intraday only): the payload carries `extended_hours` (bool) and each bar a `session` tag (`pre`/`rth`/`post`) from `optionspilot/data/sessions.py`; ext frames are cache-keyed separately and bypass the disk store, and the flag is display-only — the engine/trading path never sets it, so paper execution stays RTH-only |
 | GET | `/static/lightweight-charts.js` | Vendored chart library (Apache-2.0, offline — the frontend's ONE bundled asset) |
 | GET | `/api/chain` | Option chain for a symbol/expiration (Greeks, liquidity) — manual trading ticket data |
 | GET/POST | `/api/orders`, `/api/orders/cancel` | Working manual orders: place/list/cancel |
@@ -381,7 +381,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (376 tests as of this writing, all passing)
+# Tests (387 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -428,7 +428,7 @@ window instead of corrupting the shared account database.
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (376 tests cover this
+   exercises the FastAPI layer via `TestClient` (387 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

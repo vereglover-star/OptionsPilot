@@ -4,6 +4,40 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-19 — V3.2: chart-system completion + Extended Hours
+
+*Version bumped 0.1.0 → 0.3.0. 387 tests, chart_check 29 → 31. The final
+evolution of the chart subsystem before Replay Mode / AI Visualization /
+Mobile / Broker work begins.*
+
+- **Timeframe-independent drawing engine (PARTS 1/2/5).** Drawings used to
+  vanish on a timeframe switch because the model was tf-LOCKED
+  (`chDrawVisible` filtered on `it.tf === CH.tf`). The v3 model stores each
+  drawing once with a `visibility` policy ("all" by default, or {min,max}
+  tf-rank bounds), `createdTf` metadata, a `source` tag (user/ai/replay), and
+  freeform `meta`; the renderer decides per-timeframe whether to show an object
+  and never mutates or destroys it on a switch. Legacy v1/v2 drawings migrate
+  to visibility "all". One creation entry point — `chAddDrawing(spec)`, exposed
+  on `window` — serves the user tools today and the AI scanner / replay engine
+  later, so there is exactly one drawing engine and no parallel implementations.
+- **Ray tool (PART 2).** Two-click, starts at the first point, passes through
+  the second, and extends infinitely past it (clamped to the canvas edge). It
+  reuses the existing select/drag/endpoint/recolor/width/lock/hide/duplicate/
+  delete/persist machinery — no isolated implementation.
+- **Extended Hours (PART 4).** Confirmed first that yfinance reliably supplies
+  pre-/after-market candles via `history(prepost=True)` for every intraday
+  interval (04:00–20:00 ET). `extended_hours` is a display-only opt-in threaded
+  provider→cache→`candles_payload`→`/api/candles?ext=1`, kept off the trading
+  path so paper execution is unchanged; ext frames are cache-keyed separately
+  and bypass the on-disk store. `optionspilot/data/sessions.py` classifies each
+  bar (pre/rth/post) by US-Eastern time; the payload tags bars and computes
+  indicators on the session-correct series. Frontend: an "Ext" toggle
+  (persisted, disabled on daily) plus TradingView-style pre-market/after-hours
+  shading on the overlay canvas. Architecture is provider-agnostic so a future
+  feed (Polygon/broker) can supply the same data without a chart rewrite.
+- **Version (PART 8).** `0.1.0` → `0.3.0` in pyproject + `__init__`; the footer
+  and About surface read it from `/api/status`.
+
 ## [`60f16a4`] 2026-07-18 — V3.1 RC3: final release blockers
 
 *376 tests, chart_check 27 → 29. Reproduced the user's exact manual
