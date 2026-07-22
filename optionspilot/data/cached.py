@@ -36,20 +36,25 @@ from optionspilot.data.cache import CandleCache
 log = get_logger("data")
 
 # How long a fetched candle frame stays fresh, per timeframe (seconds).
-# Sized to the bar interval and the free feed's ~15-minute delay: the entry
-# timeframe and daily bars (used for live price display) stay tight; higher
-# timeframes can't grow new bars quickly and don't need refetching to show one.
+# Sized to the bar interval so the Charts tab's adaptive live poll (V3.3 Issue 1:
+# ~7s for minute frames while the market is open) actually receives a fresh frame
+# each time instead of the same cached one — the forming bar then advances every
+# few seconds instead of in 30s chunks. Higher timeframes can't grow new bars
+# quickly, so they stay looser to bound upstream request volume (a defense
+# against Yahoo rate-limiting, which is what produces blank charts). The scan
+# loop polls far slower than any of these, so lowering them does not increase
+# its fetch rate — only the actively-viewed chart refetches this often.
 CANDLE_TTL: dict[Timeframe, float] = {
-    Timeframe.M1: 20.0,
-    Timeframe.M2: 20.0,
-    Timeframe.M3: 20.0,
-    Timeframe.M5: 30.0,
-    Timeframe.M10: 45.0,
-    Timeframe.M15: 60.0,
-    Timeframe.M30: 90.0,
-    Timeframe.H1: 120.0,
-    Timeframe.H2: 180.0,
-    Timeframe.H4: 240.0,
+    Timeframe.M1: 6.0,
+    Timeframe.M2: 6.0,
+    Timeframe.M3: 6.0,
+    Timeframe.M5: 10.0,
+    Timeframe.M10: 15.0,
+    Timeframe.M15: 20.0,
+    Timeframe.M30: 30.0,
+    Timeframe.H1: 45.0,
+    Timeframe.H2: 90.0,
+    Timeframe.H4: 120.0,
     Timeframe.D1: 60.0,
     Timeframe.W1: 600.0,
     Timeframe.MN1: 600.0,
@@ -67,6 +72,11 @@ EMPTY_CANDLE_TTL = 3.0
 QUOTE_TTL = 5.0
 CHAIN_TTL = 30.0
 EXPIRATIONS_TTL = 3600.0
+
+# Upper bound on the in-memory memo (candles + quotes + chains + expirations).
+# One entry per distinct key; generous enough that ordinary use never evicts,
+# but caps accumulation over a long session that browses hundreds of symbols.
+MEM_CACHE_MAX = 400
 
 
 class _Entry:
@@ -124,7 +134,16 @@ class CachedProvider(MarketDataProvider):
 
     def _put(self, key: tuple, value, start: datetime | None = None):
         with self._lock:
+            # Bounded LRU-ish store (V3.3.1): re-insert to move the key to the
+            # newest slot, and evict the oldest when over the cap. Without this,
+            # `_mem` grew one entry per distinct (symbol, timeframe, ext) — an
+            # unbounded accumulation of candle DataFrames over a long session
+            # that views many symbols. The cap is generous enough that normal use
+            # never evicts; an evicted entry simply re-fetches on next request.
+            self._mem.pop(key, None)
             self._mem[key] = _Entry(value, _time.monotonic(), start=start)
+            while len(self._mem) > MEM_CACHE_MAX:
+                self._mem.pop(next(iter(self._mem)))
         return value
 
     # ── candles ──────────────────────────────────────────────────────────────
@@ -265,4 +284,4 @@ def _slice(df: pd.DataFrame, start: datetime) -> pd.DataFrame:
 
 
 __all__ = ["CachedProvider", "CANDLE_TTL", "EMPTY_CANDLE_TTL", "QUOTE_TTL",
-           "CHAIN_TTL", "EXPIRATIONS_TTL"]
+           "CHAIN_TTL", "EXPIRATIONS_TTL", "MEM_CACHE_MAX"]

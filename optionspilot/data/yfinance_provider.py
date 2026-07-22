@@ -17,8 +17,16 @@ from datetime import date, datetime
 
 import pandas as pd
 
+from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionContract, OptionRight, Quote, Timeframe, utcnow
 from optionspilot.data.base import MarketDataProvider, validate_candles
+
+log = get_logger("data")
+
+# Upper bound (seconds) on any single upstream HTTP request. Yahoo occasionally
+# hangs a connection; without a cap the worker thread blocks forever and stalls
+# every queued request for that key (see get_candles for the failure it caused).
+REQUEST_TIMEOUT = 10.0
 
 # yfinance costs ~0.3s to import and drags in its whole scraping stack; defer
 # it to the first actual data request so app startup (and every CLI command
@@ -105,11 +113,24 @@ class YFinanceProvider(MarketDataProvider):
         last_symbol = symbol
         for candidate in _symbol_candidates(symbol):
             last_symbol = candidate
-            raw = _yf().Ticker(candidate).history(
-                start=start, end=end,
-                interval=interval,
-                auto_adjust=False, actions=False, prepost=prepost,
-            )
+            # `timeout` bounds the underlying HTTP request. Without it a hung
+            # Yahoo connection blocks this thread indefinitely — and because it
+            # holds the CachedProvider's per-key in-flight slot, every later
+            # request for the same symbol/timeframe piles up behind it, which
+            # surfaced as a chart that "loads blank and stays blank until the app
+            # is restarted" (V3.3.1). On timeout yfinance raises; we fall through
+            # to the next candidate / an empty frame, handled by the caller.
+            try:
+                raw = _yf().Ticker(candidate).history(
+                    start=start, end=end,
+                    interval=interval,
+                    auto_adjust=False, actions=False, prepost=prepost,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except Exception as exc:  # noqa: BLE001 — a timeout/network error is
+                log.warning("history fetch failed %s %s: %s",  # not fatal: try the
+                            candidate, timeframe, exc)          # next variant, else empty
+                raw = pd.DataFrame()
             if not raw.empty:
                 break
         if raw.empty:

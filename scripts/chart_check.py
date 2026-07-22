@@ -9,7 +9,14 @@ error) fails the run. Covers, per the V3.1 chart-stabilization sprint:
   indicator toggling · drawing create/edit/delete/persistence (the editable
   object model) · historical scroll-back · zoom · stale-cache banner ·
   cache invalidation / rapid symbol changes · resize · live intrabar update
-  (no view jump) · single-instance / no-leak guard.
+  (no view jump) · single-instance / no-leak guard · history loading via a
+  real drag with no arming cheat + on-screen stationarity (V3.2.2 Bug 2/5) ·
+  Auto Follow toggle/persistence/manual-pan-disables/Latest-re-enables and
+  live-update following (V3.2.2 Bug 3/4) · America/New_York time display on the
+  x-axis and crosshair (V3.3 Issue 2) · candle countdown timer (V3.3 Issue 3) ·
+  drawing creation preview / rubber-band (V3.3 Issue 5) · drawing overlay
+  tracking a vertical price-axis drag (V3.3 Issue 4) · a refresh preserving
+  paged-in history and holding the viewport (V3.3 Issue 7/8).
 
 Uses Playwright driving the system's installed Edge (channel="msedge" - no
 browser download, offline-capable), matching scripts/browser_check.py.
@@ -19,13 +26,18 @@ missing install a hard failure. Never touches the real data/ directory.
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
+
+ET = ZoneInfo("America/New_York")
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -88,6 +100,12 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             candle_reqs: list[str] = []
             page.on("request",
                     lambda r: candle_reqs.append(r.url) if "/api/candles" in r.url else None)
+            # this suite runs well past the chart's 30s background-refresh
+            # cadence; without this the auto-refresh timer fires mid-suite and
+            # races whatever page.route() stub is active/being torn down at
+            # that moment ("Route is already handled!"). Manual loadChart()
+            # calls in the checks below are unaffected — only the timer is.
+            page.add_init_script("window.__chNoAutoRefresh = true;")
 
             page.goto(base)
             page.wait_for_selector("#hero", timeout=20000)
@@ -310,7 +328,12 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                     for i, bar in enumerate(body["candles"]):
                         bar["session"] = ("pre", "rth", "post")[i % 3]
                     body["extended_hours"] = True
-                route.fulfill(json=body)
+                try:
+                    route.fulfill(json=body)
+                except Exception:  # noqa: BLE001 - a concurrent request to the
+                    pass            # same URL can already be resolved by the time
+                                    # this one lands; the test's own wait_for_function
+                                    # assertions are the source of truth, not this.
             page.route("**/api/candles*", ext_route)
             page.click('#ch-ext'); page.wait_for_timeout(200)
             page.wait_for_function("() => CH.data && CH.data.extended_hours === true", timeout=30000)
@@ -620,15 +643,22 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             no_jump = (abs(after_r["from"] - base_r["from"]) + abs(after_r["to"] - base_r["to"])) < 1.0
             check(no_jump, "indicator toggle leaves the main viewport put (no random jump)")
 
-            # 21. the chart must never strand the user: after an extreme pan into
-            #     whitespace, Reset and Go-To-Latest both recover a populated view.
+            # 21. the chart must never strand the user: after a pan into whitespace
+            #     past the last bar, Reset and Go-To-Latest both recover a populated
+            #     view. The strand must be DETERMINISTIC: an extreme overscroll
+            #     ({n-2, n+120}) is clamped by lightweight-charts by a variable
+            #     amount that depends on the current bar spacing (which drifts with
+            #     the live bar count), so it only sometimes produced a genuinely
+            #     stranded view — a flaky precondition. A narrow window sitting
+            #     ENTIRELY in the whitespace past the last bar strands every time.
             def strand():
                 page.evaluate("() => { const n = CH.data.candles.length; "
-                              "CH.main.timeScale().setVisibleLogicalRange({from:n-2, to:n+120}); }")
-            strand(); stranded = page.evaluate("() => chViewportStranded()")
+                              "CH.main.timeScale().setVisibleLogicalRange({from:n+8, to:n+18}); }")
+            strand(); page.wait_for_timeout(60)
+            stranded = page.evaluate("() => chViewportStranded()")
             page.click("#ch-reset"); page.wait_for_timeout(200)
             reset_ok = not page.evaluate("() => chViewportStranded()")
-            strand()
+            strand(); page.wait_for_timeout(60)
             page.click("#ch-latest"); page.wait_for_timeout(300)
             latest_ok = not page.evaluate("() => chViewportStranded()")
             check(stranded and reset_ok and latest_ok,
@@ -665,6 +695,135 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                   f"timeframe switching never zooms into a sliver {tf_bars}")
             page.click('#ch-tfs button[data-tf="1d"]')
             wait_loaded("QQQ", "1d")
+
+            # 24. history loading via a REAL drag pan, no manual "historyArmed"
+            #     cheat (V3.2.2 Bug 2): the old wheel/touchstart/pointerdown
+            #     listeners armed history a DOM-event tick after the library's
+            #     own synchronous range-change during the same pan, so a scroll
+            #     into history sometimes silently did nothing. The fix arms
+            #     directly off the range-change subscription, so a genuine drag
+            #     must reliably trigger a history fetch every time.
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
+            # position near the oldest loaded bar through the SAME controller
+            # every sanctioned in-app mover uses (chMoveViewport), so this setup
+            # step itself doesn't count as the "real" user-driven change under
+            # test — otherwise this line, not the drag below, would be the one
+            # that arms and triggers the history fetch.
+            page.evaluate("() => { CH.historyArmed = false; CH.historyExhausted = false; "
+                          "chMoveViewport(() => CH.main.timeScale()"
+                          ".setVisibleLogicalRange({from: 10, to: 50})); }")
+            page.wait_for_timeout(200)
+            oldest_before2 = page.evaluate("() => CH.data.candles[0].time")
+            count_before2 = page.evaluate("() => CH.data.candles.length")
+            box2 = page.locator("#ch-main canvas").first.bounding_box()
+            cx2, cy2 = box2["x"] + box2["width"] / 2, box2["y"] + box2["height"] / 2
+            # capture the on-screen time range right as the drag ends, and again
+            # once the merge lands: a history prepend must never move bars
+            # already on screen (Bug 5) — only new (older) bars appear at left.
+            page.mouse.move(cx2, cy2)
+            page.mouse.down()
+            page.mouse.move(cx2 + 350, cy2, steps=10)   # drag right -> reveal earlier bars
+            page.mouse.up()
+            vr_before_merge = page.evaluate(
+                "() => { const r = CH.main.timeScale().getVisibleRange(); return r && [r.from, r.to]; }")
+            try:
+                page.wait_for_function(
+                    f"() => CH.data.candles.length > {count_before2}", timeout=15000)
+                history_via_real_drag = page.evaluate(
+                    "() => CH.data.candles[0].time") < oldest_before2
+            except Exception:  # noqa: BLE001
+                history_via_real_drag = False
+            vr_after_merge = page.evaluate(
+                "() => { const r = CH.main.timeScale().getVisibleRange(); return r && [r.from, r.to]; }")
+            stationary = bool(vr_before_merge and vr_after_merge
+                              and abs(vr_after_merge[0] - vr_before_merge[0]) < 1
+                              and abs(vr_after_merge[1] - vr_before_merge[1]) < 1)
+            check(history_via_real_drag and stationary,
+                  "a real drag (no cheat) arms + loads history; on-screen bars stay stationary")
+            page.evaluate("() => loadChart('QQQ')")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
+
+            # 25. Auto Follow (V3.2.2 Bug 3/4): OFF by default; toggling it ON
+            #     jumps to the newest bar and persists; a real manual drag pan
+            #     turns it back OFF; pressing Latest turns it back ON.
+            default_off = page.evaluate("() => CH.autoFollow") is False
+            page.evaluate("() => { const n = CH.data.candles.length; "
+                          "CH.main.timeScale().setVisibleLogicalRange({from:n-80, to:n-40}); }")
+            page.wait_for_timeout(150)
+            page.click("#ch-follow")
+            page.wait_for_timeout(200)
+            on_ok = page.evaluate("() => CH.autoFollow") is True
+            active_class = page.evaluate("() => $('ch-follow').classList.contains('active')")
+            persisted_on = page.evaluate("() => localStorage.getItem('chAutoFollow')") == "1"
+            jumped = page.evaluate(
+                "() => CH.main.timeScale().getVisibleLogicalRange().to"
+                " >= CH.data.candles.length - 3")
+            box3 = page.locator("#ch-main canvas").first.bounding_box()
+            cx3, cy3 = box3["x"] + box3["width"] / 2, box3["y"] + box3["height"] / 2
+            page.mouse.move(cx3, cy3)
+            page.mouse.down()
+            page.mouse.move(cx3 - 150, cy3, steps=8)   # a real manual pan
+            page.mouse.up()
+            page.wait_for_timeout(200)
+            disabled_by_pan = page.evaluate("() => CH.autoFollow") is False
+            disabled_class = not page.evaluate("() => $('ch-follow').classList.contains('active')")
+            page.click("#ch-latest")
+            page.wait_for_timeout(150)
+            latest_reenables = page.evaluate("() => CH.autoFollow") is True
+            check(default_off and on_ok and active_class and persisted_on and jumped
+                  and disabled_by_pan and disabled_class and latest_reenables,
+                  "Auto Follow: OFF by default, toggle jumps+persists, "
+                  "manual pan disables, Latest re-enables")
+            page.evaluate("() => loadChart('QQQ')")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
+
+            # 26. live updates respect Auto Follow (Bug 1 + Bug 3 together): OFF
+            #     (default) never moves the viewport on a live tail update; ON
+            #     keeps the newest bar in view as prices tick.
+            # each route.fetch() re-reads the PRISTINE upstream value, so the
+            # multiplier must differ between the two bumps below — reusing one
+            # factor would recompute the identical bumped close both times and
+            # "close !== previous" would never become true (a test-only trap,
+            # not a production bug).
+            def make_bump_route(factor):
+                def _route(route):
+                    resp = route.fetch(); body = resp.json()
+                    if body.get("candles"):
+                        body["candles"][-1]["close"] = round(body["candles"][-1]["close"] * factor, 2)
+                    route.fulfill(json=body)
+                return _route
+            if page.evaluate("() => CH.autoFollow"):
+                page.click("#ch-follow"); page.wait_for_timeout(100)  # force OFF
+            page.evaluate("() => { const n = CH.data.candles.length; "
+                          "CH.main.timeScale().setVisibleLogicalRange({from:n-40, to:n-10}); }")
+            page.wait_for_timeout(150)
+            before_off = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            close0 = page.evaluate("() => CH.data.candles.at(-1).close")
+            bump_off = make_bump_route(1.01)
+            page.route("**/api/candles*", bump_off)
+            page.evaluate("() => loadChart()")
+            page.wait_for_function(f"() => CH.data.candles.at(-1).close !== {close0}", timeout=15000)
+            after_off = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            off_stationary = (abs(after_off["from"] - before_off["from"]) < 0.5
+                              and abs(after_off["to"] - before_off["to"]) < 0.5)
+            page.unroute("**/api/candles*", bump_off)
+            page.click("#ch-follow"); page.wait_for_timeout(150)   # ON: also jumps to latest
+            close1 = page.evaluate("() => CH.data.candles.at(-1).close")
+            bump_on = make_bump_route(1.02)
+            page.route("**/api/candles*", bump_on)
+            page.evaluate("() => loadChart()")
+            page.wait_for_function(f"() => CH.data.candles.at(-1).close !== {close1}", timeout=15000)
+            after_on = page.evaluate("() => CH.main.timeScale().getVisibleLogicalRange()")
+            n_now = page.evaluate("() => CH.data.candles.length")
+            on_follows = after_on["to"] >= n_now - 3
+            page.unroute("**/api/candles*", bump_on)
+            check(off_stationary and on_follows,
+                  "live updates: Auto Follow OFF never moves the viewport, "
+                  "ON keeps the newest bar in view")
+            if page.evaluate("() => CH.autoFollow"):
+                page.click("#ch-follow"); page.wait_for_timeout(100)  # back to OFF for later checks
+            page.evaluate("() => loadChart('QQQ')")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("QQQ", "1d")
 
             # 22. stale banner reflects market state: suppressed while the market
             #     is CLOSED (cached bars ARE the last session), shown while OPEN.
@@ -716,6 +875,196 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(page.evaluate("() => !!CH.main && CH.data && CH.data.candles.length > 3 && "
                                 "!document.querySelector('#ch-overlay').classList.contains('show')"),
                   "chart survives a rapid abuse burst and stays rendered")
+
+            # ── V3.3 (chart stabilization & market validation) ────────────────
+
+            # 27. Timezone (V3.3 Issue 2): x-axis tick + crosshair labels render in
+            #     America/New_York, NOT UTC. Fails before the fix (lightweight-charts
+            #     defaulted to UTC). Compared against a Python-side ET computation so
+            #     it's correct regardless of the CI machine's own timezone.
+            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("SPY", "5m")
+            bar_t = page.evaluate("() => CH.data.candles.at(-1).time")
+            tick_et = page.evaluate("(t) => chTickMark(t, 3)", bar_t)          # TickMarkType.Time
+            cross_et = page.evaluate("(t) => chCrosshairTime(t)", bar_t)
+            want_hm = datetime.fromtimestamp(bar_t, ET).strftime("%H:%M")
+            want_utc = datetime.fromtimestamp(bar_t, timezone.utc).strftime("%H:%M")
+            check(tick_et == want_hm and want_hm in cross_et and tick_et != want_utc,
+                  f"timezone: x-axis + crosshair render in ET ({tick_et}=={want_hm}, not UTC {want_utc})")
+
+            # 28. Countdown timer (V3.3 Issue 3): shown with a valid M:SS while the
+            #     market is open on an intraday frame; hidden on daily and when the
+            #     market is closed. Driven deterministically (forcing market_open)
+            #     so it doesn't depend on the wall-clock session at test time.
+            timer = page.evaluate("""() => {
+                const el = document.querySelector('#ch-timer');
+                CH.data.market_open = true; chUpdateTimer();
+                const shownIntraday = el.classList.contains('show');
+                const txt = (el.textContent || '').replace(/[^0-9:]/g, '');
+                CH.data.market_open = false; chUpdateTimer();
+                const hiddenClosed = !el.classList.contains('show');
+                return { shownIntraday, txt, hiddenClosed };
+            }""")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
+            hidden_daily = page.evaluate("""() => { CH.data.market_open = true; chUpdateTimer();
+                return !document.querySelector('#ch-timer').classList.contains('show'); }""")
+            valid_fmt = bool(re.fullmatch(r"\d{1,2}:\d{2}(:\d{2})?", timer["txt"]))
+            check(timer["shownIntraday"] and valid_fmt and timer["hiddenClosed"] and hidden_daily,
+                  f"countdown timer: shows M:SS intraday-open ({timer['txt']}), hidden daily/closed")
+
+            # 29. Drawing creation preview (V3.3 Issue 5), REAL MOUSE: the first click
+            #     anchors the drawing and shows it immediately; the second endpoint
+            #     rubber-bands to the cursor before the finalizing click. Fails before
+            #     the fix (nothing appeared until the second click).
+            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("SPY", "5m")
+            page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
+            box = page.evaluate("() => { const r=$('ch-main').getBoundingClientRect();"
+                                " return {x:r.left,y:r.top,w:r.width,h:r.height}; }")
+            ax, ay = box["x"]+box["w"]*0.40, box["y"]+box["h"]*0.42
+            bx, by = box["x"]+box["w"]*0.60, box["y"]+box["h"]*0.55
+            page.click('#ch-tools button[data-tool="trend"]')
+            page.mouse.click(ax, ay); page.wait_for_timeout(80)     # FIRST click = anchor
+            anchored = page.evaluate("() => DRAW.items.length===0 && !!CH.pendingPoint && !!CH.previewPt")
+            page.mouse.move(bx, by, steps=8); page.wait_for_timeout(120)  # rubber-band
+            moved = page.evaluate("""() => CH.previewPt && (CH.previewPt.time!==CH.pendingPoint.time
+                                     || CH.previewPt.price!==CH.pendingPoint.price)""")
+            preview_px = page.evaluate("""() => { const c=document.querySelector('#ch-draw');
+                const d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
+                let n=0; for(let i=3;i<d.length;i+=4) if(d[i]>0) n++; return n; }""")
+            page.mouse.click(bx, by); page.wait_for_timeout(120)     # SECOND click = finalize
+            finalized = page.evaluate("() => DRAW.items.length===1 && DRAW.items[0].type==='trend' && !CH.pendingPoint")
+            check(anchored and moved and preview_px > 0 and finalized,
+                  f"drawing preview: 1st click anchors + rubber-bands ({preview_px}px), 2nd finalizes")
+            page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chSetTool(null); chDrawRender(); }")
+
+            # 30. Overlay tracks a VERTICAL price-axis drag (V3.3 Issue 4), REAL MOUSE.
+            #     lightweight-charts fires no event for price-scale changes, so the
+            #     drawing overlay used to freeze on a vertical drag and snap later
+            #     (reproduced: 0 redraws). The rAF sync loop now redraws every frame
+            #     the coordinate mapping changes. Assert the overlay redraws AND a
+            #     level's rendered Y actually tracks the rescale.
+            page.evaluate("""() => { DRAW.items=[]; DRAW.sel=null;
+                chAddItem('hline','*',[{time:0, price:CH.data.candles.at(-1).close}]); chDrawSave(); chDrawRender(); }""")
+            page.evaluate("""() => { window.__dc=0; const o=window.chDrawRender;
+                window.chDrawRender=function(){ window.__dc++; return o.apply(this,arguments); }; }""")
+            px = box["x"]+box["w"]-20; pmid = box["y"]+box["h"]*0.5
+            yb = page.evaluate("() => chY(DRAW.items[0].points[0].price)")
+            page.evaluate("() => window.__dc=0")
+            page.mouse.move(px, pmid); page.mouse.down()
+            page.mouse.move(px, pmid+140, steps=12); page.mouse.up(); page.wait_for_timeout(150)
+            dc = page.evaluate("() => window.__dc")
+            ya = page.evaluate("() => chY(DRAW.items[0].points[0].price)")
+            check(dc > 0 and yb is not None and ya is not None and abs(ya - yb) > 5,
+                  f"overlay tracks a vertical price-axis drag ({dc} redraws, level Y {yb and round(yb)}->{ya and round(ya)})")
+            page.evaluate("() => { DRAW.items=[]; DRAW.sel=null; chDrawSave(); chDrawRender(); }")
+
+            # 31. Refresh preserves paged-in history AND holds the viewport (V3.3
+            #     Issue 7/8), REAL MOUSE. The periodic poll re-fetches only the base
+            #     window; before the fix it replaced CH.data with it, discarding the
+            #     older bars the user scrolled in — collapsing the series and yanking
+            #     the viewport. Page in history with a real drag, then refresh.
+            page.click("#ch-reset"); page.wait_for_timeout(200)
+            for _ in range(3):
+                c0 = page.evaluate("() => CH.data.candles.length")
+                page.mouse.move(box["x"]+box["w"]*0.25, pmid); page.mouse.down()
+                page.mouse.move(box["x"]+box["w"]*0.92, pmid, steps=18); page.mouse.up()
+                try:
+                    page.wait_for_function(f"() => CH.data.candles.length > {c0}", timeout=12000)
+                except Exception:  # noqa: BLE001
+                    pass
+            n_hist = page.evaluate("() => CH.data.candles.length")
+            vr0 = page.evaluate("() => { const r=CH.main.timeScale().getVisibleLogicalRange(); return [r.from, r.to]; }")
+            page.evaluate("() => loadChart()"); page.wait_for_timeout(700)   # a refresh
+            n_after = page.evaluate("() => CH.data.candles.length")
+            vr1 = page.evaluate("() => { const r=CH.main.timeScale().getVisibleLogicalRange(); return [r.from, r.to]; }")
+            preserved = n_hist > 500 and n_after >= n_hist - 2
+            stable = abs(vr0[0]-vr1[0]) < 2 and abs(vr0[1]-vr1[1]) < 2
+            check(preserved and stable,
+                  f"refresh preserves paged-in history ({n_hist}->{n_after}) and holds viewport")
+            page.evaluate("() => loadChart('SPY')"); page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
+
+            # ── V3.3.1 (chart reliability) ────────────────────────────────────
+
+            # 32. A hung/slow backend must not leave a PERMANENT loading spinner
+            #     (V3.3.1 primary bug: "loads blank, stays blank until restart").
+            #     A bounded fetch times out into the recoverable error overlay, and
+            #     the next poll recovers once the backend responds again. Uses the
+            #     test-only __chFetchTimeoutMs override so it runs fast. Fails on
+            #     pre-fix code (no timeout → the spinner never resolves).
+            page.evaluate("() => { window.__chFetchTimeoutMs = 800; }")
+            held = []
+            hang = {"on": True}
+            def hang_route(route):
+                if hang["on"]:
+                    held.append(route)                 # hold pending WITHOUT blocking the channel
+                else:
+                    route.fulfill(json=route.fetch().json())
+            page.route("**/api/candles*", hang_route)
+            page.fill("#ch-symbol", "COST"); page.press("#ch-symbol", "Enter")   # uncached first-paint
+            try:
+                page.wait_for_function(
+                    "() => document.querySelector('#ch-overlay-retry').style.display !== 'none'",
+                    timeout=6000)
+                timed_out_to_error = True
+            except Exception:  # noqa: BLE001
+                timed_out_to_error = False
+            hang["on"] = False
+            for r in held:
+                try: r.fulfill(json=r.fetch().json())
+                except Exception: pass  # noqa: BLE001
+            page.evaluate("() => loadChart()")
+            try:
+                wait_loaded("COST", "1d", 15000); recovered = True
+            except Exception:  # noqa: BLE001
+                recovered = False
+            page.unroute("**/api/candles*", hang_route)
+            page.evaluate("() => { window.__chFetchTimeoutMs = 0; }")
+            check(timed_out_to_error and recovered,
+                  "hung backend → bounded-timeout error overlay (not a permanent spinner), then auto-recovers")
+            page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
+
+            # 33. Rapid symbol switching ABORTS superseded fetches instead of
+            #     letting them all run to completion and pile onto the backend's
+            #     serialized yfinance throttle (V3.3.1: the switch pile-up that
+            #     starved the wanted symbol). Fails before the fix (0 aborts).
+            aborted, finished = [], []
+            page.on("requestfailed", lambda r: aborted.append(r.url)
+                    if "/api/candles" in r.url and "abort" in ((r.failure or "")).lower() else None)
+            burst = ["AAPL","NVDA","META","AMZN","TSLA","MSFT","GOOGL","AVGO","LLY","IWM","AMD"]
+            for s in burst:
+                page.fill("#ch-symbol", s); page.press("#ch-symbol", "Enter")
+                page.wait_for_timeout(30)          # faster than a fetch completes → supersede
+            try:
+                wait_loaded("AMD", "1d", 15000); final_ok = True
+            except Exception:  # noqa: BLE001
+                final_ok = False
+            page.wait_for_timeout(500)
+            check(len(aborted) >= 5 and final_ok,
+                  f"rapid switching aborts superseded fetches ({len(aborted)} aborted) and the last symbol loads")
+
+            # 34. A non-monotonic payload (duplicate / out-of-order bar times) must
+            #     be sanitized before setData — otherwise lightweight-charts throws
+            #     "Value is null" from its own later paint frame, uncatchable by the
+            #     setData try/catch (V3.3.1, confirmed via fault injection). The
+            #     backend already dedupes+sorts; this is frontend defense-in-depth.
+            #     Fails before the fix (an uncaught console error is raised).
+            def corrupt_route(route):
+                body = route.fetch().json()
+                cs = body.get("candles")
+                if cs and len(cs) > 6:
+                    cs[3] = dict(cs[3]); cs[3]["time"] = cs[2]["time"]   # duplicate ts
+                    cs[-1], cs[-2] = cs[-2], cs[-1]                       # out-of-order
+                route.fulfill(json=body)
+            errs_before = len([e for e in errors if "favicon" not in e])
+            page.route("**/api/candles*", corrupt_route)
+            page.fill("#ch-symbol", "NFLX"); page.press("#ch-symbol", "Enter")
+            page.wait_for_timeout(1500)
+            rendered = page.evaluate("() => CH.data && CH.data.candles.length > 3 "
+                                     "&& !document.querySelector('#ch-overlay').classList.contains('show')")
+            page.unroute("**/api/candles*", corrupt_route)
+            new_errs = len([e for e in errors if "favicon" not in e]) - errs_before
+            check(rendered and new_errs == 0,
+                  f"non-monotonic payload is sanitized (chart renders, {new_errs} new console errors)")
+            page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
 
             browser.close()
 

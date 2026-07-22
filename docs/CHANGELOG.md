@@ -4,6 +4,200 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-22 — V3.3.1: chart reliability investigation (blank-chart root cause)
+
+*Version 0.3.3 → 0.3.4. 388 tests (+1 backend), chart_check 41 → 44. A pure
+root-cause investigation of the intermittent "switch symbols enough times and a
+chart loads blank and stays blank until restart" report. The chart was
+instrumented (fetch start/finish/superseded/abort/empty, gen, cache, render,
+timers), the failure reproduced under load + fault injection, and each cause
+traced to a concrete mechanism before any code changed. No new features.*
+
+**Root causes found (each a lifecycle/resource bug, not a rendering bug):**
+- **No timeout on the chart's data fetch → permanent blank.** Under a backend
+  throttle backlog (measured: concurrent fetches serialize through yfinance's
+  single 0.15s-per-request lock, pushing latency to 10–15s+) or a hung upstream
+  connection, an unbounded `fetch()` left the first-paint loading spinner up
+  forever — exactly "loads blank, stays blank until restart" (restart cleared
+  the backlog). Confirmed: after 6s of a slow backend the overlay was still a
+  spinner with no recovery.
+- **Superseded fetches were never cancelled.** Each symbol switch fired a fetch;
+  a rapid burst left every superseded request running to completion, and because
+  each holds a slot in the serialized throttle, the pile-up starved the ONE
+  symbol the user actually landed on — "after enough switching, charts stop
+  loading." (A 12-switch burst now aborts 11 fetches instead of running all 12.)
+- **Backend `yfinance.history()` had no request timeout.** A hung Yahoo
+  connection blocked the worker thread while it held the CachedProvider's
+  per-key in-flight slot, so every later request for that symbol piled up behind
+  it — a second "restart fixes it" path.
+- **A hung history fetch left `CH.historyLoading` stuck true forever**, silently
+  disabling all further history loading for the session.
+- **Malformed payloads (duplicate / out-of-order bar times) threw an uncaught
+  "Value is null" from lightweight-charts' own later paint frame** — uncatchable
+  by the `setData` try/catch. (The backend `validate_candles` already
+  dedupes+sorts, so real data never triggers it; this is defense-in-depth.)
+- **Backend `_mem` cache was unbounded** — one entry per distinct
+  (symbol, timeframe, ext), accumulating candle DataFrames over a long session.
+
+**Fixes (root-cause, not retries):**
+- Frontend chart fetch now uses an `AbortController`: a 15s timeout converts a
+  hung/slow load into the normal recoverable error path (error overlay +
+  existing auto-retry on first paint; keep the chart on a refresh) instead of a
+  permanent spinner, and the previous in-flight fetch is aborted on every new
+  load/switch so superseded requests stop consuming the throttle. Same treatment
+  for the history fetch (with the timeout also clearing the stuck-flag path).
+- Backend `yfinance.history()` gained a `REQUEST_TIMEOUT` (10s) so a hung
+  connection can't block the throttle-lock holder; failures fall through to the
+  next symbol variant / an empty frame the caller already handles.
+- `chEnsureMonotonic()` sanitizes any non-ascending/duplicate bars before
+  `setData` (fast O(n) no-alloc scan on the normal clean path), and the rAF
+  overlay loop is wrapped so a transient render throw can't kill the loop.
+- Backend `_mem` cache is now a bounded LRU (`MEM_CACHE_MAX=400`).
+- Tests: `chart_check` +3 (hung-backend timeout→recover, rapid-switch abort,
+  non-monotonic sanitize) and a backend `TestMemCacheBounded`. Verified: 250
+  rapid symbol switches = 0 blanks / 0 console errors; fault injection (empty /
+  malformed / flapping) recovers 7/7; memory plateaus; all prior 41 checks green.
+
+**Provider limitation (confirmed, not fixed here):** yfinance serializes all
+requests through one process-wide throttle, so heavy concurrent load (scan loop +
+rapid chart switching) still adds latency. The bounded fetch makes this
+*recoverable* rather than a permanent blank; a real-time streaming provider (the
+documented upgrade path) would remove the serialization entirely.
+
+## [Uncommitted] 2026-07-20 — V3.3: chart stabilization & market validation
+
+*Version 0.3.2 → 0.3.3. 387 tests, chart_check 36 → 41. A correctness sprint
+verified against LIVE market data (reproduced Monday during regular trading
+hours), not just tests. Every issue was reproduced in a real browser, root-caused,
+fixed at the architecture level, and re-verified in the browser and in the
+rebuilt exe. Two behaviours turned out to be **yfinance provider limitations,
+not app bugs** — documented, not papered over.*
+
+- **Live sync cadence (Issue 1).** The forming candle updated in visible ~30s
+  chunks because the refresh was a fixed 30s poll on top of a 20s backend TTL.
+  The refresh is now timeframe-adaptive (≈7s for minute frames while the market
+  is open, slower for hourly/daily, idle when closed) and re-arms on every load
+  so a tf switch adopts the new cadence immediately; `CANDLE_TTL` for fine
+  intraday frames was lowered in lockstep so a fast poll returns fresh bars.
+  **Provider limit (documented):** yfinance is poll-only (no streaming) and
+  returns the *current forming bar* as a flat placeholder with `volume=0` until
+  it completes, so a true tick-by-tick forming candle like TradingView's is not
+  possible on this feed — it needs a streaming provider. Completed bars match
+  yfinance to the cent/share and arrive within one poll of the minute closing.
+- **Timezone (Issue 2).** The x-axis and crosshair rendered in UTC (a 13:00-ET
+  bar showed "17:00"). Bars carry true UTC-epoch timestamps and are NOT shifted
+  (that would ripple into drawings/history/timeIndex); instead the *labels* are
+  formatted in America/New_York via `Intl` (`tickMarkFormatter` +
+  `localization.timeFormatter`). Daily bars are anchored at ET midnight, so the
+  same ET conversion yields the correct calendar date with no off-by-one.
+- **Candle countdown timer (Issue 3).** New TradingView-style "time until this
+  bar closes" pill, updated every second, computed from the bar boundary and the
+  real wall clock (not a faked data timer). Shown for intraday frames while the
+  market is open; hidden on daily/closed.
+- **Drawing render lag on zoom/pan (Issue 4).** lightweight-charts fires a
+  time-range event on horizontal pan but NONE for vertical changes (price-axis
+  drag, autoscale), so the drawing overlay froze on vertical moves and snapped
+  later (reproduced: 0 overlay redraws during a price-axis drag). Added an
+  animation-frame sync loop that redraws the overlay whenever the chart's
+  coordinate mapping changes — horizontal or vertical — so drawings stay glued
+  to the chart. Idle cost is one cheap compare per frame; skipped when off-screen.
+- **Drawing creation preview (Issue 5).** The first click now anchors the drawing
+  and shows it immediately, and the second endpoint rubber-bands to the cursor
+  until the finalizing click (was: nothing appeared until the second click).
+  Preview is purely visual — never added to the model, hit-tested, or persisted.
+- **Refresh discarded paged-in history & moved the viewport (Issues 7 & 8, the
+  key root cause).** The periodic refresh re-fetches only the base window; it was
+  replacing `CH.data` with it, discarding older bars the user had scrolled in —
+  collapsing e.g. 2025 bars back to ~470 and shifting every logical index, which
+  yanked the viewport and made scrolled history randomly vanish. The refresh now
+  MERGES the fresh recent window onto the retained older bars (`chMergeRefresh`),
+  and the pre-fetch cache paint is restricted to genuine symbol/timeframe
+  switches. History is preserved across refreshes and the viewport holds exactly.
+- **Verified-not-regressed (Issues 6, 9, 10, 11, 12).** Drawing persistence
+  across timeframes (same object renders on 1m→1d, never duplicated); candle
+  correctness (app matches yfinance bar-for-bar across SPY/AAPL/NVDA); blank
+  charts (all 13 named symbols incl. BRK.B render; invalid symbols show the error
+  overlay, not a silent blank); memory (heap plateaus, canvas count and payload
+  cache bounded — no leak across 80 symbol/timeframe switches); Auto Follow
+  (OFF by default, manual pan disables, Latest re-enables) — all reproduced with
+  real mouse against live data.
+- **Tests.** `chart_check` 36 → 41: America/New_York display, countdown timer,
+  drawing creation preview, overlay tracking a real vertical price-axis drag, and
+  a refresh preserving paged-in history + holding the viewport — each fails on
+  pre-V3.3 code. Also hardened the flaky "viewport recovery" check (its extreme
+  overscroll strand was clamped non-deterministically by the library depending on
+  the live bar count; a narrow whitespace window strands deterministically).
+
+## [Uncommitted] 2026-07-20 — V3.2.2: viewport ownership unification + Auto Follow
+
+*Version 0.3.1 → 0.3.2. 387 tests, chart_check 33 → 36. V3.2.1 fixed three
+symptoms (drawings, viewport snapping, tf-context loss); every NEW bug
+reported afterward (random recentering, history intermittently failing,
+losing viewport while scrolling) was another symptom of the same underlying
+conflict — the viewport had no single owner. This sprint finds and fixes the
+architecture, not the symptoms.*
+
+- **Viewport ownership audit.** Every `fitContent()` / `setVisibleLogicalRange()`
+  / `setVisibleRange()` / `scrollToRealTime()` call site in `static/index.html`
+  was enumerated by owner and reason (Reset, Latest, Auto Follow, tf-switch
+  focal restore, same-key refresh, history prepend, symbol switch). All of
+  them now go through one function, `chMoveViewport()` — no subsystem calls a
+  `timeScale()` mutator directly anymore.
+- **Bug 4 (one controller).** `chMoveViewport(fn)` is the single gate that sets
+  `CH.restoringViewport` around every sanctioned move; the range-change
+  subscription is the only place that reads it to tell a programmatic move
+  apart from a real user pan/zoom/drag.
+- **Real root cause of "history loading intermittently fails" (Bug 2, part
+  1).** The old `wheel`/`touchstart`/`pointerdown` listeners armed history a
+  DOM-event tick *after* the library's own range-change fired during the same
+  pan, so a scroll-into-history sometimes silently did nothing. Fixed by
+  arming directly off the range-change subscription itself, in the same
+  synchronous pass that decides whether the change was user-driven.
+- **Real root cause of "history loading intermittently fails" (Bug 2, part
+  2 — the deeper one).** Instrumenting the vendored lightweight-charts'
+  actual callback timing showed `subscribeVisibleLogicalRangeChange` does
+  **not** fire synchronously inside `setVisibleLogicalRange()`/`fitContent()`
+  — it fires on a *later* animation frame. Every "sanctioned" move that reset
+  `CH.restoringViewport` synchronously right after its call (the V3.2.1
+  pattern) closed the guard window *before that callback ever arrived* — so
+  one frame later, every guarded move looked like a user pan: silently
+  re-arming history-load and (see Bug 3 below) breaking Auto Follow the
+  instant it was enabled. Fixed by deferring the reset two animation frames
+  in `chMoveViewport`, past when the callback reliably fires.
+- **Auto Follow (Bug 3) — new TradingView-style "go to realtime" toggle.**
+  OFF by default: the user owns the viewport; nothing auto-recenters except
+  Reset and Latest. ON: the chart always keeps the newest bar in view across
+  refreshes, live tail updates, and switches. Manual pan/zoom (detected in
+  the range-change subscription) turns it back off; pressing Latest turns it
+  back on; the preference persists (`localStorage`). New `#ch-follow` button
+  next to Reset/Latest, and the `A` keyboard shortcut.
+- **`scrollToRealTime()` discovery.** Auto Follow initially wouldn't stay on:
+  turning it on and immediately re-checking showed it already false. Root
+  cause: unlike `setVisibleLogicalRange()`/`fitContent()`, `scrollToRealTime()`
+  runs a multi-frame SMOOTH-SCROLL ANIMATION — every intermediate animation
+  tick fired the range-change subscription, and by the second or third tick
+  the (2-frame) guard window had already closed, so the animation's own
+  motion was read as a user pan and immediately disabled Auto Follow before
+  the scroll even finished. Fixed by replacing `scrollToRealTime()` everywhere
+  with `chScrollToLatest()` — a single non-animated `setVisibleLogicalRange`
+  call computed to land on the same destination — sidestepping the animation
+  entirely instead of chasing its frame count.
+- **Bug 5 (history prepend stationarity).** Verified (not just assumed): a
+  history prepend must never move bars already on screen — only new, older
+  bars appear at the left. Covered by a new regression test that captures the
+  on-screen time range immediately before and after a real-drag-triggered
+  merge.
+- **Tests.** `chart_check` 33 → 36: a real drag pan with no `historyArmed`
+  manual-set "cheat" (exercises the exact race the Bug 2 fix closes) plus
+  on-screen stationarity; Auto Follow OFF-by-default/toggle/persist/manual-pan-
+  disables/Latest-re-enables; live tail updates respecting Auto Follow
+  ON vs OFF. Also hardened `chart_check.py` itself: the extended-hours route
+  stub could occasionally double-fulfill the same request (a pre-existing
+  test-harness race, unrelated to app logic) — now defensively swallowed; and
+  added a `window.__chNoAutoRefresh` test-only escape hatch so the chart's
+  30s background refresh timer can't race a route stub mid-teardown once a
+  suite run's wall-clock time exceeds that cadence.
+
 ## [Uncommitted] 2026-07-20 — V3.2.1: critical chart regression fixes
 
 *Version 0.3.0 → 0.3.1. 387 tests, chart_check 31 → 33. Three release-blocker

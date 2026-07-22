@@ -5,18 +5,18 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-20, V3.2.1 critical chart regression fixes
+**Last verified:** 2026-07-22, V3.3.1 chart reliability investigation
 (`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 33-check
-chart regression suite, all green — plus a rebuilt exe whose cross-timeframe
-drawings, focal-preserving switches, and viewport stability were driven by
-hand; see `PROJECT_STATE.md`).
+consistency, `pip check`, a headless-browser smoke check, and the 44-check
+chart regression suite, all green — plus a 250-switch stress run with 0 blanks /
+0 console errors, fault-injection recovery 7/7, and a memory-plateau check; see
+`PROJECT_STATE.md`).
 
 ---
 
 ## Current version
 
-`0.3.1` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
+`0.3.4` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
 at the V3.2 milestone (the footer reads it from `/api/status`). No public
 release process yet; the packaged artifact is a Windows desktop exe built on
 demand via `scripts/build_exe.ps1`, not versioned/released independently of
@@ -24,16 +24,56 @@ the git history.
 
 ## Current phase
 
-**V3.2.1 critical chart regression fixes, on branch `v3-ui` — awaiting user
-approval/merge and market-hours validation.** V3.2.1 fixed three release
-blockers the user reproduced in the real app that V3.2's (internal-state) tests
-missed: drawings still vanished across timeframes (`chX` returned null for
-off-bar timestamps — now interpolates the pixel between bracketing integer
-bars); timeframe switches lost the user's place (now preserve the focal date,
-clamped to the closest candle); and the viewport snapped on refresh while panned
-past newest (now preserves the logical range). Underlying root cause: `setData`
-triggered a history load mid-switch and corrupted logical indices. Built on
-V3.2, which finished the chart subsystem: a timeframe-independent drawing engine
+**V3.3.1 chart reliability investigation, on branch `v3-ui` — awaiting user
+approval/merge.** A pure root-cause investigation (no new features) of the
+intermittent "switch symbols enough times → a chart loads blank and stays blank
+until restart." Instrumented the lifecycle, reproduced under load + fault
+injection, and traced each cause to a concrete mechanism: **no timeout on the
+chart fetch** (a backend throttle backlog — yfinance serializes fetches through
+one 0.15s lock, measured 10–15s latency under load — left the first-paint
+spinner up forever); **superseded fetches never aborted** (a rapid switch burst
+piled requests onto that throttle and starved the wanted symbol); **no backend
+request timeout** (a hung Yahoo connection blocked the in-flight slot); a hung
+history fetch left `historyLoading` stuck; malformed data threw an uncaught
+"Value is null" from the library's own paint frame; and an unbounded backend
+`_mem` cache. Fixes: bounded `AbortController` fetches (timeout → recoverable
+error + abort-on-switch), backend `REQUEST_TIMEOUT`, `chEnsureMonotonic`
+sanitizer + guarded rAF loop, and a bounded `MEM_CACHE_MAX`. Built on **V3.3
+chart stabilization & market validation, on branch `v3-ui` — awaiting
+user approval/merge.** A correctness sprint verified against LIVE market data
+(reproduced during regular trading hours), not just tests. Made the chart match
+a professional platform as closely as the free provider allows: adaptive live
+refresh cadence, America/New_York time display, a candle countdown timer,
+drawing creation previews, an overlay that tracks vertical (price-axis) moves,
+and — the key root cause — a periodic refresh that no longer discards paged-in
+history or moves the viewport (it merges the fresh recent window onto the
+retained older bars). Two behaviours were identified as **yfinance provider
+limitations, not app bugs** and documented: no streaming feed, and a forming
+bar that arrives as a flat `volume=0` placeholder until it completes. Candle
+data matches yfinance bar-for-bar (SPY/AAPL/NVDA). Built on **V3.2.2 viewport
+ownership unification + Auto Follow, on branch `v3-ui` —
+awaiting user approval/merge and market-hours validation.** Every bug
+reported after V3.2.1 (random recentering, history intermittently failing,
+losing viewport while scrolling) turned out to be another symptom of the
+same conflict: the viewport had no single owner. This sprint audited every
+`timeScale()` mutation, routed all of them through one `chMoveViewport`
+controller, and found two real root causes — a history-arming race (fixed by
+arming directly off the range-change subscription) and a deeper one:
+lightweight-charts' `subscribeVisibleLogicalRangeChange` fires on a LATER
+animation frame, not synchronously, so the old "reset the guard flag right
+after the call" pattern closed its window before that callback ever arrived.
+Also added an Auto Follow toggle (OFF by default, TradingView-style
+"go to realtime" when ON), discovering along the way that `scrollToRealTime()`
+itself runs a multi-frame animation that defeated a fixed-frame guard —
+replaced with a single non-animated equivalent. Built on V3.2.1, which fixed
+three release-blocker symptoms the user reproduced in the real app that
+V3.2's (internal-state) tests missed: drawings still vanished across
+timeframes (`chX` returned null for off-bar timestamps — now interpolates
+the pixel between bracketing integer bars); timeframe switches lost the
+user's place (now preserve the focal date, clamped to the closest candle);
+and the viewport snapped on refresh while panned past newest (now preserves
+the logical range). Built on V3.2, which finished the chart subsystem: a
+timeframe-independent drawing engine
 (visibility policy, `createdTf`, `source`, `meta`; one `chAddDrawing` API for
 user/AI/replay), a TradingView-style **Ray** tool, and **Extended Hours**
 (pre/after-market candles via yfinance `prepost`, session tags + shading,
@@ -83,8 +123,11 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376-test suite green |
 | V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376-test suite green |
 | V3.2 — Drawing engine + Ray (PARTS 1/2/5) | Timeframe-INDEPENDENT drawing model (visibility policy, `createdTf`, `source`, `meta`; v1/v2→v3 migration so old drawings stop vanishing on a tf switch); one `chAddDrawing` API for user/AI/replay; TradingView-style **Ray** tool (two-click, infinite one-way extension) reusing the existing edit machinery | `62cbcb4`, browser-verified, chart_check 9b |
-| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 387 tests green |
-| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 387 tests green |
+| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 388 tests green |
+| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 388 tests green |
+| V3.2.2 — Viewport ownership unification + Auto Follow | Single `chMoveViewport` controller for every programmatic move; history-arming race fixed (arm off the range-change subscription); deeper root cause found — the subscription fires on a later animation frame, so the guard-reset needed deferring, not just re-timing the arm; new Auto Follow toggle (OFF default, persisted, disabled by manual pan, re-enabled by Latest); `scrollToRealTime()`'s multi-frame animation replaced with a non-animated `chScrollToLatest()` | 0.3.2, 36/36 browser + 388 tests green |
+| V3.3 — Chart stabilization & market validation | Live-verified during trading hours. Adaptive refresh cadence (~7s intraday, forming candle no longer updates in 30s chunks); America/New_York x-axis/crosshair/timer (labels formatted via Intl, timestamps unchanged); candle countdown timer; drawing creation preview (rubber-band); overlay rAF sync loop (drawings track vertical price-axis moves, no snap); **root cause** — periodic refresh merged (`chMergeRefresh`) instead of replacing, so paged-in history + viewport survive a refresh. yfinance limits documented (no streaming; forming bar V=0 until close). Candle correctness matches yfinance bar-for-bar | 0.3.3, 41/41 browser + 388 tests green |
+| V3.3.1 — Chart reliability investigation | Root-caused the intermittent "blank until restart": **no fetch timeout** (backend throttle backlog / hung upstream left the first-paint spinner up forever) → bounded `AbortController` (timeout → recoverable error, not permanent spinner); **superseded fetches not aborted** (rapid-switch pile-up starved the wanted symbol) → abort-on-switch; backend `yfinance.history()` `REQUEST_TIMEOUT`; hung history left `historyLoading` stuck → timeout; uncaught "Value is null" on non-monotonic data → `chEnsureMonotonic` + guarded rAF loop; unbounded `_mem` → `MEM_CACHE_MAX`. No new features | 0.3.4, 44/44 browser + 388 tests green |
 
 ## Features complete
 
@@ -107,7 +150,9 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known limitations (deliberate, documented — not bugs)
 
-- yfinance data is ~15-minute delayed with limited intraday history (~60 days of 5m bars); paid-feed adapters are the documented upgrade path.
+- yfinance data can be delayed (up to ~15 min for some symbols; in V3.3 live testing liquid ETFs/large-caps were only ~1 min behind) with limited intraday history (~60 days of 5m bars); paid-feed adapters are the documented upgrade path.
+- **yfinance serializes all requests through one process-wide throttle** (0.15s min interval, single lock). Under heavy concurrent load — the scan loop plus rapid chart symbol switching — fetch latency grows (10–15s+ measured under a synthetic hammer). As of V3.3.1 the chart's fetch is bounded (times out into a recoverable error + auto-retry, and superseded fetches are aborted), so this degrades gracefully instead of leaving a permanent blank; a streaming provider would remove the serialization entirely.
+- **yfinance is poll-only (no streaming/websocket feed)** and returns the *current forming bar* as a flat placeholder with `volume=0` until it completes. So the chart cannot build the forming candle tick-by-tick like TradingView — it advances as fast as we poll (~7s intraday, V3.3), and the just-forming bar shows no intrabar volume/range until it closes. Completed bars match yfinance to the cent/share. A true real-time forming bar requires a **streaming provider**; the smallest change to support one is a new `MarketDataProvider` adapter that pushes bar updates over the existing `/api/candles` WebSocket path (the frontend already applies trailing-bar updates via `chTailUpdate`), so no chart rewrite is needed. See `docs/AI_HANDOFF.md`.
 - No historical option-chain data exists for free; the backtester reconstructs option prices via Black-Scholes.
 - Manual/working orders evaluate once per scan cycle against fresh quotes — no intrabar/tick simulation.
 - The coach infers behavioral tags (revenge trading, chased entry) from observable timing patterns, not literal intent.
@@ -156,7 +201,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**387 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**388 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and
@@ -166,10 +211,11 @@ browser checks are still focused regressions, not exhaustive UI coverage
 
 ## Last verified date
 
-**2026-07-18** (V3.1 RC2 final chart audit) — `.\scripts\verify.ps1`
-end to end: full pytest run (387/387), static `$("id")` reference check,
-documentation consistency check, `pip check`, a headless-browser smoke
-check across all 9 tabs (Playwright + system Edge) with zero console
-errors, and the 33-check chart regression suite (`chart_check.py`) —
-plus a 10-ticker × 13-timeframe provider sweep (130/130 monotonic) and a
-rebuilt exe whose packaged charts/chains were confirmed serving live data.
+**2026-07-22** (V3.3.1 chart reliability investigation) —
+`.\scripts\verify.ps1` end to end: full pytest run (388/388), static
+`$("id")` reference check, documentation consistency check, `pip check`, a
+headless-browser smoke check across all 9 tabs (Playwright + system Edge)
+with zero console errors, and the 44-check chart regression suite
+(`chart_check.py`) — plus a 250-symbol-switch stress run (0 blanks / 0 console
+errors), fault-injection recovery (7/7: empty / malformed / flapping), a
+bounded-fetch timeout→recover check, and a memory-plateau profile.

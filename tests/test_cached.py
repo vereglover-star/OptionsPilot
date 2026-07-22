@@ -263,3 +263,25 @@ class TestStaleOkFallback:
         df, stale = provider.get_candles_stale_ok(
             "SPY", Timeframe.M5, self._end() - WINDOW, self._end())
         assert df.empty and stale is False
+
+
+class TestMemCacheBounded:
+    """V3.3.1: the in-memory memo must not grow without limit over a long
+    session that browses hundreds of distinct symbols (each entry can hold a
+    full candle DataFrame). Fails before the fix — `_mem` grew one entry per
+    distinct key forever."""
+
+    def _end(self):
+        return datetime.now(timezone.utc)
+
+    def test_mem_cache_evicts_oldest_beyond_cap(self, rig):
+        provider, inner, clock = rig
+        # request far more distinct symbols than the cap allows
+        for i in range(cached_mod.MEM_CACHE_MAX + 120):
+            provider.get_candles(f"SYM{i}", Timeframe.M5,
+                                 self._end() - WINDOW, self._end())
+        assert len(provider._mem) <= cached_mod.MEM_CACHE_MAX
+        # the most-recent symbol is still cached; the oldest was evicted
+        keys = list(provider._mem)
+        assert any(k[1] == f"SYM{cached_mod.MEM_CACHE_MAX + 119}" for k in keys)
+        assert not any(k[1] == "SYM0" for k in keys)

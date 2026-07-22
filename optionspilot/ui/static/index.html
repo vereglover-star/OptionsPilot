@@ -405,6 +405,7 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
 .ind-pills button.active, button#ch-ext.active { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); }
 .draw-tools { display:inline-flex; gap:6px; }
 .draw-tools button.active { background:var(--warn-soft); border-color:var(--warn); color:var(--warn); }
+button#ch-follow.active { background:var(--accent-soft); border-color:var(--accent); color:var(--ink); font-weight:600; }
 .chart-legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:var(--fs-sm);
   font-variant-numeric:tabular-nums; min-height:18px; margin-bottom:6px; padding-left:2px; }
 .chart-legend b { color:var(--ink-2); font-weight:600; }
@@ -433,6 +434,16 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
   padding:3px 10px; box-shadow:var(--sh-1); pointer-events:none; }
 #ch-histpill.show { display:flex; }
 #ch-histpill .ch-spinner { width:11px; height:11px; border-width:2px; margin:0; }
+/* candle countdown timer (TradingView-style): time remaining until the current
+   bar closes. Shown only for intraday frames while the market is open. Anchored
+   bottom-right, clear of the price scale; non-interactive so it never eats a
+   pan/zoom. Monospaced digits so it doesn't jitter as it ticks. */
+#ch-timer { position:absolute; right:70px; bottom:10px; z-index:6; display:none;
+  align-items:center; gap:6px; font-size:var(--fs-xs); font-variant-numeric:tabular-nums;
+  color:var(--text-dim); background:var(--panel); border:1px solid var(--grid);
+  border-radius:999px; padding:3px 10px; box-shadow:var(--sh-1); pointer-events:none; }
+#ch-timer.show { display:flex; }
+#ch-timer b { color:var(--ink-2); font-weight:600; letter-spacing:.3px; }
 /* editable-drawing overlay: a canvas over the chart draws every drawing plus
    selection handles; pointer-events stay off so the chart pans/zooms freely,
    and drag is driven from #ch-main listeners that toggle the canvas on only
@@ -607,6 +618,8 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
         <input id="ch-note-text" placeholder="note text — Enter places, Esc cancels"
                style="display:none; width:230px" maxlength="60" aria-label="Note text">
         <span style="margin-left:auto"></span>
+        <button class="btn" id="ch-follow"
+                title="Auto Follow — keep the newest bar in view as data arrives (A)">Auto Follow</button>
         <button class="btn" id="ch-reset" title="Reset view — fit every loaded bar (R)">Reset view</button>
         <button class="btn" id="ch-latest" title="Jump to the latest bar (L)">Latest ⇥</button>
         <button class="btn" id="ch-trade" title="Open this symbol in the Trade tab">Trade →</button>
@@ -636,10 +649,12 @@ h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-tra
                   style="display:none">Retry</button>
         </div>
         <div id="ch-histpill" role="status" aria-live="polite"></div>
+        <div id="ch-timer" role="timer" aria-live="off"></div>
       </div>
       <div id="ch-rsi" class="subpane" style="display:none"></div>
       <div id="ch-macd" class="subpane" style="display:none"></div>
       <div class="chart-hint">Scroll to zoom · drag to pan · R resets the view · L jumps to the latest bar ·
+        A toggles Auto Follow (live-follows the newest bar; any manual pan turns it off) ·
         drawings save per symbol · Esc cancels a tool · F toggles fullscreen ·
         open positions and working orders show as labeled price lines</div>
     </div>
@@ -1777,16 +1792,28 @@ const CH = {
   tf: localStorage.getItem("chTf") || "1d",
   inds: safeParse("chInds", {ema:true, vwap:false, bb:false, rsi:false, macd:false}),
   ext: localStorage.getItem("chExt") === "1",   // include pre/after-market bars
+  autoFollow: localStorage.getItem("chAutoFollow") === "1",  // V3.2.2 Bug 3
   freshHigh: null,
   main: null, candle: null, volume: null, overlays: {},
   rsiChart: null, rsiLine: null, macdChart: null, macdHist: null,
   macdLine: null, macdSig: null,
   data: null, dataKey: null, timeIndex: null, tool: null,
-  pendingPoint: null, pendingNote: null,
+  pendingPoint: null, pendingNote: null, previewPt: null,
   tradeLines: [], gen: 0, dataSig: "", cache: new Map(),
   viewport: null, historyLoading: false, historyExhausted: false,
   historyArmed: false, restoringViewport: false,
+  fetchCtl: null, histCtl: null,   // V3.3.1: AbortControllers for in-flight fetches
 };
+// A chart data fetch must never wait forever. Under a backend throttle backlog
+// (many concurrent yfinance fetches serialize through one 0.15s-per-request
+// lock → 10-15s+ latency measured under load) or a hung upstream connection,
+// an un-bounded fetch left the first-paint loading spinner up indefinitely —
+// the "chart loads blank and stays blank until restart" report (V3.3.1). We
+// bound it: on timeout the load fails GRACEFULLY into the normal recovery path
+// (error overlay + auto-retry on first paint; keep the existing chart on a
+// refresh) instead of a permanent spinner. Generous enough not to trip a
+// merely-slow-but-working fetch (a cold fetch is ~0.2s; this is a safety net).
+const CH_FETCH_TIMEOUT_MS = 15000;
 const CH_COLORS = {
   up: "#00c46a", down: "#ff5252", grid: "#23262c", text: "#82868e",
   ema: ["#f7b32b", "#3d8bff", "#c084fc"], vwap: "#22d3ee",
@@ -1796,13 +1823,48 @@ const CH_COLORS = {
   entry: "#3d8bff", order: "#f7b32b",
 };
 const FIB_RATIOS = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
+
+/* ── America/New_York time display (V3.3 Issue 2) ──────────────────────────
+   Bars carry true UTC-epoch timestamps (intraday = the real instant; daily+ =
+   midnight ET, which is 04:00/05:00 UTC). lightweight-charts renders those in
+   UTC by default, so the x-axis showed e.g. "17:00" for a 13:00-ET bar. We do
+   NOT shift the timestamps (that would ripple into drawings/timeIndex/history/
+   chSig, all of which key off absolute time). Instead we only reformat the
+   LABELS via Intl in America/New_York — the data model stays true UTC. Because
+   daily bars are anchored at ET midnight, an ET conversion yields the correct
+   calendar date too (no off-by-one), so one uniform ET formatter is right for
+   every timeframe. */
+const ET_TZ = "America/New_York";
+const _etHM   = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, hour: "2-digit", minute: "2-digit", hour12: false });
+const _etDay  = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, day: "numeric" });
+const _etMon  = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, month: "short" });
+const _etYear = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, year: "numeric" });
+const _etDate = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, month: "short", day: "numeric" });
+const _etDateTime = new Intl.DateTimeFormat("en-US", { timeZone: ET_TZ, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+// TickMarkType (lightweight-charts v4): 0 Year · 1 Month · 2 DayOfMonth · 3 Time · 4 TimeWithSeconds
+function chTickMark(time, tickMarkType) {
+  const d = new Date(time * 1000);
+  if (tickMarkType >= 3) return _etHM.format(d);      // intraday time, in ET
+  if (tickMarkType === 1) return _etMon.format(d);    // month boundary
+  if (tickMarkType === 0) return _etYear.format(d);   // year boundary
+  return _etDay.format(d);                            // day-of-month
+}
+const chIsIntraday = tf => (CH_TF_SECONDS[tf] || 0) < 86400;
+// crosshair time label: full ET datetime for intraday, ET date for daily+
+function chCrosshairTime(time) {
+  const d = new Date(time * 1000);
+  return chIsIntraday(CH.tf) ? _etDateTime.format(d) : _etDate.format(d);
+}
+
 const chOpts = extra => ({
   autoSize: true,
   layout: { background: { type: "solid", color: "transparent" },
             textColor: CH_COLORS.text, fontSize: 11 },
   grid: { vertLines: { color: CH_COLORS.grid }, horzLines: { color: CH_COLORS.grid } },
   rightPriceScale: { borderColor: CH_COLORS.grid },
-  timeScale: { borderColor: CH_COLORS.grid, timeVisible: true, secondsVisible: false },
+  timeScale: { borderColor: CH_COLORS.grid, timeVisible: true, secondsVisible: false,
+               tickMarkFormatter: chTickMark },
+  localization: { timeFormatter: chCrosshairTime },
   crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   ...extra,
 });
@@ -1832,13 +1894,24 @@ function chInit() {
   CH.main.timeScale().subscribeVisibleLogicalRangeChange(r => {
     if (!r) return;
     chDrawRender();                 // drawings track the moving coordinate system
-    chMaybeLoadHistory(r);
+    // V3.2.2 Bug 2/4: this subscription is the ONE place that can tell a
+    // genuine user-driven range change (pan/zoom/drag) apart from a
+    // programmatic one — CH.restoringViewport is set for the entire duration
+    // of every sanctioned move (see chMoveViewport). Arming history-load and
+    // disarming Auto Follow HERE, synchronously with the real range change,
+    // removes the old wheel/touchstart/pointerdown listener race (those DOM
+    // events could fire before or after the library's own internal pan
+    // updated the range, so "armed" was sometimes set a tick too late and a
+    // scroll-into-history silently did nothing — V3.2.2 Bug 2).
+    if (!CH.restoringViewport) {
+      CH.historyArmed = true;
+      if (CH.autoFollow) chSetAutoFollow(false);   // manual pan/zoom owns the view now
+      chMaybeLoadHistory(r);
+    }
   });
   const host = $("ch-main");
-  host.addEventListener("wheel", () => { CH.historyArmed = true; });
-  host.addEventListener("touchstart", () => { CH.historyArmed = true; }, { passive: true });
   // capture phase: a drawing grab can stop the event before the chart pans
-  host.addEventListener("pointerdown", e => { CH.historyArmed = true; chPointerDown(e); }, true);
+  host.addEventListener("pointerdown", chPointerDown, true);
   host.addEventListener("pointermove", chPointerMove, true);
   window.addEventListener("pointerup", chPointerUp, true);
   new ResizeObserver(() => chDrawRender()).observe(host);
@@ -1939,11 +2012,80 @@ const chViewport = () => {
   const r = CH.main.timeScale().getVisibleRange?.();
   return r && r.from != null && r.to != null ? {from: r.from, to: r.to} : null;
 };
+/* THE viewport controller (V3.2.2 Bug 4). Every subsystem that moves the
+   chart programmatically — reset, latest, Auto Follow, a timeframe-switch
+   focal restore, a same-key refresh, a history prepend — MUST route the move
+   through this function instead of calling timeScale() methods directly.
+   It is the only place CH.restoringViewport is set, which is in turn the
+   only signal the visible-range subscription (chInit) uses to tell a
+   programmatic move apart from a real user pan/zoom/drag. Collapsing every
+   caller onto one gate is what makes "one owner per render" actually true,
+   instead of a convention several call sites had to remember individually.
+   THE V3.2.2 DISCOVERY: lightweight-charts' subscribeVisibleLogicalRangeChange
+   does NOT fire synchronously inside setVisibleLogicalRange()/fitContent()/
+   scrollToRealTime() — it fires on a LATER animation frame. Clearing
+   restoringViewport synchronously right after the call (the V3.2.1 pattern)
+   therefore closed the guard window before that callback ever arrived, so
+   every "sanctioned" move looked like a user pan one frame later — silently
+   re-arming history-load (spurious fetches right after Reset/Latest/a tf
+   switch/a refresh) and, worse, immediately flipping Auto Follow back off
+   the instant it was turned on. This is the actual root cause behind
+   "history loading intermittently fails/freezes" — confirmed by instrumenting
+   the real callback timing. Deferring the reset two animation frames keeps
+   the flag true until after that callback has definitely fired. */
+function chMoveViewport(fn) {
+  if (!CH.main) return;
+  CH.restoringViewport = true;
+  try {
+    fn();
+  } finally {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      CH.restoringViewport = false;
+    }));
+  }
+}
+/* Auto Follow (V3.2.2 Bug 3) — TradingView-style "go to realtime" toggle.
+   OFF (default): the user owns the viewport; nothing auto-recenters except
+   the two explicit buttons below. ON: the chart always keeps the newest bar
+   in view — every render (refresh, live tail update, tf/symbol switch)
+   snaps to realtime instead of preserving focal/logical position. Manual
+   pan/zoom (detected in the range-change subscription) turns it back off;
+   Latest turns it back on; the preference persists across reloads. */
+function chSetAutoFollow(on) {
+  CH.autoFollow = on;
+  localStorage.setItem("chAutoFollow", on ? "1" : "0");
+  $("ch-follow")?.classList.toggle("active", on);
+}
+/* scrollToRealTime() is intentionally NOT used here (or anywhere Auto Follow
+   moves the chart): unlike setVisibleLogicalRange()/fitContent(), it runs a
+   multi-frame SMOOTH-SCROLL ANIMATION — confirmed by instrumenting the real
+   callback timing. chMoveViewport's guard window (a couple of animation
+   frames) covers an instant call, not an animation lasting dozens of frames,
+   so every intermediate animation tick fired the range-change subscription
+   with restoringViewport already false — read as a user pan, which
+   immediately (and correctly, by that flawed signal) turned Auto Follow back
+   off before the animation even finished. Computing the same destination
+   with a single non-animated setVisibleLogicalRange sidesteps the problem
+   instead of chasing the animation's frame count. */
+function chScrollToLatest() {
+  const ts = CH.main.timeScale();
+  const n = CH.data?.candles?.length;
+  if (!n) { ts.scrollToRealTime(); return; }
+  const lr = ts.getVisibleLogicalRange();
+  const width = (lr && lr.to > lr.from) ? (lr.to - lr.from) : Math.min(n - 1, 100);
+  const to = n - 1;
+  ts.setVisibleLogicalRange({ from: to - width, to });
+}
+function chToggleAutoFollow() {
+  if (CH.autoFollow) { chSetAutoFollow(false); return; }
+  chSetAutoFollow(true);
+  if (CH.main) chMoveViewport(chScrollToLatest);
+}
 /* Viewport recovery — the chart must never strand the user in empty space.
    "Stranded" = the visible time window no longer intersects ANY loaded bar,
-   which aggressive pan/zoom can produce. fitContent()/scrollToRealTime() are
-   the only sanctioned ways to move the view programmatically, and each is
-   wrapped in restoringViewport so the range-change subscription doesn't treat
+   which aggressive pan/zoom can produce. fitContent()/chScrollToLatest() are
+   the only sanctioned ways to move the view programmatically, and each goes
+   through chMoveViewport so the range-change subscription doesn't treat
    the move as a user scroll and fire a spurious history fetch. Viewport
    restoration has exactly one owner — loadChart's `switching` decision (fit on
    a symbol/tf switch, preserve the live viewport on a same-key refresh); the
@@ -2005,18 +2147,45 @@ function chApplyFocal(focal) {
 }
 function chResetView() {
   if (!CH.main) return;
-  CH.restoringViewport = true;
-  try { CH.main.timeScale().fitContent(); } finally { CH.restoringViewport = false; }
+  chSetAutoFollow(false);   // "fit everything" is a deliberate look-at-history action
+  chMoveViewport(() => CH.main.timeScale().fitContent());
   chDrawRender();
 }
 function chGoToLatest() {
   if (!CH.main) return;
-  CH.restoringViewport = true;
-  try { CH.main.timeScale().scrollToRealTime(); } finally { CH.restoringViewport = false; }
+  chSetAutoFollow(true);    // Latest re-enables Auto Follow (Bug 3)
+  chMoveViewport(chScrollToLatest);
   chDrawRender();
+}
+/* Defensive guard against a non-monotonic payload (V3.3.1). lightweight-charts
+   REQUIRES strictly-ascending unique bar times; a duplicate or out-of-order bar
+   doesn't fail setData() cleanly — it corrupts the series and throws
+   "Value is null" from the library's OWN later paint frame, which no try/catch
+   around setData can catch (confirmed via fault injection). The backend
+   validate_candles already dedupes+sorts, so this is defense-in-depth for any
+   future provider; the fast path (already-clean data, the normal case) is a
+   single O(n) scan with no allocation. Kept bars carry their indicator values
+   by original index so every series stays 1:1 with candles. */
+function chEnsureMonotonic(d) {
+  const c = d?.candles;
+  if (!c || c.length < 2) return d;
+  let clean = true;
+  for (let i = 1; i < c.length; i++) if (c[i].time <= c[i - 1].time) { clean = false; break; }
+  if (clean) return d;
+  console.warn("chart: payload had non-monotonic/duplicate bar times — sanitizing");
+  const keep = [];
+  let last = -Infinity;
+  for (let i = 0; i < c.length; i++) if (c[i].time > last) { keep.push(i); last = c[i].time; }
+  const indicators = {};
+  for (const name in (d.indicators || {})) {
+    const s = d.indicators[name] || [];
+    indicators[name] = keep.map(i => (s[i] == null ? null : s[i]));
+  }
+  return { ...d, candles: keep.map(i => c[i]), indicators };
 }
 function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
                           focal = null, fit = false} = {}) {
+  d = chEnsureMonotonic(d);   // never feed dup/out-of-order bars to the renderer
   // Is this the same (symbol·tf) already on screen? If so we are preserving
   // the user's live viewport (a refresh or history prepend) and must never
   // yank it — the stranded safety net below only runs on a genuine switch /
@@ -2040,6 +2209,10 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
       chApplyIndicators();       // small line series; setData preserves the view
       chDrawRender();
       chLoadTradeLines();
+      // Auto Follow ON: a live tail update must still keep the newest bar in
+      // view as it forms (Bug 3 "live updates follow price"). OFF (default):
+      // untouched, matching Bug 1/2 — a live update never moves the viewport.
+      if (CH.autoFollow) chMoveViewport(chScrollToLatest);
     } catch (e) {
       console.error("chart live-update failed:", e);
       CH.dataKey = null;         // fall back to a full repaint next tick
@@ -2064,45 +2237,49 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
   CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
   localStorage.setItem("chSym", CH.sym);
   localStorage.setItem("chTf", CH.tf);
-  // restoringViewport must be set BEFORE setData: setData auto-fits and fires
-  // the visible-range subscription synchronously, which would run
+  // The whole setData + viewport-restore sequence is ONE chMoveViewport call
+  // (Bug 4 — a single controller, not a convention every caller has to
+  // remember). restoringViewport must cover setData too: setData auto-fits
+  // and fires the visible-range subscription synchronously, which would run
   // chMaybeLoadHistory unguarded and prepend history mid-switch (the V3.2.1
-  // corruption). It stays set through the deliberate viewport restore below.
-  CH.restoringViewport = true;
-  try {
-    CH.candle.setData(d.candles);
-    CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
-      color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
-    chApplyIndicators();
-    if (chDrawModelSym !== CH.sym) { chDrawLoadModel(); chDrawModelSym = CH.sym; }
-    chDrawRender();
-    chLoadTradeLines();
-  } catch (e) {
-    // a renderer exception must surface, never leave a half-painted canvas
-    CH.restoringViewport = false;
-    console.error("chart render failed:", e);
-    CH.dataKey = null;                       // force a clean repaint on retry
-    chOverlay("error", `Chart renderer error: ${e.message}`);
-    return false;
-  }
-  try {
+  // corruption) if it weren't gated for that whole span.
+  let renderFailed = false;
+  chMoveViewport(() => {
+    try {
+      CH.candle.setData(d.candles);
+      CH.volume.setData(d.candles.map(c => ({ time: c.time, value: c.volume,
+        color: c.close >= c.open ? CH_COLORS.volUp : CH_COLORS.volDn })));
+      chApplyIndicators();
+      if (chDrawModelSym !== CH.sym) { chDrawLoadModel(); chDrawModelSym = CH.sym; }
+      chDrawRender();
+      chLoadTradeLines();
+    } catch (e) {
+      // a renderer exception must surface, never leave a half-painted canvas
+      console.error("chart render failed:", e);
+      CH.dataKey = null;                       // force a clean repaint on retry
+      chOverlay("error", `Chart renderer error: ${e.message}`);
+      renderFailed = true;
+      return;
+    }
     // Exactly one viewport owner per render, by intent:
+    //   autoFollow  — Auto Follow ON: always show the newest bar (Bug 3)
     //   focal       — timeframe switch: re-center the same date region (Bug 3)
     //   time        — history prepend: bar times are stable across the prepend
     //   keepLogical — same-key refresh/live: don't move under the user (Bug 2)
     //   fit         — symbol switch / first paint: a sensible default
-    if (focal) chApplyFocal(focal);
+    if (CH.autoFollow) chScrollToLatest();
+    else if (focal) chApplyFocal(focal);
     else if (time) CH.main.timeScale().setVisibleRange(time);
     else if (keepLR) CH.main.timeScale().setVisibleLogicalRange(keepLR);
     else if (fit) CH.main.timeScale().fitContent();
     // Last-resort net for a TRULY impossible view (fit produced nothing usable
     // on a symbol switch/first paint). Never on a same-key refresh and never
-    // over a deliberate focal restore — the user owns the viewport (Bug 2).
-    if (!sameKey && !focal && fit && chViewportStranded())
+    // over a deliberate focal restore or Auto Follow — the user (or Auto
+    // Follow, which the user explicitly opted into) owns the viewport (Bug 2).
+    if (!sameKey && !focal && !CH.autoFollow && fit && chViewportStranded())
       CH.main.timeScale().fitContent();
-  } finally {
-    CH.restoringViewport = false;
-  }
+  });
+  if (renderFailed) return false;
   const entry = chCacheEntry(key);
   entry.data = d;
   entry.sig = CH.dataSig;
@@ -2248,11 +2425,17 @@ async function chLoadHistoryChunk() {
   const end = new Date(first * 1000).toISOString();
   CH.historyLoading = true;
   chHistPill("loading");
+  // Bound the history fetch too: without a timeout a hung request never settles,
+  // so the `finally` never runs and CH.historyLoading stays true forever —
+  // silently disabling all further history loading for the session (V3.3.1).
+  const ctl = new AbortController();
+  CH.histCtl = ctl;
+  const timer = setTimeout(() => ctl.abort(), CH_FETCH_TIMEOUT_MS);
   try {
     const r = await fetch(
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
       `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
-      (CH.ext ? "&ext=1" : ""));
+      (CH.ext ? "&ext=1" : ""), { signal: ctl.signal });
     const d = await r.json();
     if (gen !== CH.gen || key !== chKey()) return;
     if (d.error || !d.candles || !d.candles.length) {
@@ -2276,6 +2459,7 @@ async function chLoadHistoryChunk() {
       console.error("history load failed:", e);
     chHistPill(null);
   } finally {
+    clearTimeout(timer);
     CH.historyLoading = false;
   }
 }
@@ -2288,6 +2472,9 @@ async function loadChart(symbol) {
   $("ch-symbol").value = CH.sym;
   chInit();
   chPaintControls();
+  chArmRefresh();     // (re)arm the live poll to THIS timeframe's cadence (Issue 1):
+                      // a tf switch (1d→1m) adopts the fast cadence immediately
+                      // instead of waiting out the previous, slower interval.
   const key = chKey();
   const prevKey = CH.dataKey;
   const cached = CH.cache.get(key);
@@ -2306,6 +2493,7 @@ async function loadChart(symbol) {
     : switching ? { key, fit: true }
     : { key, keepLogical: true };
   if (switching) {
+    CH.histCtl?.abort();         // a switch invalidates any in-flight history load
     CH.freshHigh = null;         // stale high-water is per (symbol·tf)
     CH.historyArmed = false;     // history loads on a user SCROLL, never on a
                                  // symbol/timeframe switch — arming carries over
@@ -2318,7 +2506,13 @@ async function loadChart(symbol) {
   CH.historyLoading = false;
   CH.historyExhausted = false;
   chHistPill(null);
-  if (cached?.data && (switching || CH.dataSig !== cached.sig)) {
+  // Instant paint from cache ONLY when switching to a cached (symbol·tf) view,
+  // so the switch isn't blank while the fresh fetch runs. On a same-view refresh
+  // we must NOT re-render the cached BASE window: the live data already on
+  // screen may reach further back (paged-in history), and repainting the base
+  // over it would collapse that history for a frame and then strand the merge
+  // below with nothing older to keep (V3.3 Issue 7/8).
+  if (cached?.data && switching) {
     chRenderData(cached.data, viewOpts());
   }
   if (firstPaint) {
@@ -2337,19 +2531,37 @@ async function loadChart(symbol) {
     chOverlay(null);
     chLegend(null);
   }
+  // Cancel the previous chart fetch: a rapid symbol burst used to leave every
+  // superseded request running to completion, and because each still consumes a
+  // slot in the backend's serialized yfinance throttle, the pile-up delayed the
+  // ONE symbol the user actually landed on — "after enough switching, charts
+  // stop loading" (V3.3.1). Aborting frees the throttle for the wanted symbol.
+  CH.fetchCtl?.abort();
+  const ctl = new AbortController();
+  CH.fetchCtl = ctl;
+  let timedOut = false;
+  // window.__chFetchTimeoutMs: test-only override so the regression suite can
+  // exercise the timeout path quickly instead of waiting the full 15s.
+  const timer = setTimeout(() => { timedOut = true; ctl.abort(); },
+                           window.__chFetchTimeoutMs || CH_FETCH_TIMEOUT_MS);
   let d;
   try {
     const r = await fetch(
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
-      (CH.ext ? "&ext=1" : ""));
+      (CH.ext ? "&ext=1" : ""), { signal: ctl.signal });
     d = await r.json();
   } catch {
-    if (gen !== CH.gen) return;               // superseded by a newer request
-    if (firstPaint) chOverlay("error",
-      "Couldn't reach the data service. Check your connection and retry.");
+    clearTimeout(timer);
+    // An abort from a NEWER load (superseded) is silent; a real network error or
+    // our own TIMEOUT for the CURRENT symbol falls through to graceful recovery.
+    if (gen !== CH.gen) return;
+    if (firstPaint) chOverlay("error", timedOut
+      ? "Data is taking too long — the feed may be busy. Retrying automatically…"
+      : "Couldn't reach the data service. Check your connection and retry.");
     else chStale(CH.data.candles[CH.data.candles.length - 1].time);
     return;
   }
+  clearTimeout(timer);
   if (gen !== CH.gen) return;
   if (d.error || !d.candles || !d.candles.length) {
     const msg = d.error
@@ -2360,39 +2572,172 @@ async function loadChart(symbol) {
            chStale(CH.data.candles[CH.data.candles.length - 1].time); }
     return;
   }
-  const sig = chSig(d);
+  // Cache stores the freshly-fetched BASE window (a later revisit paints light,
+  // then re-pages history on scroll). But the LIVE render must preserve any
+  // older bars the user already scrolled in: the periodic refresh re-fetches
+  // only the base window, and replacing CH.data with it would discard that
+  // paged-in history — collapsing 2000 bars back to ~470 and shifting every
+  // logical index, which yanked the viewport (V3.3 Issue 7) and made scrolled
+  // history randomly vanish (Issue 8). On a same-view refresh whose current
+  // data reaches further back than this fetch, merge the fresh (authoritative)
+  // recent window onto the retained older bars instead of replacing.
   const entry = chCacheEntry(key);
   entry.data = d;
-  entry.sig = sig;
+  entry.sig = chSig(d);
+  const out = (!switching && CH.data && CH.data.candles.length && d.candles.length
+               && CH.data.candles[0].time < d.candles[0].time)
+    ? chMergeRefresh(CH.data, d) : d;
+  const sig = chSig(out);
   if (CH.dataKey === key && CH.dataSig === sig) {
-    chStale(chStaleAsOf(d));
+    chStale(chStaleAsOf(out));
     return;
   }
-  chRenderData(d, viewOpts());
+  chRenderData(out, viewOpts());
 }
 
-/* keep a visible chart current: refresh on a cadence matched to the
-   backend's candle TTLs, but only while the Charts tab is on screen.
-   Gated on chInit having run (CH.main) rather than on data ever having
-   loaded — so a chart stuck on the first-load error overlay auto-retries
-   too, instead of only recovering via the manual Retry button. */
-const CH_REFRESH_MS = 30000;
-setInterval(() => {
-  if (document.hidden || !CH.main) return;
-  if (!chOnScreen()) return;      // Charts tab, or the Trade tab with its chart open
+/* Merge a freshly-fetched RECENT window (`fresh`, the base window a refresh
+   returns) onto `existing` data that reaches further back because the user
+   paged in history. Keep every existing bar older than the fresh window, then
+   take the whole fresh window (authoritative for the recent bars, including the
+   forming candle and any just-closed bar). Indicator series are spliced in
+   lockstep so each stays 1:1 with candles. The result has the SAME leading
+   bars as `existing`, so chRenderData's tail-update fast path applies and the
+   viewport never moves. Inverse of chMergeHistory (which prepends older bars). */
+function chMergeRefresh(existing, fresh) {
+  const f0 = fresh.candles[0]?.time;
+  if (f0 == null) return existing;
+  const head = existing.candles.filter(c => c.time < f0);
+  if (!head.length) return fresh;              // nothing older to preserve
+  const headLen = head.length;
+  const merged = { ...fresh, candles: [...head, ...fresh.candles], indicators: {} };
+  const names = new Set([...Object.keys(existing.indicators || {}),
+                         ...Object.keys(fresh.indicators || {})]);
+  for (const name of names) {
+    const headVals = (existing.indicators?.[name] || []).slice(0, headLen);
+    const tail = fresh.indicators?.[name] || new Array(fresh.candles.length).fill(null);
+    // pad head if the existing series was missing this indicator
+    while (headVals.length < headLen) headVals.push(null);
+    merged.indicators[name] = [...headVals, ...tail];
+  }
+  return merged;
+}
+
+/* Adaptive live refresh (V3.3 Issue 1). yfinance is POLL-ONLY — it has no
+   streaming/websocket feed — so the forming candle can only update as fast as
+   we poll for it. The old fixed 30s cadence made intraday bars visibly update
+   in 30s chunks. We now poll on a cadence matched to the timeframe while the
+   market is open: fast for minute frames (a 1m bar whose snapshot changes every
+   few seconds), slower for hourly/daily where a new bar cannot appear quickly,
+   and idle (30s) while the market is closed since no new bars form then. The
+   backend CANDLE_TTL was lowered in lockstep (cached.py) so a fast poll returns
+   a fresh frame instead of the same cached one. This reduces client-visible
+   LAG; it does not remove the ~1 min upstream data delay, and the current bar
+   still arrives from Yahoo as a flat V=0 placeholder until it completes — a
+   true tick-by-tick forming bar needs a streaming provider (see report). */
+function chRefreshMs() {
+  const open = CH.data?.market_open ?? lastStatus?.market_open ?? false;
+  if (!open) return 30000;                        // nothing forms while closed
+  const s = CH_TF_SECONDS[CH.tf] || 60;
+  if (s <= 1800) return 7000;                     // 1m..30m: fast
+  if (s < 86400) return 20000;                    // 1h..4h
+  return 30000;                                   // daily+
+}
+// window.__chNoAutoRefresh: a test-only escape hatch (chart_check.py sets it
+// via an init script) so a headless regression run — which stubs /api/candles
+// with page.route() for specific scenarios — can't have this background timer
+// race a route handler that's mid-teardown.
+function chArmRefresh() {
+  clearTimeout(CH._refreshT);
+  CH._refreshT = setTimeout(chAutoRefreshTick, chRefreshMs());
+}
+function chAutoRefreshTick() {
   // never yank the chart out from under an in-progress interaction: a full
-  // re-render mid-drag or between the two clicks of a tool would move the
-  // bars under the cursor. The next tick (≤30s) refreshes once idle.
-  if (chDrag || CH.pendingPoint || CH.pendingNote || CH.historyLoading) return;
-  loadChart();
-}, CH_REFRESH_MS);
+  // re-render mid-drag or between the two clicks of a tool would move the bars
+  // under the cursor. The next tick refreshes once idle. loadChart() re-arms
+  // the timer itself (it calls chArmRefresh at the top); when we skip it here
+  // we must re-arm so the poll keeps ticking.
+  if (!window.__chNoAutoRefresh && !document.hidden && CH.main && chOnScreen()
+      && !chDrag && !CH.pendingPoint && !CH.pendingNote && !CH.historyLoading)
+    loadChart();
+  else
+    chArmRefresh();
+}
+chArmRefresh();
 // after minimize/sleep/tab-away the interval was suppressed by document.hidden;
 // refresh promptly on return instead of waiting up to a full cadence
 document.addEventListener("visibilitychange", () => {
+  if (window.__chNoAutoRefresh) return;
   if (document.hidden || !CH.main || !chOnScreen()) return;
   if (chDrag || CH.pendingPoint || CH.pendingNote || CH.historyLoading) return;
   loadChart();
 });
+
+/* Candle countdown timer (V3.3 Issue 3) — TradingView-style "time until this
+   bar closes", updated every second. The bar boundary is DETERMINISTIC (bar
+   open + timeframe duration), so this is computed from the real wall clock, not
+   faked with a data timer: we take the newest bar's open time (yfinance stamps
+   the bar START), add the timeframe duration, and step forward in whole-bar
+   increments past 'now' so a ~1 min data lag can't make it read negative. Shown
+   only for intraday frames while the market is regular-session open; hidden for
+   daily+ and when closed (no meaningful intrabar countdown there). */
+function chFmtCountdown(sec) {
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const p = n => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
+}
+function chUpdateTimer() {
+  const el = $("ch-timer");
+  if (!el) return;
+  const open = CH.data?.market_open ?? lastStatus?.market_open ?? false;
+  const c = CH.data?.candles, dur = CH_TF_SECONDS[CH.tf];
+  if (!CH.main || !c || !c.length || !chOnScreen() || !chIsIntraday(CH.tf) || !open || !dur) {
+    el.classList.remove("show"); return;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  let close = c[c.length - 1].time + dur;         // bar-open + duration = bar-close
+  while (close <= now) close += dur;              // advance to the current real boundary
+  el.innerHTML = `<span aria-hidden="true">⧗</span> <b>${chFmtCountdown(Math.max(0, close - now))}</b>`;
+  el.classList.add("show");
+}
+setInterval(chUpdateTimer, 1000);
+
+/* Overlay sync loop (V3.3 Issue 4). lightweight-charts fires a time-range event
+   on horizontal pan/zoom — which we already redraw on — but exposes NO event
+   for VERTICAL changes: a price-axis drag, an autoscale as bars enter/leave the
+   view, or a double-click reset. Those moved the candles while the drawing
+   overlay stayed put and then snapped on the next horizontal event (reproduced:
+   0 overlay redraws during a price-axis drag). So we redraw the overlay on every
+   animation frame in which the chart's coordinate mapping changed — horizontal
+   OR vertical — keeping drawings glued to the chart with no lag. When nothing
+   moves the per-frame cost is one cheap string compare, and it's skipped
+   entirely while the chart is off-screen or the tab is hidden (rAF is paused by
+   the browser then anyway). */
+let _chCoordSig = "";
+function chCoordSig() {
+  if (!CH.main || !CH.candle) return "";
+  const lr = CH.main.timeScale().getVisibleLogicalRange();
+  if (!lr) return "";
+  // vertical component: the pixel of a stable reference price encodes the
+  // price scale's current zoom + offset, so a purely-vertical move changes it.
+  const ref = CH.data?.candles?.length ? CH.data.candles[CH.data.candles.length - 1].close : 100;
+  const y = CH.candle.priceToCoordinate(ref);
+  return `${lr.from.toFixed(3)},${lr.to.toFixed(3)},${y == null ? "n" : y.toFixed(1)}`;
+}
+function chOverlayLoop() {
+  // Guarded: this runs every animation frame, so a single throw from a transient
+  // bad state (e.g. a coordinate op during a mid-switch instant) must never kill
+  // the loop — that would freeze all future overlay redraws (V3.3.1 hardening).
+  try {
+    if (CH.main && chOnScreen() && !document.hidden) {
+      const sig = chCoordSig();
+      if (sig && sig !== _chCoordSig) { _chCoordSig = sig; chDrawRender(); }
+    }
+  } catch (e) {
+    console.error("overlay sync loop error (recovered):", e);
+  }
+  requestAnimationFrame(chOverlayLoop);
+}
+requestAnimationFrame(chOverlayLoop);
 
 const chSeriesData = name => {
   const vals = CH.data.indicators[name];
@@ -2655,7 +3000,31 @@ function chDrawRender() {
   const { ctx, w, h } = chDrawCtx();
   chSessionBands(ctx, w, h);   // behind the drawings; only when ext-hours shown
   for (const it of chDrawVisible()) chDrawOne(ctx, it, w, it.id === DRAW.sel);
+  chDrawPreview(ctx, w);       // in-progress (not-yet-committed) drawing
   chDrawBar();
+}
+/* Live creation preview (V3.3 Issue 5): the moment the first anchor is placed,
+   show it, and rubber-band the second endpoint to the cursor as it moves — like
+   TradingView — instead of showing nothing until the second click. Purely
+   visual: built from CH.pendingPoint + CH.previewPt, never added to DRAW.items,
+   never hit-tested, never persisted. hline/note commit on the first click so
+   they have no two-point preview (the anchor dot still flashes for feedback). */
+function chDrawPreview(ctx, w) {
+  const tool = CH.tool, a = CH.pendingPoint;
+  if (!tool || !a) return;
+  const b = CH.previewPt || a;
+  const color = DRAW_DEFAULT_COLOR[tool] || CH_COLORS.trend;
+  const preview = { type: tool, points: [{ ...a }, { ...b }],
+                    color, width: 1, _preview: true };
+  ctx.save();
+  ctx.globalAlpha = 0.9;
+  // two-point tools render their shape; single-point tools just anchor
+  if (tool === "trend" || tool === "ray" || tool === "rect" || tool === "fib")
+    chDrawOne(ctx, preview, w, false);
+  // always mark the placed first anchor so the user sees the click registered
+  const ax = chX(a.time), ay = chY(a.price);
+  if (ax != null && ay != null) chHandle(ctx, ax, ay);
+  ctx.restore();
 }
 /* Extended-hours session shading: subtle translucent bands over pre-market and
    after-hours candle runs, so the sessions are visually distinct (TradingView-
@@ -2832,6 +3201,18 @@ function chPointerDown(e) {
   e.stopPropagation(); e.preventDefault();
 }
 function chPointerMove(e) {
+  // Rubber-band the in-progress drawing to the cursor after the first anchor is
+  // placed (Issue 5). Runs only while a two-point tool is armed and awaiting its
+  // second click; does not interfere with dragging an existing drawing below.
+  if (CH.tool && CH.pendingPoint && !chDrag) {
+    const { x, y } = chLocal(e);
+    const price = chPriceAt(y), time = chTimeAt(x);
+    if (price != null && time != null) {
+      CH.previewPt = { time, price: +price.toFixed(4) };
+      chDrawRender();
+    }
+    return;
+  }
   if (!chDrag) return;
   const { x, y } = chLocal(e);
   const it = DRAW.items.find(i => i.id === chDrag.id);
@@ -2880,11 +3261,17 @@ function chToolClick(x, y) {
     CH.pendingNote = { time, price: +price.toFixed(4) };
     const inp = $("ch-note-text"); inp.style.display = ""; inp.value = ""; inp.focus(); return;
   }
-  if (!CH.pendingPoint) { CH.pendingPoint = { time, price: +price.toFixed(4) }; return; }
+  if (!CH.pendingPoint) {
+    // first click: anchor the drawing and show it immediately (Issue 5)
+    CH.pendingPoint = { time, price: +price.toFixed(4) };
+    CH.previewPt = { ...CH.pendingPoint };
+    chDrawRender();
+    return;
+  }
   if (time === CH.pendingPoint.time && Math.abs(price - CH.pendingPoint.price) < 1e-9) return;
   chAddItem(CH.tool, CH.tf,
     [{ ...CH.pendingPoint }, { time, price: +price.toFixed(4) }]);
-  CH.pendingPoint = null; chSetTool(null);
+  CH.pendingPoint = null; CH.previewPt = null; chSetTool(null);
 }
 function chAddItem(type, tf, points, text = "") {
   // Thin wrapper kept for the existing tool call sites: every drawing is
@@ -2948,11 +3335,12 @@ function chCancelNote() {
 }
 
 function chSetTool(tool) {
-  CH.tool = tool; CH.pendingPoint = null;
+  CH.tool = tool; CH.pendingPoint = null; CH.previewPt = null;
   if (tool !== "note") { CH.pendingNote = null; $("ch-note-text").style.display = "none"; }
   document.querySelectorAll("#ch-tools button").forEach(b =>
     b.classList.toggle("active", b.dataset.tool === tool));
   $("ch-main").style.cursor = tool ? "crosshair" : "";
+  if (CH.main) chDrawRender();   // wipe any half-drawn preview when a tool is (dis)armed
 }
 function chClearDrawings() {
   DRAW.items = []; DRAW.sel = null;
@@ -3070,11 +3458,15 @@ document.addEventListener("keydown", e => {
     e.preventDefault(); chResetView();           // never-stranded rescue: fit all bars
   } else if ((e.key === "l" || e.key === "L") && !e.ctrlKey && !e.metaKey) {
     e.preventDefault(); chGoToLatest();          // jump back to the latest bar
+  } else if ((e.key === "a" || e.key === "A") && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault(); chToggleAutoFollow();
   }
 });
 $("ch-full").onclick = toggleChartFullscreen;
 $("ch-reset").onclick = chResetView;
 $("ch-latest").onclick = chGoToLatest;
+$("ch-follow").onclick = chToggleAutoFollow;
+$("ch-follow").classList.toggle("active", CH.autoFollow);
 $("ch-overlay-retry").onclick = () => loadChart();
 $("ch-stale-retry").onclick = () => loadChart();
 $("ch-trade").onclick = () => {
