@@ -2355,6 +2355,21 @@ const CH_TF_SECONDS = {
   "1w": 604800, "1mo": 2592000,
 };
 const chTfSeconds = () => CH_TF_SECONDS[CH.tf] || 60;
+function chHistoryTrace(event, extra = {}) {
+  if (!window.__chDebugHistory) return;
+  const visibleRange = chViewport();
+  console.info("[chart-history]", {
+    event,
+    timeframe: CH.tf,
+    symbol: CH.sym,
+    generation: CH.gen,
+    historyLoading: CH.historyLoading,
+    historyExhausted: CH.historyExhausted,
+    historyArmed: CH.historyArmed,
+    visibleRange,
+    ...extra,
+  });
+}
 function chCanLoadHistory(range) {
   if (!range || typeof range.from !== "number" || !CH.data) return false;
   if (CH.historyLoading || CH.historyExhausted || !CH.historyArmed) return false;
@@ -2398,6 +2413,10 @@ function chMergeHistory(existing, older) {
     });
     merged.indicators[name] = [...prepend, ...base];
   }
+  chHistoryTrace("history-merged", {
+    returnedBarCount: older.candles.length,
+    mergedBarCount: merged.candles.length,
+  });
   return merged;
 }
 function chHistPill(state) {
@@ -2418,7 +2437,6 @@ async function chLoadHistoryChunk() {
   const last = CH.data.candles[CH.data.candles.length - 1]?.time;
   if (!first || !last) return;
   const key = chKey();
-  const gen = CH.gen;
   const viewport = chViewport();
   const span = Math.max(last - first, chTfSeconds() * CH_HISTORY_BARS);
   const start = new Date((first - span) * 1000).toISOString();
@@ -2430,19 +2448,38 @@ async function chLoadHistoryChunk() {
   // silently disabling all further history loading for the session (V3.3.1).
   const ctl = new AbortController();
   CH.histCtl = ctl;
-  const timer = setTimeout(() => ctl.abort(), CH_FETCH_TIMEOUT_MS);
+  const requestStart = Date.now();
+  chHistoryTrace("history-request-start", {
+    requestStart,
+    requestStartTime: new Date(requestStart).toISOString(),
+    start,
+    end,
+  });
+  const timer = setTimeout(() => {
+    chHistoryTrace("history-request-timeout", { requestTimeout: true });
+    ctl.abort();
+  }, CH_FETCH_TIMEOUT_MS);
   try {
     const r = await fetch(
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
       `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}` +
       (CH.ext ? "&ext=1" : ""), { signal: ctl.signal });
     const d = await r.json();
-    if (gen !== CH.gen || key !== chKey()) return;
+    if (CH.histCtl !== ctl || key !== chKey()) {
+      chHistoryTrace("history-request-cancelled", {
+        requestCancel: true,
+        returnedBarCount: d?.candles?.length ?? 0,
+      });
+      return;
+    }
     if (d.error || !d.candles || !d.candles.length) {
       // a failed history fetch is not proof of exhaustion — leave the flag
       // clear so the next scroll retries; only an all-older-bars-absent
       // merge (below) marks the true start of history.
       if (d.error) console.error("history load failed:", d.error);
+      chHistoryTrace("history-request-empty", {
+        returnedBarCount: d?.candles?.length ?? 0,
+      });
       chHistPill(null);
       return;
     }
@@ -2450,17 +2487,38 @@ async function chLoadHistoryChunk() {
     if (merged.candles.length === CH.data.candles.length) {
       CH.historyExhausted = true;
       chHistPill("end");
+      chHistoryTrace("history-request-end", {
+        requestFinish: Date.now(),
+        returnedBarCount: d.candles.length,
+        mergedBarCount: merged.candles.length,
+      });
       return;
     }
     chRenderData(merged, {key, time: viewport || chViewport()});
     chHistPill(null);
+    chHistoryTrace("history-request-finish", {
+      requestFinish: Date.now(),
+      returnedBarCount: d.candles.length,
+      mergedBarCount: merged.candles.length,
+    });
   } catch (e) {
-    if (gen === CH.gen && key === chKey())
+    if (CH.histCtl === ctl && key === chKey()) {
+      chHistoryTrace("history-request-error", {
+        requestCancel: e?.name === "AbortError",
+        error: e?.message || String(e),
+      });
       console.error("history load failed:", e);
+    }
     chHistPill(null);
   } finally {
     clearTimeout(timer);
-    CH.historyLoading = false;
+    if (CH.histCtl === ctl) {
+      CH.histCtl = null;
+      CH.historyLoading = false;
+      chHistoryTrace("history-request-finalized", {
+        historyLoading: CH.historyLoading,
+      });
+    }
   }
 }
 function chMaybeLoadHistory(range) {
@@ -2494,6 +2552,7 @@ async function loadChart(symbol) {
     : { key, keepLogical: true };
   if (switching) {
     CH.histCtl?.abort();         // a switch invalidates any in-flight history load
+    CH.histCtl = null;
     CH.freshHigh = null;         // stale high-water is per (symbol·tf)
     CH.historyArmed = false;     // history loads on a user SCROLL, never on a
                                  // symbol/timeframe switch — arming carries over
@@ -2501,11 +2560,17 @@ async function loadChart(symbol) {
                                  // switch's setData/focal restore prepend history,
                                  // shifting logical indices and corrupting drawings
                                  // and the viewport (V3.2.1 root cause).
+    CH.historyLoading = false;
+    CH.historyExhausted = false;
+    chHistPill(null);
   }
   const gen = ++CH.gen;
-  CH.historyLoading = false;
-  CH.historyExhausted = false;
-  chHistPill(null);
+  chHistoryTrace("load-chart-start", {
+    switching,
+    firstPaint,
+    tfSwitch,
+    cached: !!cached?.data,
+  });
   // Instant paint from cache ONLY when switching to a cached (symbol·tf) view,
   // so the switch isn't blank while the fresh fetch runs. On a same-view refresh
   // we must NOT re-render the cached BASE window: the live data already on

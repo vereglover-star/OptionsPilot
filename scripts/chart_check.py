@@ -122,6 +122,57 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             wait_loaded("SPY", "1d")
             check(True, "ticker loading (SPY 1D renders)")
 
+            # 1b. same-key refresh must not invalidate an in-flight history
+            #     request (V3.3.5 regression). The history fetch is still valid
+            #     because the chart is still on the same symbol/tf view; only a
+            #     genuine switch should cancel it.
+            page.evaluate("""
+            () => {
+              const makeBars = (start, len, step) => Array.from({length: len}, (_, i) => ({
+                time: start + i * step,
+                open: 100 + i,
+                high: 102 + i,
+                low: 99 + i,
+                close: 101 + i,
+                volume: 1000 + i,
+              }));
+              const origFetch = window.fetch.bind(window);
+              let chartRequests = 0;
+              window.__historyRegressionFetch = async (url, opts) => {
+                const u = new URL(url, window.location.href);
+                const hasRange = u.searchParams.has('start') && u.searchParams.has('end');
+                if (hasRange) {
+                  await new Promise(r => setTimeout(r, 120));
+                  return new Response(JSON.stringify({
+                    symbol: 'SPY', timeframe: '5m', candles: makeBars(1700000000, 8, 60),
+                    indicators: {}, stale: false, market_open: true,
+                  }), {status: 200, headers: {'Content-Type': 'application/json'}});
+                }
+                chartRequests += 1;
+                const payload = {
+                  symbol: 'SPY', timeframe: '5m',
+                  candles: makeBars(1700000000 + 480, 12, 60),
+                  indicators: {}, stale: false, market_open: true,
+                };
+                return new Response(JSON.stringify(payload), {status: 200, headers: {'Content-Type': 'application/json'}});
+              };
+              window.fetch = (url, opts) => window.__historyRegressionFetch(url, opts);
+              window.__historyRegressionState = { chartRequests };
+            }
+            """)
+            history_regression = page.evaluate("""async () => {
+                CH.sym = 'SPY'; CH.tf = '5m'; CH.historyArmed = true;
+                CH.historyLoading = false; CH.historyExhausted = false;
+                CH.histCtl = null; CH.gen = 0;
+                await loadChart('SPY');
+                const historyPromise = chLoadHistoryChunk();
+                await new Promise(r => setTimeout(r, 20));
+                await loadChart('SPY');
+                await historyPromise;
+                return { bars: CH.data.candles.length, loading: CH.historyLoading };
+            }""")
+            check(history_regression["bars"] > 12, "same-key refresh preserves an in-flight history load")
+
             # 2. invalid ticker -> error overlay + Retry
             page.fill("#ch-symbol", "ZZZZZZ9")
             page.press("#ch-symbol", "Enter")

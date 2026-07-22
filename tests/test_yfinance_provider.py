@@ -108,3 +108,37 @@ def test_symbol_alias_resolution_covers_quote_chain_and_metadata(monkeypatch):
     assert len(chain) == 2
     assert {c.right for c in chain} == {OptionRight.CALL, OptionRight.PUT}
     assert _FakeTicker.calls.count("BRK-B") >= 4
+
+
+def test_intraday_history_requests_are_clamped_to_yahoo_window(monkeypatch):
+    class RangeTrackingTicker:
+        calls: list[tuple[datetime, datetime]] = []
+
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            self.__class__.calls.append((kwargs["start"], kwargs["end"]))
+            return _bars()
+
+        @property
+        def fast_info(self):
+            return {"last_price": 100.0, "bid": 99.0, "ask": 101.0}
+
+        @property
+        def options(self):
+            return []
+
+    class RangeTrackingYF:
+        Ticker = RangeTrackingTicker
+
+    monkeypatch.setattr(yfmod, "_yf", lambda: RangeTrackingYF())
+    provider = YFinanceProvider(min_request_interval=0.0)
+    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    start = end - timedelta(days=120)
+
+    df = provider.get_candles("SPY", Timeframe.M15, start, end)
+
+    assert not df.empty
+    assert RangeTrackingTicker.calls[0][0] == end - timedelta(days=60)
+    assert RangeTrackingTicker.calls[0][1] == end

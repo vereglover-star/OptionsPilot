@@ -13,7 +13,7 @@ from __future__ import annotations
 import importlib
 import threading
 import time as _time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
@@ -61,6 +61,28 @@ _FETCH_SPEC: dict[Timeframe, tuple[str, str | None]] = {
     Timeframe.MN1: ("1mo", None),
 }
 
+# Yahoo's free intraday feed has a tighter usable window than the app's
+# broader chart-history window. If we ask for an older range than Yahoo can
+# serve for that interval, the provider returns an empty frame and the chart
+# looks like history simply "stopped" at an arbitrary date. Clamp the request
+# to the first supported start so the app still reaches the earliest bar Yahoo
+# can actually provide for that interval.
+_HISTORY_MAX_DAYS: dict[Timeframe, int | None] = {
+    Timeframe.M1: 7,
+    Timeframe.M2: 7,
+    Timeframe.M3: 7,
+    Timeframe.M5: 60,
+    Timeframe.M10: 60,
+    Timeframe.M15: 60,
+    Timeframe.M30: 60,
+    Timeframe.H1: 730,
+    Timeframe.H2: 730,
+    Timeframe.H4: 730,
+    Timeframe.D1: None,
+    Timeframe.W1: None,
+    Timeframe.MN1: None,
+}
+
 
 def _symbol_candidates(symbol: str) -> list[str]:
     """Best-effort Yahoo symbol variants.
@@ -78,6 +100,17 @@ def _symbol_candidates(symbol: str) -> list[str]:
         variants.append(raw.replace("-", "."))
     # preserve order while dropping duplicates
     return list(dict.fromkeys(v for v in variants if v))
+
+
+def _clamp_history_window(timeframe: Timeframe, start: datetime, end: datetime
+                          ) -> tuple[datetime, datetime]:
+    max_days = _HISTORY_MAX_DAYS.get(timeframe)
+    if max_days is None:
+        return start, end
+    oldest_allowed = end - timedelta(days=max_days)
+    if start < oldest_allowed:
+        return oldest_allowed, end
+    return start, end
 
 
 class YFinanceProvider(MarketDataProvider):
@@ -104,6 +137,11 @@ class YFinanceProvider(MarketDataProvider):
     ) -> pd.DataFrame:
         self._throttle()
         interval, resample_rule = _FETCH_SPEC[timeframe]
+        requested_start = start
+        start, end = _clamp_history_window(timeframe, start, end)
+        if start != requested_start:
+            log.info("history request for %s %s clamped to Yahoo-supported window %s..%s (requested %s..%s)",
+                     symbol, timeframe, start, end, requested_start, end)
         # Pre-/after-market bars come back only when prepost=True, and only for
         # intraday intervals — daily+ bars are RTH aggregates upstream, so the
         # flag is a no-op there. This is display-only: the engine/trading path
@@ -134,6 +172,8 @@ class YFinanceProvider(MarketDataProvider):
             if not raw.empty:
                 break
         if raw.empty:
+            log.warning("history fetch empty %s %s requested %s..%s (clamped %s..%s)",
+                        symbol, timeframe, requested_start, end, start, end)
             return validate_candles(pd.DataFrame())
         df = raw.rename(columns={
             "Open": "open", "High": "high", "Low": "low",
@@ -144,6 +184,10 @@ class YFinanceProvider(MarketDataProvider):
         df = validate_candles(df, context=f"{last_symbol} {timeframe}")
         if resample_rule is not None:
             df = _resample(df, resample_rule)
+        log.debug("provider history %s %s requested %s..%s -> %d bars %s..%s",
+                  symbol, timeframe, requested_start, end, len(df),
+                  df.index[0] if not df.empty else None,
+                  df.index[-1] if not df.empty else None)
         return df
 
     def get_quote(self, symbol: str) -> Quote:
