@@ -3,9 +3,25 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-22, after the **V3.3.1 chart reliability
-investigation** (branch `v3-ui`, pending the merge decision — see "Exact
-stopping point" below). V3.3.1 root-caused the intermittent "switch symbols
+**Last updated:** 2026-07-22, after the **V0.3.5 distribution fix** (branch
+`v3-ui`, pending the merge decision — see "Exact stopping point" below).
+V0.3.5 root-caused the "downloaded release crashes on launch" report: the exe
+worked from the dev machine's `dist\` but a zip → GitHub → download → extract
+copy died with `RuntimeError: Failed to resolve
+Python.Runtime.Loader.Initialize from Python.Runtime.dll` before any app code
+ran. Mechanism (reproduced end-to-end by MOTW-flagging a release copy):
+pywebview's only Windows backend (WinForms → WebView2) needs pythonnet, and
+.NET Framework refuses to load managed assemblies carrying the Mark-of-the-Web
+(`Zone.Identifier` ADS, HRESULT 0x80131515) that Explorer stamps on every file
+extracted from a browser-downloaded zip; clr_loader swallows the exception
+into the opaque "Failed to resolve" error. Local builds carry no flag — hence
+"works here, crashes there". `loadFromRemoteSources` config opt-outs were
+tested and don't reach clr_loader 0.3.1's load path, so the fix strips the
+marker itself: `optionspilot_app.py::unblock_bundle()` (frozen Windows only,
+runs before webview can `import clr`, the programmatic twin of Explorer's
+"Unblock" checkbox). +3 tests in `test_packaging.py` (stream removed across
+the tree; dev interpreter strictly a no-op; entry point provably calls the
+gate before `main()`). 0.3.4 → 0.3.5, 392 tests. Before it: V3.3.1 root-caused the intermittent "switch symbols
 enough → chart loads blank and stays blank until restart": no timeout on the
 chart fetch (a backend throttle backlog / hung upstream left the first-paint
 spinner up forever), superseded fetches never aborted (rapid-switch pile-up on

@@ -23,6 +23,14 @@ is. This file is the flat, actionable checklist version.
 
 ## Deferred by user decision
 
+- [x] **Downloaded release crashed on launch (V0.3.5)** — done 2026-07-22:
+      a GitHub-downloaded, Explorer-extracted release died with
+      "Failed to resolve Python.Runtime.Loader.Initialize" because .NET
+      Framework refuses to load Mark-of-the-Web-flagged managed assemblies
+      (pythonnet's Python.Runtime.dll). Reproduced end-to-end, fixed with
+      `optionspilot_app.py::unblock_bundle()` (self-unblock at startup),
+      +3 regression tests, verified against a MOTW-flagged release copy.
+
 - [x] **Rebuild and smoke-test the exe** — done 2026-07-18 as part of the
       yfinance packaging fix: rebuilt with `--collect-all yfinance`,
       packaged selftest gate PASS, then verified live from the packaged

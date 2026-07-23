@@ -4,6 +4,54 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-22 — V0.3.5: distribution fix (downloaded release crashed on launch)
+
+*Version 0.3.4 → 0.3.5. 392 tests (+3 in `test_packaging.py`; the previously
+recorded 388 was one short of the actual suite). A packaging/runtime investigation, no
+feature changes: the exe ran fine from the dev machine's `dist\` folder but,
+after being zipped, uploaded to GitHub, downloaded, and extracted elsewhere, it
+crashed on launch with `RuntimeError: Failed to resolve
+Python.Runtime.Loader.Initialize from Python.Runtime.dll` before any
+OptionsPilot code ran.*
+
+**Root cause (reproduced, not guessed):** pywebview's only Windows backend is
+WinForms (`webview.platforms.winforms`), which drives WebView2 through
+pythonnet — `import clr` hosts the .NET Framework CLR via `clr_loader` and
+loads `pythonnet/runtime/Python.Runtime.dll` as a managed assembly. Files
+downloaded by a browser and extracted with Explorer all carry the Mark-of-the-
+Web (`Zone.Identifier` ADS, ZoneId=3), and **.NET Framework refuses to load a
+managed assembly flagged as coming from the internet**
+(`NotSupportedException`, HRESULT 0x80131515). clr_loader's native host
+swallows that exception and returns NULL, surfacing as the opaque "Failed to
+resolve" error. Locally built files carry no zone marker, which is why every
+dev-side launch — including from `dist\` — worked. Reproduced end-to-end by
+flagging a copy of the release exactly as Explorer extraction does: identical
+traceback, byte-for-byte. Isolated mechanism test: MOTW on `Python.Runtime.dll`
+alone → the exact error; clean copy → resolves. The documented
+`loadFromRemoteSources` config opt-outs were tested (named AppDomain + config
+file, host-exe `.config`) and do **not** reach clr_loader 0.3.1's load path, so
+the marker itself has to go.
+
+**Fix:** `optionspilot_app.py` gained `unblock_bundle()` — at startup (frozen
+Windows builds only, before pywebview can `import clr`) it walks the install
+folder and deletes each file's `Zone.Identifier` stream, which is precisely
+what Explorer's "Unblock" checkbox does. First launch self-unblocks; later
+launches are a no-op. Dev interpreters never touch anything, and unwritable
+files are skipped (no worse than before). Tests (`TestUnblockBundle` in
+`tests/test_packaging.py`): the stream is removed across the bundle tree, the
+dev interpreter is a strict no-op, and the entry point actually calls the gate
+before `main()` (a gate that exists but is never called protects nothing —
+CLAUDE.md "Known traps"). Verified by rebuilding, MOTW-flagging every file of a
+copy outside the repo, and launching: the desktop window opens.
+
+**Also repaired in passing:** the V3.3.2/V3.3.5 "same-key refresh preserves an
+in-flight history load" chart check stubbed `window.fetch` and never restored
+it (`origFetch` was captured but unused), so every later check ran against the
+stub's fake SPY payload — the very next check ("invalid ticker shows error
+overlay") failed on every run because ZZZZZZ9 "loaded" fake candles instead of
+erroring. The stub is now removed right after its check, and the suite runs
+green again.
+
 ## [Uncommitted] 2026-07-22 — V3.3.1: chart reliability investigation (blank-chart root cause)
 
 *Version 0.3.3 → 0.3.4. 388 tests (+1 backend), chart_check 41 → 44. A pure

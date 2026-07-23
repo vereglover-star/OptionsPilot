@@ -5,16 +5,36 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-22, end of the V3.3.1 chart reliability
+**Last updated:** 2026-07-22, end of the V0.3.5 distribution/packaging
 investigation.
 
-## What was completed most recently? (V3.3.1 — chart reliability investigation)
+## What was completed most recently? (V0.3.5 — downloaded release crashed on launch)
+
+The exe worked from the dev machine's `dist\` folder but crashed on another
+machine (or any re-downloaded copy) with `RuntimeError: Failed to resolve
+Python.Runtime.Loader.Initialize from Python.Runtime.dll` before any app code
+ran. Root cause (reproduced end-to-end, not guessed): pywebview's only Windows
+backend is WinForms, which drives WebView2 through pythonnet (`import clr`),
+and a browser-downloaded zip extracted with Explorer flags every file with the
+Mark-of-the-Web (`Zone.Identifier` ADS) — **.NET Framework refuses to load a
+MOTW-flagged managed assembly** (HRESULT 0x80131515); clr_loader swallows the
+exception into the opaque "Failed to resolve" error. Locally built files carry
+no flag, which is why every dev-side launch worked. `loadFromRemoteSources`
+config opt-outs were tested and do NOT reach clr_loader 0.3.1's load path.
+Fix: `optionspilot_app.py::unblock_bundle()` deletes the `Zone.Identifier`
+stream from the app's own files at startup (frozen Windows only, before
+webview loads clr) — programmatically identical to Explorer's "Unblock".
+Tests: `TestUnblockBundle` (+3, in `tests/test_packaging.py`). Version
+0.3.4 → 0.3.5, 392 tests. Verified by MOTW-flagging a full release copy
+outside the repo and launching: the desktop window opens.
+
+## What was completed before that? (V3.3.1 — chart reliability investigation)
 
 A pure root-cause investigation (NO new features) of the intermittent
 "switch symbols enough times → a chart loads blank and stays blank until
 restart." The lifecycle was instrumented and the failure reproduced under
 load + fault injection before any code changed. Version 0.3.3 → 0.3.4.
-chart_check 41 → 44. 388 tests.
+chart_check 41 → 44. 388-test suite (recount: 389).
 
 **Root causes (all lifecycle/resource, not rendering):**
 1. **No timeout on the chart fetch → permanent blank.** yfinance serializes
@@ -172,7 +192,7 @@ disarming history on a switch. Tests now assert real coordinates/viewport.
 ## What was completed before that? (V3.2 — chart completion + Extended Hours)
 
 The final evolution of the chart subsystem, on branch **`v3-ui`** (still not
-merged). Version bumped **0.1.0 → 0.3.0**. **388 tests**, chart_check **31**,
+merged). Version bumped **0.1.0 → 0.3.0**. a **388-test suite**, chart_check **31**,
 `verify.ps1` green; the exe was rebuilt and driven by hand.
 
 1. **Timeframe-independent drawing engine (PARTS 1/2/5).** Drawings vanished on

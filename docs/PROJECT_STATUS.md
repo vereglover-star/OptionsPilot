@@ -16,7 +16,7 @@ chart regression suite, all green — plus a 250-switch stress run with 0 blanks
 
 ## Current version
 
-`0.3.4` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
+`0.3.5` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
 at the V3.2 milestone (the footer reads it from `/api/status`). No public
 release process yet; the packaged artifact is a Windows desktop exe built on
 demand via `scripts/build_exe.ps1`, not versioned/released independently of
@@ -24,8 +24,21 @@ the git history.
 
 ## Current phase
 
-**V3.3.1 chart reliability investigation, on branch `v3-ui` — awaiting user
-approval/merge.** A pure root-cause investigation (no new features) of the
+**V0.3.5 distribution fix, on branch `v3-ui` — awaiting user approval/merge.**
+The packaged exe crashed after zip → GitHub → download → extract with
+`RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize` (pywebview →
+pythonnet → clr_loader). Root cause reproduced end-to-end: Explorer extraction
+of a browser-downloaded zip leaves the Mark-of-the-Web (`Zone.Identifier` ADS)
+on every file, and .NET Framework refuses to load MOTW-flagged managed
+assemblies (HRESULT 0x80131515) — `Python.Runtime.dll` is the first casualty,
+before any OptionsPilot code runs. Local builds carry no flag, which is why the
+dev-side exe always worked. Fix: `optionspilot_app.py::unblock_bundle()` strips
+the stream from the app's own files at startup (frozen Windows builds only,
+before webview loads clr) — the programmatic equivalent of Explorer's
+"Unblock". +3 tests (`TestUnblockBundle`); verified by MOTW-flagging a full
+release copy outside the repo and launching to a working desktop window.
+
+**Before that: V3.3.1 chart reliability investigation.** A pure root-cause investigation (no new features) of the
 intermittent "switch symbols enough times → a chart loads blank and stays blank
 until restart." Instrumented the lifecycle, reproduced under load + fault
 injection, and traced each cause to a concrete mechanism: **no timeout on the
@@ -123,11 +136,11 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376-test suite green |
 | V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376-test suite green |
 | V3.2 — Drawing engine + Ray (PARTS 1/2/5) | Timeframe-INDEPENDENT drawing model (visibility policy, `createdTf`, `source`, `meta`; v1/v2→v3 migration so old drawings stop vanishing on a tf switch); one `chAddDrawing` API for user/AI/replay; TradingView-style **Ray** tool (two-click, infinite one-way extension) reusing the existing edit machinery | `62cbcb4`, browser-verified, chart_check 9b |
-| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 388 tests green |
-| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 388 tests green |
-| V3.2.2 — Viewport ownership unification + Auto Follow | Single `chMoveViewport` controller for every programmatic move; history-arming race fixed (arm off the range-change subscription); deeper root cause found — the subscription fires on a later animation frame, so the guard-reset needed deferring, not just re-timing the arm; new Auto Follow toggle (OFF default, persisted, disabled by manual pan, re-enabled by Latest); `scrollToRealTime()`'s multi-frame animation replaced with a non-animated `chScrollToLatest()` | 0.3.2, 36/36 browser + 388 tests green |
-| V3.3 — Chart stabilization & market validation | Live-verified during trading hours. Adaptive refresh cadence (~7s intraday, forming candle no longer updates in 30s chunks); America/New_York x-axis/crosshair/timer (labels formatted via Intl, timestamps unchanged); candle countdown timer; drawing creation preview (rubber-band); overlay rAF sync loop (drawings track vertical price-axis moves, no snap); **root cause** — periodic refresh merged (`chMergeRefresh`) instead of replacing, so paged-in history + viewport survive a refresh. yfinance limits documented (no streaming; forming bar V=0 until close). Candle correctness matches yfinance bar-for-bar | 0.3.3, 41/41 browser + 388 tests green |
-| V3.3.1 — Chart reliability investigation | Root-caused the intermittent "blank until restart": **no fetch timeout** (backend throttle backlog / hung upstream left the first-paint spinner up forever) → bounded `AbortController` (timeout → recoverable error, not permanent spinner); **superseded fetches not aborted** (rapid-switch pile-up starved the wanted symbol) → abort-on-switch; backend `yfinance.history()` `REQUEST_TIMEOUT`; hung history left `historyLoading` stuck → timeout; uncaught "Value is null" on non-monotonic data → `chEnsureMonotonic` + guarded rAF loop; unbounded `_mem` → `MEM_CACHE_MAX`. No new features | 0.3.4, 44/44 browser + 388 tests green |
+| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 388-test suite green |
+| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 388-test suite green |
+| V3.2.2 — Viewport ownership unification + Auto Follow | Single `chMoveViewport` controller for every programmatic move; history-arming race fixed (arm off the range-change subscription); deeper root cause found — the subscription fires on a later animation frame, so the guard-reset needed deferring, not just re-timing the arm; new Auto Follow toggle (OFF default, persisted, disabled by manual pan, re-enabled by Latest); `scrollToRealTime()`'s multi-frame animation replaced with a non-animated `chScrollToLatest()` | 0.3.2, 36/36 browser + 388-test suite green |
+| V3.3 — Chart stabilization & market validation | Live-verified during trading hours. Adaptive refresh cadence (~7s intraday, forming candle no longer updates in 30s chunks); America/New_York x-axis/crosshair/timer (labels formatted via Intl, timestamps unchanged); candle countdown timer; drawing creation preview (rubber-band); overlay rAF sync loop (drawings track vertical price-axis moves, no snap); **root cause** — periodic refresh merged (`chMergeRefresh`) instead of replacing, so paged-in history + viewport survive a refresh. yfinance limits documented (no streaming; forming bar V=0 until close). Candle correctness matches yfinance bar-for-bar | 0.3.3, 41/41 browser + 388-test suite green |
+| V3.3.1 — Chart reliability investigation | Root-caused the intermittent "blank until restart": **no fetch timeout** (backend throttle backlog / hung upstream left the first-paint spinner up forever) → bounded `AbortController` (timeout → recoverable error, not permanent spinner); **superseded fetches not aborted** (rapid-switch pile-up starved the wanted symbol) → abort-on-switch; backend `yfinance.history()` `REQUEST_TIMEOUT`; hung history left `historyLoading` stuck → timeout; uncaught "Value is null" on non-monotonic data → `chEnsureMonotonic` + guarded rAF loop; unbounded `_mem` → `MEM_CACHE_MAX`. No new features | 0.3.4, 44/44 browser + 388-test suite green |
 
 ## Features complete
 
@@ -201,7 +214,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**388 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**392 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and
@@ -212,7 +225,7 @@ browser checks are still focused regressions, not exhaustive UI coverage
 ## Last verified date
 
 **2026-07-22** (V3.3.1 chart reliability investigation) —
-`.\scripts\verify.ps1` end to end: full pytest run (388/388), static
+`.\scripts\verify.ps1` end to end: full pytest run (392/392), static
 `$("id")` reference check, documentation consistency check, `pip check`, a
 headless-browser smoke check across all 9 tabs (Playwright + system Edge)
 with zero console errors, and the 44-check chart regression suite

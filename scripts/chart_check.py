@@ -157,6 +157,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                 return new Response(JSON.stringify(payload), {status: 200, headers: {'Content-Type': 'application/json'}});
               };
               window.fetch = (url, opts) => window.__historyRegressionFetch(url, opts);
+              window.__origFetch = origFetch;   // restored after this check
               window.__historyRegressionState = { chartRequests };
             }
             """)
@@ -172,6 +173,18 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                 return { bars: CH.data.candles.length, loading: CH.historyLoading };
             }""")
             check(history_regression["bars"] > 12, "same-key refresh preserves an in-flight history load")
+            # Un-stub fetch and restore the pre-check baseline: leaving the stub
+            # in place feeds every later check fake SPY candles (an invalid
+            # ticker would "load" instead of erroring), and the check above also
+            # switched CH.tf to 5m, which the checks below don't expect.
+            page.evaluate("""async () => {
+                window.fetch = window.__origFetch;
+                CH.tf = '1d';
+                document.querySelectorAll('#ch-tfs button').forEach(b =>
+                    b.classList.toggle('active', b.dataset.tf === '1d'));
+                await loadChart('SPY');
+            }""")
+            wait_loaded("SPY", "1d")
 
             # 2. invalid ticker -> error overlay + Retry
             page.fill("#ch-symbol", "ZZZZZZ9")

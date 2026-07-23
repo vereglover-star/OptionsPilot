@@ -381,7 +381,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (388 tests as of this writing, all passing)
+# Tests (392 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -393,6 +393,18 @@ SQLite handles) and backs up/restores `dist\OptionsPilot\data\` around the
 PyInstaller `--clean` wipe. The exe has a single-instance guard
 (`ui/desktop.py`) — a second launch shows a friendly "already running"
 window instead of corrupting the shared account database.
+
+**Distribution (V0.3.5):** a release zip downloaded from GitHub and extracted
+with Explorer stamps every file with the Mark-of-the-Web (`Zone.Identifier`
+ADS), and .NET Framework refuses to load MOTW-flagged managed assemblies —
+pywebview's WinForms backend then dies inside pythonnet with "Failed to
+resolve Python.Runtime.Loader.Initialize" before the window opens.
+`optionspilot_app.py::unblock_bundle()` strips the stream from the install
+folder at startup (frozen Windows builds only, before webview can `import
+clr`), so a downloaded release self-heals on first launch. Guarded by
+`TestUnblockBundle` in `tests/test_packaging.py`. OS-provided prerequisites
+remain .NET Framework 4.7.2+ and the WebView2 Runtime (both ship with
+Windows 10/11 by default).
 
 ## Assumptions made during development
 
@@ -428,7 +440,7 @@ window instead of corrupting the shared account database.
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (388 tests cover this
+   exercises the FastAPI layer via `TestClient` (392 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression
