@@ -87,7 +87,9 @@ Layered, each layer only depends on layers below it:
 ```
 config/       → layered settings (yaml + env + runtime-mutable overlay)
 core/         → domain models (Candle, OptionContract, Signal, TradePlan,
-                Position, Order, TradeRecord), logging setup
+                Position, Order, TradeRecord), logging setup, and the shared
+                SQLite foundation (core/sqlite.py: connect + PRAGMA user_version
+                migrations, used by every store — V0.4.2)
 data/         → market data provider interface + yfinance implementation,
                 candle cache, symbol directory (12k tickers), preset lists
 analysis/     → PURE FUNCTIONS ONLY, no I/O: indicators, candlestick
@@ -105,6 +107,16 @@ broker/       → PaperBroker (simulator), OrderManager (manual orders),
                 (live-broker stubs)
 journal/      → SQLite trade record store
 learning/     → performance slicing + bounded, auditable weight tuning
+experience/   → the AI's long-term memory (V0.4.0–0.4.1): a rich, expandable,
+                100k-scalable superset of every completed trade
+                (data/experience.db) recorded ALONGSIDE the journal; a
+                deterministic Similarity Engine (find comparable historical
+                trades → win rate / return / failure mode / ADVISORY calibrated
+                confidence); a centralized build_snapshot capturing the full AI
+                decision context at entry (feature-symmetric with manual trades);
+                and the Experience API (recent / similar / statistics). Advisory
+                only — never touches the gate/risk/execution. See
+                docs/ROADMAP-V0.4-EXPERIENCE.md
 backtest/     → event-driven replay through the SAME engine/risk/broker
 coach/        → TradeCoach (deterministic post-trade review) + CoachProfile
                 (aggregated strengths/weaknesses) — NEW in V2-3
@@ -314,6 +326,8 @@ with an inline comment there since 2026-07-16, matching `trading_mode`.
 | POST | `/api/mode` | Switch trading_mode (conservative/high_risk/custom) |
 | POST | `/api/operating_mode` | Switch AI Mode ↔ Human Mode |
 | GET | `/api/coach` | Coach reviews + aggregated profile |
+| GET | `/api/experience` | Experience Engine statistics (overview + by strategy/regime/session + failure modes/success patterns) + recent experiences (V0.4.1) |
+| GET | `/api/experience/similar?symbol=&k=` | Advisory historical-similarity for a symbol's CURRENT setup: the calibrated-confidence explanation + the Similar Trade Viewer rows. Evaluates the symbol deterministically; opens no position and changes no state (V0.4.1) |
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
@@ -325,11 +339,20 @@ cycle-loop thread against API request threads.
 
 ## Database / storage approach
 
-Everything is **SQLite + JSON files**, no external database, no ORM:
+Everything is **SQLite + JSON files**, no external database, no ORM. Every
+SQLite store opens through the shared `core/sqlite.py` foundation (`connect` +
+`run_migrations` on `PRAGMA user_version`), so all five databases evolve their
+schema the same versioned way (V0.4.2 — migration 1 of each store is its current
+schema, so existing on-disk databases open unchanged):
 - `data/paper.db` — account, positions, fills (PaperBroker)
 - `data/cache.db` — candle cache (CachedProvider write-through; safe to delete)
 - `data/orders.db` — working + historical manual orders
 - `data/journal.db` — trade records
+- `data/experience.db` — the Experience Engine store (V0.4.0; schema v2 in
+  V0.4.1): a rich superset of every completed trade, indexed columns (incl.
+  `market_regime`, `return_pct`, `hold_minutes`) + JSON payload, `PRAGMA
+  user_version` migrations; written alongside `journal.db`, safe to delete
+  (regenerated only for new trades — it is not the system of record)
 - `data/settings.json` — runtime-mutable settings (watchlist, modes)
 - `data/state/open_trades.json` — AI trade context (restart-safe journaling)
 - `data/state/manual_trades.json` — manual trade context (V2-3)
@@ -381,7 +404,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (392 tests as of this writing, all passing)
+# Tests (470 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -440,7 +463,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (392 tests cover this
+   exercises the FastAPI layer via `TestClient` (470 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

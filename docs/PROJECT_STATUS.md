@@ -5,26 +5,51 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-22, V3.3.1 chart reliability investigation
-(`.\scripts\verify.ps1` — full test suite, HTML id references, doc
-consistency, `pip check`, a headless-browser smoke check, and the 44-check
-chart regression suite, all green — plus a 250-switch stress run with 0 blanks /
-0 console errors, fault-injection recovery 7/7, and a memory-plateau check; see
-`PROJECT_STATE.md`).
+**Last verified:** 2026-07-23, V0.4.2 architecture audit + three refactors.
+Full 470-test `pytest` suite green (+16), `selftest` PASS, doc checks green.
+`verify.ps1`'s browser/chart checks were unaffected (no frontend change) — the
+last full `verify.ps1` run was 2026-07-22 (V3.3.1). See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.3.5` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.1.0`
-at the V3.2 milestone (the footer reads it from `/api/status`). No public
-release process yet; the packaged artifact is a Windows desktop exe built on
-demand via `scripts/build_exe.ps1`, not versioned/released independently of
-the git history.
+`0.4.2` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.4.1`
+at the V0.4.2 architecture-hardening milestone (the footer reads it from
+`/api/status`). No public release process yet; the packaged artifact is a
+Windows desktop exe built on demand via `scripts/build_exe.ps1`, not
+versioned/released independently of the git history.
 
 ## Current phase
 
-**V0.3.5 distribution fix, on branch `v3-ui` — awaiting user approval/merge.**
+**V0.4.2 architecture audit + three refactors, on branch `v3-ui` — awaiting
+user review.** A read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) found the
+codebase in good health, so only three low-risk, behavior-preserving
+improvements were made, each separately tested: (1) a shared SQLite foundation
+(`core/sqlite.py` — `connect` + `PRAGMA user_version` migrations) adopted by all
+five stores, giving the journal/paper/orders databases the versioned
+schema-evolution the experience store already had; (2) `ui/server.py` import
+cleanup + promoting the private `orchestrator._WINDOW_DAYS` to public
+`WINDOW_DAYS`; (3) executable layering-guard tests (`test_architecture.py`). No
+user-visible behavior changed. 470 tests (+16); `selftest` PASS.
+
+**Before that: V0.4.1 Experience Engine integration (phase 3).** A centralized
+`build_snapshot` captures the full deterministic decision context at AI entry
+(feature-symmetric with coached manual trades), every *tradeable* AI signal
+carries an advisory historical-similarity explanation, and a clean Experience
+API (`/api/experience`, `/api/experience/similar`) exposes recent trades,
+similar-trade lookup, and strategy/regime/session statistics. Storage schema v2
+(indexed `market_regime` + SQL aggregates). Advisory only; nothing touches the
+gate/risk/execution. 454-test suite (+30 at the time). Full design in
+`docs/ROADMAP-V0.4-EXPERIENCE.md`.
+
+**Before that: V0.4.0 Experience Engine (phases 1–2).** The
+`optionspilot/experience/` subsystem — a rich, 100k-scalable `ExperienceStore`
+(`data/experience.db`) recorded alongside the journal, plus the deterministic
+Similarity Engine. The V0.3.5 distribution fix below also remains part of this
+unmerged `v3-ui` branch.
+
+**Before that: V0.3.5 distribution fix, on branch `v3-ui`.**
 The packaged exe crashed after zip → GitHub → download → extract with
 `RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize` (pywebview →
 pythonnet → clr_loader). Root cause reproduced end-to-end: Explorer extraction
@@ -141,6 +166,9 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3.2.2 — Viewport ownership unification + Auto Follow | Single `chMoveViewport` controller for every programmatic move; history-arming race fixed (arm off the range-change subscription); deeper root cause found — the subscription fires on a later animation frame, so the guard-reset needed deferring, not just re-timing the arm; new Auto Follow toggle (OFF default, persisted, disabled by manual pan, re-enabled by Latest); `scrollToRealTime()`'s multi-frame animation replaced with a non-animated `chScrollToLatest()` | 0.3.2, 36/36 browser + 388-test suite green |
 | V3.3 — Chart stabilization & market validation | Live-verified during trading hours. Adaptive refresh cadence (~7s intraday, forming candle no longer updates in 30s chunks); America/New_York x-axis/crosshair/timer (labels formatted via Intl, timestamps unchanged); candle countdown timer; drawing creation preview (rubber-band); overlay rAF sync loop (drawings track vertical price-axis moves, no snap); **root cause** — periodic refresh merged (`chMergeRefresh`) instead of replacing, so paged-in history + viewport survive a refresh. yfinance limits documented (no streaming; forming bar V=0 until close). Candle correctness matches yfinance bar-for-bar | 0.3.3, 41/41 browser + 388-test suite green |
 | V3.3.1 — Chart reliability investigation | Root-caused the intermittent "blank until restart": **no fetch timeout** (backend throttle backlog / hung upstream left the first-paint spinner up forever) → bounded `AbortController` (timeout → recoverable error, not permanent spinner); **superseded fetches not aborted** (rapid-switch pile-up starved the wanted symbol) → abort-on-switch; backend `yfinance.history()` `REQUEST_TIMEOUT`; hung history left `historyLoading` stuck → timeout; uncaught "Value is null" on non-monotonic data → `chEnsureMonotonic` + guarded rAF loop; unbounded `_mem` → `MEM_CACHE_MAX`. No new features | 0.3.4, 44/44 browser + 388-test suite green |
+| V0.4.0 (phases 1–2) — AI Experience Engine | New `optionspilot/experience/` subsystem: rich, expandable, 100k-scalable `ExperienceStore` (`data/experience.db`, indexed columns + JSON payload + `user_version` migrations) recording a `TradeRecord` superset alongside the journal; deterministic `SimilarityEngine` (weighted distance → win rate / return / failure mode / **advisory** calibrated confidence). Calibration advisory-only (deterministic scorer unchanged); exploration deferred to a future orthogonal `learning_mode` axis. Backend-only; best-effort recording never touches the trading path | 0.4.0, 424-test suite green (+32) |
+| V0.4.1 (phase 3) — Experience Engine integration | Centralized `build_snapshot` captures the full AI decision context at entry (feature-symmetric with coached manual trades); advisory historical-similarity explanation on every tradeable signal; Experience API (`recent`/`similar_trades`/`statistics`/strategy·regime·session stats/failure·success patterns) over `GET /api/experience[/similar]`; storage schema v2 (indexed `market_regime` + SQL aggregates). Advisory only — nothing touches gate/risk/execution | 0.4.1, 454-test suite green (+30) |
+| V0.4.2 — architecture audit + refactors | Read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements: shared `core/sqlite.py` foundation (`connect` + `user_version` migrations) adopted by all five stores; `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`; executable layering-guard `test_architecture.py`. No behavior change | 0.4.2, 470-test suite green (+16) |
 
 ## Features complete
 
@@ -214,7 +242,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**392 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**470 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

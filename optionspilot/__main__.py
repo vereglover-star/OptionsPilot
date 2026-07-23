@@ -106,15 +106,15 @@ def cmd_backtest(args) -> int:
     if args.min_confidence is not None:
         cfg = cfg.model_copy(deep=True)
         cfg.engine.min_confidence = args.min_confidence
-    from optionspilot.orchestrator import _WINDOW_DAYS
+    from optionspilot.orchestrator import WINDOW_DAYS
 
     provider = YFinanceProvider()
     end = datetime.now(timezone.utc)
     candles = {}
     for s in {*cfg.engine.entry_timeframes, *cfg.engine.htf_trend_timeframes}:
         tf = Timeframe.from_string(s)
-        days = min(args.days, _WINDOW_DAYS[tf]) if tf is Timeframe.M15 \
-            else _WINDOW_DAYS[tf]
+        days = min(args.days, WINDOW_DAYS[tf]) if tf is Timeframe.M15 \
+            else WINDOW_DAYS[tf]
         candles[tf] = provider.get_candles(
             args.symbol, tf, end - timedelta(days=days), end)
         print(f"  {tf}: {len(candles[tf])} bars")

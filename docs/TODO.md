@@ -5,6 +5,37 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.4.2 architecture audit + three refactors** — done 2026-07-23
+      (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`): shared `core/sqlite.py` foundation
+      (`connect` + `user_version` migrations) adopted by all five stores;
+      `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`;
+      executable layering-guard `test_architecture.py`. Behavior-preserving,
+      +16 tests (470). Optional follow-ups (orchestrator split, `core→config`
+      de-inversion, journal SQL stats) left per the report's judgment-over-churn
+      guidance.
+
+- [x] **V0.4.0 Experience Engine — phases 1–2** — done 2026-07-23:
+      `optionspilot/experience/` (rich 100k-scalable `ExperienceStore` +
+      migrations, deterministic `SimilarityEngine`, advisory calibration),
+      recorded alongside the journal, best-effort. +32 tests (424 total).
+      See `docs/ROADMAP-V0.4-EXPERIENCE.md`.
+- [x] **V0.4.1 — Phase 3: Experience Engine integration** — done 2026-07-23:
+      centralized `build_snapshot` (feature symmetry), advisory
+      historical-similarity explanation on tradeable signals, Experience API
+      (`/api/experience[/similar]`), storage schema v2 (`market_regime` + SQL
+      aggregates). +30 tests (454 total). Advisory only — nothing touches
+      gate/risk/execution.
+- [ ] **V0.4.0 — Phase 4: `learning_mode` axis + Exploration mode.** New
+      orthogonal axis (normal/exploration); tagged, strictly risk-limited
+      lower-confidence paper trades. `ExperienceRecord.exploration` already exists.
+- [ ] **V0.4.0 — Phase 5: AI Performance dashboard.** New tab over
+      `ExperienceEngine.stats()` + slices; backend endpoint first, then
+      single-file frontend (manually browser-verify — no automated UI coverage).
+- [ ] **V0.4.0 — Phase 6: strategy-discovery infrastructure.** Group experiences
+      by shared characteristics for later pattern mining. Infra only.
+- [ ] **Populate MFE/MAE + `risk_multiple`** once intrabar tracking / stop-premium
+      capture exists (fields already modelled; see roadmap doc §10).
+
 - [x] **V3.1 chart-stabilization sprint** — done 2026-07-18 (`61a2c60`…
       `2bcb84a`): per-ticker reliability root-causes fixed, 13 timeframes,
       infinite scroll-back, TradingView-style editable drawing objects,

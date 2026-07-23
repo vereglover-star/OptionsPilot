@@ -26,15 +26,46 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import ValidationError
 
 from optionspilot import __version__
+from optionspilot.analysis import indicators as ind
+from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
+from optionspilot.backtest import Backtester
+from optionspilot.broker.base import BrokerError
+from optionspilot.broker.orders import OrderKind, TIF
+from optionspilot.coach import CoachProfile
 from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
-from optionspilot.core.models import utcnow
+from optionspilot.core.models import OptionRight, Timeframe, utcnow
+from optionspilot.data import sessions
 from optionspilot.data import symbols as symdir
+from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
-from optionspilot.orchestrator import Orchestrator
+from optionspilot.engine.scorer import DEFAULT_WEIGHTS
+from optionspilot.integrations import parse_alert
+from optionspilot.learning import LearningEngine, WeightStore
+from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
 
 log = get_logger("ui")
+
+
+def _experience_dict(rec) -> dict:
+    """Flatten an ExperienceRecord to the fields the Experience/Recent view
+    needs (a stable, JSON-friendly subset — the full record stays in the store)."""
+    return {
+        "trade_id": rec.trade_id,
+        "date": rec.entry_ts.date().isoformat(),
+        "symbol": rec.symbol,
+        "timeframe": rec.timeframe,
+        "direction": rec.direction,
+        "managed_by": rec.managed_by,
+        "outcome": "win" if rec.is_win else "loss",
+        "pnl": rec.pnl,
+        "return_pct": rec.return_pct,
+        "confidence": rec.confidence_entry,
+        "setup_quality": rec.setup_quality,
+        "market_regime": rec.market_regime,
+        "exit_reason": rec.exit_reason,
+    }
 
 ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -234,15 +265,10 @@ class UIServer:
         analysis library the engine trades with (guaranteed visual parity).
         Provider-only — no orchestrator state, so no lock is taken and chart
         loads never contend with a running scan."""
-        from optionspilot.analysis import indicators as ind
-        from optionspilot.core.models import Timeframe
-        from optionspilot.data import sessions
-        from optionspilot.orchestrator import _WINDOW_DAYS
-
         symbol = symbol.upper()
         tf = Timeframe.from_string(timeframe)
         end = end or utcnow()
-        start = start or (end - timedelta(days=_WINDOW_DAYS[tf]))
+        start = start or (end - timedelta(days=WINDOW_DAYS[tf]))
         if end < start:
             start, end = end, start
         # display surface: prefer clearly-flagged stale bars over a blank
@@ -268,7 +294,6 @@ class UIServer:
         # endpoint must stay robust to any that don't — a single non-finite
         # bar otherwise poisons computed indicators (inf VWAP from one inf
         # high) and 500s the response during JSON serialization.
-        from optionspilot.data.base import validate_candles
         df = validate_candles(df, context=f"/api/candles {symbol} {timeframe}")
         # Whether the US market is open right now decides how the frontend reads
         # a stale (disk-fallback) payload: while the market is CLOSED the newest
@@ -336,7 +361,6 @@ class UIServer:
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
     def chain_payload(self, symbol: str, expiration: str = "") -> dict:
-        from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
 
         symbol = symbol.upper()
         with self.lock:
@@ -364,9 +388,6 @@ class UIServer:
                     "expirations": expirations, "chain": rows}
 
     def place_order(self, payload: dict) -> dict:
-        from optionspilot.broker.base import BrokerError
-        from optionspilot.broker.orders import OrderKind, TIF
-        from optionspilot.core.models import OptionRight
 
         kind = OrderKind(str(payload.get("kind", "market")))
         tif = TIF(str(payload.get("tif", "day")))
@@ -620,8 +641,6 @@ class UIServer:
     def _run_backtest(self, symbol: str, days: int,
                       min_confidence: float | None) -> None:
         try:
-            from optionspilot.backtest import Backtester
-            from optionspilot.core.models import Timeframe
 
             cfg = self.cfg.model_copy(deep=True)
             if min_confidence is not None:
@@ -725,8 +744,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.get("/api/learning")
     def learning():
-        from optionspilot.engine.scorer import DEFAULT_WEIGHTS
-        from optionspilot.learning import LearningEngine, WeightStore
 
         with server.lock:
             engine = LearningEngine(server.orch.journal)
@@ -773,7 +790,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/api/orders")
     def orders_place(payload: dict):
-        from optionspilot.broker.base import BrokerError
 
         try:
             return server.place_order(payload)
@@ -782,7 +798,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/api/orders/cancel")
     def orders_cancel(payload: dict):
-        from optionspilot.broker.base import BrokerError
 
         try:
             with server.lock:
@@ -863,7 +878,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.get("/api/coach")
     def coach_view():
-        from optionspilot.coach import CoachProfile
 
         with server.lock:
             reviews = server.orch.coach.load_all()
@@ -872,6 +886,29 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             "profile": CoachProfile(reviews).build(),
             "reviews": reviews[:50],
         }
+
+    @app.get("/api/experience")
+    def experience_view():
+        """Experience Engine statistics + recent trades (advisory memory)."""
+        with server.lock:
+            exp = server.orch.experience
+            return {
+                "statistics": exp.statistics(),
+                "recent": [_experience_dict(r) for r in exp.recent(30)],
+            }
+
+    @app.get("/api/experience/similar")
+    def experience_similar(symbol: str, k: int = 20):
+        """Similar historical trades for a symbol's current setup (advisory —
+        never places or changes a trade)."""
+        with server.lock:
+            try:
+                return server.orch.experience_for_symbol(
+                    symbol.upper(), k=max(1, min(int(k), 100)))
+            except Exception as exc:  # noqa: BLE001
+                log.error("experience/similar failed for %s: %s", symbol, exc)
+                return JSONResponse(
+                    {"error": f"could not evaluate {symbol}"}, status_code=502)
 
     @app.post("/api/risk/reset_halt")
     def reset_halt():
@@ -894,7 +931,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/webhook/tradingview")
     def tradingview(payload: dict):
-        from optionspilot.integrations import parse_alert
 
         icfg = config.integrations
         if not icfg.tradingview_webhook:

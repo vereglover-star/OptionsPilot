@@ -45,11 +45,11 @@ class TestTimeframe:
         # one-line-per-layer change instead of a scattered KeyError hunt.
         from optionspilot.data.cached import CANDLE_TTL
         from optionspilot.data.yfinance_provider import _FETCH_SPEC
-        from optionspilot.orchestrator import _WINDOW_DAYS
+        from optionspilot.orchestrator import WINDOW_DAYS
 
         for tf in Timeframe:
             assert tf in _FETCH_SPEC, f"{tf} missing from _FETCH_SPEC"
-            assert tf in _WINDOW_DAYS, f"{tf} missing from _WINDOW_DAYS"
+            assert tf in WINDOW_DAYS, f"{tf} missing from WINDOW_DAYS"
             assert tf in CANDLE_TTL, f"{tf} missing from CANDLE_TTL"
             assert str(tf), f"{tf} has no label"
 

@@ -6,7 +6,6 @@ backtests never re-download the same bars. Keyed by (symbol, timeframe, ts).
 
 from __future__ import annotations
 
-import sqlite3
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +13,8 @@ from pathlib import Path
 import pandas as pd
 
 from optionspilot.core.models import Timeframe
+from optionspilot.core.sqlite import connect as sqlite_connect
+from optionspilot.core.sqlite import run_migrations
 from optionspilot.data.base import CANDLE_COLUMNS, validate_candles
 
 _SCHEMA = """
@@ -27,6 +28,10 @@ CREATE TABLE IF NOT EXISTS candles (
 ) WITHOUT ROWID;
 """
 
+# migration 1 == the current schema, so an existing cache.db (user_version 0)
+# opens unchanged (the CREATE IF NOT EXISTS is a no-op) and lands at v1.
+_MIGRATIONS = [lambda conn: conn.executescript(_SCHEMA)]
+
 
 class CandleCache:
     """Thread-safe: in the live app, candle fetches run on ThreadPoolExecutor
@@ -38,13 +43,9 @@ class CandleCache:
     A single connection guarded by a lock keeps access serialized."""
 
     def __init__(self, db_path: str | Path):
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute(_SCHEMA)
-            self._conn.commit()
+        self._conn = sqlite_connect(db_path, wal=True)
+        run_migrations(self._conn, _MIGRATIONS, label="cache.db")
 
     def store(self, symbol: str, timeframe: Timeframe, candles: pd.DataFrame) -> int:
         """Upsert candles; returns number of rows written."""

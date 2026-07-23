@@ -41,6 +41,7 @@ from optionspilot.core.models import (
 )
 from optionspilot.data import CachedProvider, MarketDataProvider, YFinanceProvider
 from optionspilot.engine import DecisionEngine
+from optionspilot.experience import ExperienceEngine, build_snapshot
 from optionspilot.journal import TradeJournal
 from optionspilot.learning import WeightStore
 from optionspilot.notify import NotificationCenter, build_notification_center
@@ -55,7 +56,9 @@ MARKET_CLOSE = time(16, 0)
 # History window per timeframe, bounded by what yfinance actually serves
 # (1m ≤ ~7 days back; 2m/5m/15m/30m ≤ 60 days; 1h ≤ 730 days; 1d+ unlimited).
 # 3m resamples from 1m and 10m from 5m, so they inherit those source limits.
-_WINDOW_DAYS = {
+# Public: also read by the /api/candles history window (ui/server.py) and the
+# CLI backtest window (__main__.py). Kept here, its natural owner.
+WINDOW_DAYS = {
     Timeframe.M1: 5, Timeframe.M2: 10, Timeframe.M3: 5,
     Timeframe.M5: 10, Timeframe.M10: 25, Timeframe.M15: 25,
     Timeframe.M30: 40, Timeframe.H1: 60, Timeframe.H2: 90,
@@ -87,6 +90,9 @@ class _TradeMeta:
     entry_commission: float
     conditions: dict[str, str] = field(default_factory=dict)
     exits: list[dict] = field(default_factory=list)
+    # Full centralized decision snapshot at entry (experience/snapshot.py), fed
+    # to the Experience Engine at close for feature-symmetric AI experiences.
+    entry_context: dict = field(default_factory=dict)
 
     def add_exit(self, fill: Fill, reason: str) -> None:
         self.exits.append({
@@ -173,6 +179,7 @@ class Orchestrator:
         )
         self.journal = journal or TradeJournal(data_dir / "journal.db")
         self.notifier = notifier or build_notification_center(config.notify)
+        self.experience = ExperienceEngine(data_dir / "experience.db")
         if learned_weights is None:
             learned_weights = WeightStore(data_dir / "learning" / "weights.json").current()
         self.engine = DecisionEngine(config, learned_weights)
@@ -337,7 +344,7 @@ class Orchestrator:
         end = utcnow()
         try:
             return self.provider.get_candles(
-                symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end
+                symbol, tf, end - timedelta(days=WINDOW_DAYS[tf]), end
             )
         except Exception as exc:  # noqa: BLE001
             log.error("candle fetch failed %s %s: %s", symbol, tf, exc)
@@ -395,6 +402,11 @@ class Orchestrator:
         if meta is not None:
             record = meta.to_record()
             self.journal.record(record)
+            # Record the richer experience alongside the journal (best-effort;
+            # ExperienceEngine.record_trade never raises). The AI entry snapshot
+            # gives the experience feature parity with a coached manual trade.
+            self.experience.record_trade(
+                record, entry_context=meta.entry_context or None)
             self.risk.record_closed_trade(record.exit_ts, record.pnl)
             summary["closed"].append({"symbol": symbol, "pnl": record.pnl})
             self.notifier.notify(
@@ -532,52 +544,24 @@ class Orchestrator:
                               symbol, exc)
 
     def _capture_context(self, position: Position, candles) -> dict | None:
-        """Analysis snapshot for the coach: the engine's read plus contract
-        health, sampled on the scan cycle nearest the moment of interest."""
+        """Analysis snapshot for the coach AND the Experience Engine, built by
+        the one centralized snapshot builder so manual trades gain the same
+        rich feature set as AI trades (feature symmetry). Best-effort."""
         try:
             underlying = position.contract.underlying
             symbol_candles = candles.get(underlying) or self._fetch_candles(underlying)
             decision = self.engine.evaluate(underlying, symbol_candles)
             spot = self.provider.get_quote(underlying).last
-            view = decision.entry_view
             live = self._lookup_contract(position)
             contract = live or position.contract
             if contract.delta == 0.0 and spot > 0:
                 from optionspilot.analysis.options_metrics import enrich_greeks
                 contract = enrich_greeks(contract, spot, utcnow().date())
-            htf = next(
-                (v.trend.value for tf, v in decision.views.items()
-                 if view is None or tf.minutes > view.timeframe.minutes),
-                "unknown",
+            return build_snapshot(
+                decision, spot=spot, contract=contract,
+                operating_mode=self.cfg.engine.operating_mode,
+                trading_mode=self.cfg.engine.trading_mode,
             )
-            now_et = utcnow().astimezone(ET)
-            return {
-                "captured_ts": utcnow().isoformat(),
-                "spot": spot,
-                "confidence": decision.signal.confidence if decision.signal else 0.0,
-                "direction": (decision.signal.direction.value
-                              if decision.signal else "unknown"),
-                "gate": decision.gate.to_dict() if decision.gate else {},
-                "htf_trend": htf,
-                "entry_tf": ({
-                    "rsi": None if view.rsi != view.rsi else round(view.rsi, 1),
-                    "adx": None if view.adx != view.adx else round(view.adx, 1),
-                    "rvol": None if view.rvol != view.rvol else round(view.rvol, 2),
-                    "pressure": (None if view.pressure != view.pressure
-                                 else round(view.pressure, 2)),
-                    "trend": view.trend.value,
-                    "consolidating": view.consolidating,
-                } if view is not None else {}),
-                "contract": {
-                    "dte": contract.dte(utcnow().date()),
-                    "delta": contract.delta,
-                    "iv": contract.implied_volatility,
-                    "spread_pct": (contract.spread_pct
-                                   if contract.mid > 0 else None),
-                },
-                "hour_et": now_et.hour,
-                "minute_et": now_et.minute,
-            }
         except Exception as exc:  # noqa: BLE001 — context is best-effort
             log.error("context capture failed for %s: %s",
                       position.contract.symbol, exc)
@@ -621,10 +605,11 @@ class Orchestrator:
         loss_minutes = ((entry_ts - last_loss.exit_ts).total_seconds() / 60
                         if last_loss is not None else None)
 
+        exit_context = self._capture_context_for_symbol(underlying, candles)
         review = self.coach.review(
             trade,
             entry_context=entry_context,
-            exit_context=self._capture_context_for_symbol(underlying, candles),
+            exit_context=exit_context,
             orders=self.orders.orders_for(symbol),
             recent_loss_minutes_before_entry=loss_minutes,
             equity_at_entry=meta.get("equity_at_entry", 0.0),
@@ -634,6 +619,11 @@ class Orchestrator:
         trade.market_conditions["coach_score"] = str(review.score)
         trade.market_conditions["setup_quality"] = review.setup_quality
         self.journal.record(trade)
+        # Manual trades carry the richer entry/exit analysis context — feed it
+        # to the experience store for higher-fidelity similarity features.
+        self.experience.record_trade(
+            trade, entry_context=entry_context, exit_context=exit_context,
+        )
         self.risk.record_closed_trade(exit_ts, trade.pnl)
         summary["closed"].append({"symbol": symbol, "pnl": trade.pnl,
                                   "coach_score": review.score})
@@ -717,7 +707,7 @@ class Orchestrator:
                 summary["skipped"][symbol] = (
                     "Human Mode: the AI would take this trade — it's yours "
                     "if you want it (Trade tab)")
-                self._advise_human(symbol, decision)
+                self._advise_human(symbol, decision, summary)
             return
         if not decision.tradeable:
             if decision.gate is not None:
@@ -735,9 +725,13 @@ class Orchestrator:
         if not approval.approved:
             summary["skipped"][symbol] = f"risk veto: {approval.veto}"
             return
+        snapshot = self._ai_snapshot(decision, spot=spot, plan=plan)
         fill = self.broker.open_position(plan, approval.quantity, now)
         self.risk.record_entry(now)
-        self._register_meta(plan, approval.quantity, fill, decision.gate)
+        self._register_meta(plan, approval.quantity, fill, decision.gate, snapshot)
+        # Advisory historical context — surfaced for explanation, never used in
+        # the decision above (which has already been made deterministically).
+        self._attach_historical(symbol, snapshot, decision, summary)
         summary["opened"].append({
             "symbol": symbol, "contract": plan.contract.symbol,
             "quantity": approval.quantity, "confidence": decision.signal.confidence,
@@ -751,24 +745,104 @@ class Orchestrator:
             f"| RR {plan.risk_reward}\n" + "\n".join(plan.signal.reasons[:6]),
         )
 
-    def _advise_human(self, symbol: str, decision) -> None:
+    def _advise_human(self, symbol: str, decision, summary=None) -> None:
         """In Human Mode a tradeable signal becomes advice, never an order.
         Notify once per symbol per bar so it doesn't spam every cycle."""
         bar_id = decision.entry_view.ts.isoformat() if decision.entry_view else ""
         if self._last_advice.get(symbol) == bar_id:
             return
         self._last_advice[symbol] = bar_id
+        snapshot = self._ai_snapshot(decision)
+        result = self._attach_historical(symbol, snapshot, decision, summary)
+        hist_line = ""
+        if result is not None and result.has_evidence:
+            hist_line = "\n" + result.explain(decision.signal.confidence)
         self.notifier.notify(
             "trade_opened",
             f"AI signal (advice only): {symbol} "
             f"{decision.signal.direction.value} "
             f"{decision.signal.confidence:.0f}%",
             "Human Mode is on — the AI will not trade this.\n"
-            + "\n".join(decision.signal.reasons[:5]),
+            + "\n".join(decision.signal.reasons[:5]) + hist_line,
         )
 
+    # ── advisory historical context (Experience Engine — never affects trades) ─
+
+    def _ai_snapshot(self, decision, spot=None, plan=None) -> dict:
+        """Build the centralized AI decision snapshot (best-effort)."""
+        try:
+            return build_snapshot(
+                decision, spot=spot, plan=plan,
+                operating_mode=self.cfg.engine.operating_mode,
+                trading_mode=self.cfg.engine.trading_mode,
+            )
+        except Exception as exc:  # noqa: BLE001 — advisory, must never break scan
+            log.error("snapshot build failed for %s: %s",
+                      getattr(getattr(decision, "signal", None), "symbol", "?"), exc)
+            return {}
+
+    def _attach_historical(self, symbol, snapshot, decision, summary):
+        """Attach advisory historical-similarity evidence to a tradeable signal.
+        Purely advisory: it is computed AFTER the deterministic decision and
+        never feeds back into it. Best-effort — a failure never breaks the scan."""
+        try:
+            result = self.experience.explain_setup(snapshot)
+        except Exception as exc:  # noqa: BLE001
+            log.error("historical context failed for %s: %s", symbol, exc)
+            return None
+        if summary is not None:
+            conf = decision.signal.confidence if decision.signal else 0.0
+            summary.setdefault("signals", {}).setdefault(symbol, {})["historical"] = {
+                "n_similar": result.n_similar,
+                "win_rate": result.win_rate,
+                "avg_return_pct": result.avg_return_pct,
+                "avg_hold_minutes": result.avg_hold_minutes,
+                "calibrated_confidence": result.calibrated_confidence,
+                "common_successes": result.common_successes,
+                "common_failures": result.common_failures,
+                "explanation": result.explain(conf),
+            }
+        return result
+
+    def experience_for_symbol(self, symbol: str, *, k: int = 20,
+                              min_similarity: float = 0.3) -> dict:
+        """Advisory historical context for a symbol's CURRENT setup — the Similar
+        Trade Viewer's backing data. Evaluates the symbol deterministically and
+        looks up comparable historical experiences. Purely advisory: it opens no
+        position and changes no decision. The UI server calls this under its lock."""
+        candles = self._fetch_candles(symbol)
+        decision = self.engine.evaluate(symbol, candles)
+        snapshot = self._ai_snapshot(decision)
+        result = self.experience.explain_setup(
+            snapshot, k=k, min_similarity=min_similarity)
+        similar = self.experience.similar_to_snapshot(
+            snapshot, k=k, min_similarity=min_similarity)
+        signal = decision.signal
+        conf = signal.confidence if signal else 0.0
+        return {
+            "symbol": symbol,
+            "has_signal": signal is not None,
+            "direction": signal.direction.value if signal else None,
+            "deterministic_score": conf if signal else None,
+            "tradeable": decision.tradeable,
+            "reasoning": snapshot.get("reasoning", ""),
+            "historical": {
+                "n_similar": result.n_similar,
+                "win_rate": result.win_rate,
+                "avg_return_pct": result.avg_return_pct,
+                "avg_hold_minutes": result.avg_hold_minutes,
+                "avg_pnl": result.avg_pnl,
+                "calibrated_confidence": result.calibrated_confidence,
+                "most_common_exit": result.most_common_exit,
+                "common_successes": result.common_successes,
+                "common_failures": result.common_failures,
+                "explanation": result.explain(conf),
+            },
+            "similar_trades": [t.to_dict() for t in similar],
+        }
+
     def _register_meta(self, plan: TradePlan, quantity: int, fill: Fill,
-                       gate=None) -> None:
+                       gate=None, entry_context: dict | None = None) -> None:
         signal = plan.signal
         gate_conditions = {}
         if gate is not None:
@@ -796,6 +870,7 @@ class Orchestrator:
                 "risk_reward": f"{plan.risk_reward:.2f}",
                 **gate_conditions,
             },
+            entry_context=entry_context or {},
         )
         self._metas[plan.contract.symbol] = meta
         self._meta_store.save(self._metas)

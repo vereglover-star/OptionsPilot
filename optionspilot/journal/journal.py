@@ -13,13 +13,14 @@ discipline.
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Direction, Fill, TradePlan, TradeRecord
+from optionspilot.core.sqlite import connect as sqlite_connect
+from optionspilot.core.sqlite import run_migrations
 
 log = get_logger("journal")
 
@@ -42,15 +43,18 @@ CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades (symbol);
 CREATE INDEX IF NOT EXISTS idx_trades_entry ON trades (entry_ts);
 """
 
+# migration 1 == the current schema, so an existing journal.db (user_version 0)
+# opens unchanged and lands at v1. Append a migration for any future schema
+# change instead of editing this list.
+_MIGRATIONS = [lambda conn: conn.executescript(_SCHEMA)]
+
 
 class TradeJournal:
     def __init__(self, db_path: str | Path):
-        if str(db_path) != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        # cross-thread reads from the UI server, serialized by its lock
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        # cross-thread reads from the UI server, serialized by its lock;
+        # wal=False preserves the journal's historical rollback-journal mode.
+        self._conn = sqlite_connect(db_path, wal=False)
+        run_migrations(self._conn, _MIGRATIONS, label="journal.db")
         # Bumped on every write so read-heavy callers (the UI status payload
         # every 2s) can cache derived views and only recompute on change.
         self.revision = 0

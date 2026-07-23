@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "optionspilot"
-version = "0.3.5"
+version = "0.4.2"
 description = "AI-powered options paper-trading system: analysis, decision engine, risk management, backtesting, learning."
 requires-python = ">=3.12"
 dependencies = [

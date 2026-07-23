@@ -10,6 +10,7 @@ Quick API map for developers. Details live in each module's docstring.
 | `models.TradePlan` | entry/spot/stop/target/partials/invalidation/RR |
 | `models.Order/Fill/Position/TradeRecord` | Execution + journal records |
 | `logging_setup.setup_logging` | Rotating per-subsystem logs (`logs/engine.log`, …) |
+| `sqlite.connect` / `sqlite.run_migrations` | Shared SQLite foundation (V0.4.2): `check_same_thread=False` + dir creation + optional WAL; ordered `PRAGMA user_version` migrations (refuses a newer schema). Used by every store (cache/journal/orders/paper/experience) so all databases evolve schema the same versioned way |
 
 ## Config (`optionspilot/config/`)
 `load_config(yaml_path, environ)` → `AppConfig`. Layered defaults ← YAML ← env
@@ -154,6 +155,38 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
 - `Backtester.run(symbol, candles_by_tf)` — replays through the live engine/
   risk/broker stack; `_slice_closed` guarantees no lookahead; synthetic
   BS-priced chains; `BacktestReport` → JSON + HTML with all metrics.
+
+## Experience Engine (`experience/`, V0.4.0–0.4.1)
+The AI's long-term trading memory — recorded ALONGSIDE the journal, never
+instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
+`docs/ROADMAP-V0.4-EXPERIENCE.md` for the full design.
+- `ExperienceRecord` (`models.py`) — a rich, nullable, expandable superset of
+  `TradeRecord` (outcome, full decision snapshot — ATR/EMA/MACD/VWAP/stop/target/
+  modes/regime, reasoning, exploration flag, `extra` JSON blob incl. the verbose
+  evidence breakdown, similarity `features`). `SimilarityResult` (+ grounded
+  `common_successes`/`common_failures`) and `SimilarTrade` (viewer row).
+- `build_snapshot` (`snapshot.py`) — THE centralized capture of a decision
+  context (duck-typed `EngineDecision`; no runtime `engine/` dependency). Both
+  AI entry and the manual/coach path use it → feature symmetry.
+- `build_experience` / `build_query_record` / `build_feature_vector` /
+  `market_regime` (`features.py`) — pure extraction; the shared `_entry_fields`
+  backs a closed trade and a live setup; fixed-range normalization so a record's
+  vector is stable forever.
+- `ExperienceStore` (`store.py`) — SQLite (`data/experience.db`) built for 100k+:
+  indexed query columns + full-fidelity JSON payload, `PRAGMA user_version`
+  migrations (v2 adds `market_regime`/`return_pct`/`hold_minutes` with backfill;
+  refuses a newer-than-supported schema); SQL-only aggregates (`overview`,
+  `aggregate`, `exit_reason_counts`) that never deserialize payloads.
+- `SimilarityEngine` (`similarity.py`) — weighted-distance similarity (direction
+  anchor 3.0 + evidence Jaccard 3.0 + setup/HTF/tf/session + numerics 2.0);
+  `find_similar` / `summarize` (win rate, return, failure mode, grounded
+  success/failure patterns, ADVISORY calibrated confidence — never fed to the
+  gate).
+- `ExperienceEngine` (`engine.py`) — the façade the orchestrator + API drive
+  (no SQL leaks past it): `record_trade` (best-effort, never raises),
+  `explain_setup` / `summarize_for`, `similar_trades` / `similar_to_snapshot`,
+  `recent`, `statistics` / `strategy_statistics` / `regime_statistics` /
+  `failure_modes` / `success_patterns`.
 
 ## Orchestrator (`orchestrator.py`) & Notify (`notify/`)
 - `Orchestrator.fetch_watchlist_candles(symbols, on_symbol=None)` — parallel

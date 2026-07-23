@@ -102,6 +102,36 @@ class TestScanAPI:
         assert s["pnl"]["week"] == pytest.approx(t["pnl"], abs=0.01)
 
 
+class TestExperienceAPI:
+    def test_experience_stats_empty(self, client):
+        r = client.get("/api/experience").json()
+        assert r["statistics"]["overview"]["total"] == 0
+        assert r["recent"] == []
+
+    def test_experience_similar_is_advisory(self, client):
+        r = client.get("/api/experience/similar", params={"symbol": "SPY"}).json()
+        assert r["symbol"] == "SPY"
+        assert "historical" in r and "similar_trades" in r
+        # advisory: evaluating a setup opens no position and changes no state
+        assert client.orch.broker.get_positions() == []
+
+    def test_round_trip_records_ai_experience_with_snapshot(self, client):
+        client.post("/api/scan", json={"wait": True})
+        position = client.orch.broker.get_positions()[0]
+        client.provider.spot = position.stop_current - 1.0
+        client.post("/api/scan", json={"wait": True})
+        recs = client.orch.experience.store.all()
+        assert len(recs) == 1
+        r = recs[0]
+        assert r.managed_by == "ai"
+        assert r.operating_mode == "ai"
+        # the AI entry snapshot gave this experience rich, symmetric features
+        assert r.rsi is not None
+        assert r.market_regime is not None
+        view = client.get("/api/experience").json()
+        assert view["statistics"]["overview"]["total"] == 1
+
+
 class TestCandlesAPI:
     def test_candles_shape_and_indicators(self, client):
         d = client.get("/api/candles?symbol=spy&tf=5m").json()

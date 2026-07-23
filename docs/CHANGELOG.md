@@ -4,6 +4,154 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-23 — V0.4.2: architecture audit + three approved refactors
+
+*Version 0.4.1 → 0.4.2. 454 → 470 tests (+16). An architecture-hardening sprint:
+a full read-only audit (documented in `docs/ARCHITECTURE-AUDIT-V0.4.2.md`) found
+the codebase in good health — clean verified layering, no SQL outside the
+persistence modules, zero real debt markers — so only three low-risk,
+behavior-preserving improvements were implemented, each as a separate change
+with its own regression tests. No user-visible behavior changed.*
+
+**1. Shared SQLite persistence foundation (`core/sqlite.py`).** The five stores
+each reimplemented the connect/schema boilerplate, and only the experience store
+had a real migration framework. New `connect()` (dir creation +
+`check_same_thread=False` + optional WAL) and `run_migrations()` (ordered
+`PRAGMA user_version` migrations, refusing a newer-than-supported schema) are now
+used by **all five** stores, adopted incrementally: `cache` (disposable, to
+validate the base) → `journal` (the system of record) → `orders` → `paper` →
+`experience` (refactored onto the shared base, dedup). Behavior-preserving:
+migration 1 of each store is its *exact current schema*, so an existing on-disk
+database (at `user_version 0`) runs the idempotent `CREATE TABLE IF NOT EXISTS`
+and lands at the same schema it already had. `paper.db`'s `managed_by` ALTER
+became an idempotent migration 2 that swallows the duplicate-column error exactly
+as the prior ALTER-on-every-open code did. This gives the journal and future
+Replay/Analytics/Live-Broker databases the same safe schema-evolution path.
++13 tests (`test_sqlite.py`), incl. the legacy-db and idempotent-ALTER adoption
+hazards.
+
+**2. UI/server import cleanup.** ~15 imports scattered into `ui/server.py`
+route/method bodies were hoisted to the module top (the UI is the composition
+root — everything below it is already importable, no cycles), and the **private**
+`from optionspilot.orchestrator import _WINDOW_DAYS` reach-through (in both
+`ui/server.py` and `__main__.py`) was removed by promoting the constant to a
+public `orchestrator.WINDOW_DAYS`.
+
+**3. Layering-guard tests (`test_architecture.py`).** The clean dependency graph
+was previously maintained by discipline alone; it is now executable. An
+AST-based allow-list asserts each subpackage imports only its permitted siblings
+(`engine` never imports `broker`/`risk`/`ui`; `experience` never depends on
+trading internals; `analysis` stays pure), plus guards that the composition roots
+don't import upward and that `ui/server.py` keeps no function-level imports.
++6 tests. (This suite immediately paid for itself: it surfaced a UTF-8 BOM in
+`yfinance_provider.py` and caught the last stale `_WINDOW_DAYS` reference.)
+
+**Not done (documented as optional in the audit report):** orchestrator
+decomposition (Finding 2), the `core→config` inversion (5), and the
+snapshot-bypass tidy (6) — none justify the churn/risk today.
+
+## [Uncommitted] 2026-07-23 — V0.4.1 (phase 3): Experience Engine integration
+
+*Version 0.4.0 → 0.4.1. 424 → 454 tests (+30: `test_snapshot.py` +6,
+`test_experience.py` +~20, `test_similarity.py` +1, `test_ui_server.py` +3).
+Completes the integration of the Experience Engine into the rest of
+OptionsPilot: every AI recommendation now carries advisory historical context.
+Backend + API only — the dashboard frontend is Phase 5. Full design in
+`docs/ROADMAP-V0.4-EXPERIENCE.md` §12.*
+
+**Centralized AI snapshot.** New `experience/snapshot.py::build_snapshot` is the
+one place a deterministic decision context is captured — from the
+`EngineDecision`/`TimeframeView`/`GateReport` (+ optional plan/contract): score,
+reasoning, HTF trend, the full per-component evidence breakdown, gate result +
+rejection reasons, RSI/ADX/rvol/ATR/EMA/MACD/VWAP/supertrend/divergence, contract
+Greeks, stop/target/RR, and operating/trading/learning modes. It duck-types the
+decision so `experience/` keeps no runtime dependency on `engine/`. Fields the
+engine doesn't compute (Bollinger, a volume-profile histogram) are stored as
+None, never invented.
+
+**Feature symmetry.** Both the AI entry path (snapshot stored in
+`_TradeMeta.entry_context`, fed to the experience record at close) and the
+manual/coach path (`_capture_context`, now also built by `build_snapshot`) go
+through the one builder, so AI and manual trades record equivalent feature
+quality. A single shared `features._entry_fields` extractor backs both a closed
+trade (`build_experience`) and a live setup (`build_query_record`).
+
+**Historical-similarity explanation (advisory).** For tradeable signals only,
+the orchestrator attaches `ExperienceEngine.explain_setup(snapshot)` — n similar,
+win rate, avg return/hold, calibrated confidence, and grounded success/failure
+patterns — to the status payload and the Human-Mode advice notification. It is
+computed AFTER the deterministic decision and never feeds back into it.
+
+**Experience API.** `ExperienceEngine` gains `recent`, `similar_trades` /
+`similar_to_snapshot` (→ `SimilarTrade` viewer rows), `statistics` (overview +
+by-strategy/regime/session + failure-modes/success-patterns), `strategy_
+statistics`, `regime_statistics`, `failure_modes`, `success_patterns`,
+`explain_setup`. All SQL stays inside `ExperienceStore`. Exposed over
+`GET /api/experience` and `GET /api/experience/similar?symbol=`.
+
+**Storage v2.** `_migration_2` adds an indexed `market_regime` column (derived:
+trend × IV volatility) plus `return_pct`/`hold_minutes`, backfilled from each
+row's JSON payload. Aggregate statistics are pure SQL (COUNT/SUM/AVG over indexed
+columns) — never deserializing payloads — which keeps them fast at 100k+.
+
+**Performance (measured at 20k rows):** similarity `summarize` well under the 3s
+budget (direction-pruned candidates + bounded distance pass); SQL `aggregate`
+under 0.5s. Advisory similarity runs only for tradeable signals, never per
+scanned symbol.
+
+**Safety:** nothing here touches the gate, risk, sizing, entries, or exits. The
+deterministic score remains the sole trading input; every new call site is
+best-effort and cannot break the trading path. All 424 prior tests still pass.
+
+## [Uncommitted] 2026-07-23 — V0.4.0 (phases 1–2): the AI Experience Engine
+
+*Version 0.3.5 → 0.4.0. 424 tests (+32: `test_experience.py` +20,
+`test_similarity.py` +12). The first two phases of the V0.4.0 sprint that turns
+the AI from a static analyzer into a system that learns from paper-trading
+experience. Backend-only — no frontend change this session. Full design in
+`docs/ROADMAP-V0.4-EXPERIENCE.md`.*
+
+**What was built.** A new `optionspilot/experience/` subsystem — the AI's
+long-term trading memory — recorded **alongside** the journal, never instead of
+it:
+
+- **Experience Engine + store (Phase 1).** `ExperienceRecord` is a rich,
+  expandable superset of `TradeRecord` (identity, trade shape, outcome, decision
+  context, market/session indicators, reasoning, an exploration flag, and an
+  `extra` JSON blob for future fields like screenshots/news with *no* migration).
+  `ExperienceStore` is a SQLite store (`data/experience.db`) built for 100k+
+  trades without a redesign: a hybrid row of indexed query columns + a
+  full-fidelity JSON payload, with a `PRAGMA user_version` migration framework
+  that refuses to open a newer-than-supported schema. `features.py` extracts an
+  `ExperienceRecord` and a normalized feature vector (fixed ranges, so a
+  record's vector is stable for all time) purely from a trade + its best-effort
+  analysis context.
+- **Similarity Engine (Phase 2).** `SimilarityEngine` finds the most comparable
+  historical trades via a hand-authored weighted distance (direction anchor +
+  evidence-set Jaccard + setup/trend/timeframe/session + normalized numerics),
+  and aggregates the cohort into evidence: win rate, avg return/hold, most-common
+  exit, typical failure mode, ranked matches, and an **advisory** calibrated
+  confidence (shrinkage blend of model estimate and historical win rate).
+
+**Three decisions with the user** (recorded in the roadmap doc): (A) calibrated
+confidence is **advisory / display-only** — the deterministic scorer stays the
+sole live-trading input, honoring `CLAUDE.md`'s no-statistical-model-on-the-
+trading-path rule; (B) the spec's "Exploration mode" becomes a **future
+independent `learning_mode` axis** (orthogonal to `operating_mode`/`trading_mode`)
+rather than overloading `trading_mode` — already modelled as
+`ExperienceRecord.exploration`; (C) scope this session is Foundation + Similarity.
+
+**Integration.** `Orchestrator` constructs `self.experience` and calls
+`record_trade` right after both `journal.record` sites (AI `_finalize_trade`,
+manual `_finalize_manual`). Recording is best-effort — any failure is logged and
+swallowed, so it can never disturb journaling, risk accounting, or trading
+(proved by `test_record_trade_is_best_effort`). No existing behavior changed;
+all 392 prior tests still pass.
+
+**Deliberately not populated yet** (honest limitations, modelled for later):
+MFE/MAE (need intrabar data), `risk_multiple` (needs stop premium), and richer
+AI entry-context symmetry — see the roadmap doc's "Forward plan".
+
 ## [Uncommitted] 2026-07-22 — V0.3.5: distribution fix (downloaded release crashed on launch)
 
 *Version 0.3.4 → 0.3.5. 392 tests (+3 in `test_packaging.py`; the previously

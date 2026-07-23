@@ -3,8 +3,25 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-22, after the **V0.3.5 distribution fix** (branch
-`v3-ui`, pending the merge decision — see "Exact stopping point" below).
+**Last updated:** 2026-07-23, after **V0.4.2 architecture audit + three
+refactors** (branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
+read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) found the codebase healthy,
+so only three low-risk behavior-preserving changes were made, each separately
+tested: a shared `core/sqlite.py` foundation (`connect` + `user_version`
+migrations) adopted by all five stores; `ui/server.py` import cleanup + public
+`orchestrator.WINDOW_DAYS`; executable layering-guard tests. No behavior change.
+470 tests (+16); `selftest` PASS.
+
+**Prior update:** 2026-07-23, after **V0.4.1 Experience Engine phase 3** — a
+centralized `build_snapshot`, advisory historical-similarity on tradeable
+signals, the Experience API, and storage schema v2. 454-test suite (+30).
+
+**Prior update:** 2026-07-23, after **V0.4.0 Experience Engine phases 1–2** — the
+`optionspilot/experience/` subsystem (rich 100k-scalable `ExperienceStore` +
+deterministic Similarity Engine) recorded alongside the journal.
+
+**Prior update:** 2026-07-22, after the **V0.3.5 distribution fix** (branch
+`v3-ui`, pending the merge decision).
 V0.3.5 root-caused the "downloaded release crashes on launch" report: the exe
 worked from the dev machine's `dist\` but a zip → GitHub → download → extract
 copy died with `RuntimeError: Failed to resolve
@@ -169,8 +186,57 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-22, V3.3.1 chart reliability investigation (branch `v3-ui`,
-uncommitted at time of writing).** A pure root-cause investigation (no new
+**2026-07-23, V0.4.2 architecture audit + three refactors (branch `v3-ui`,
+uncommitted at time of writing).** Ran a full read-only architecture audit
+(report: `docs/ARCHITECTURE-AUDIT-V0.4.2.md`) and implemented the three approved
+low-risk, behavior-preserving improvements, each as a separate change with its
+own regression tests: (1) new `core/sqlite.py` (`connect` + `run_migrations` on
+`PRAGMA user_version`) adopted by all five stores — `cache` → `journal` →
+`orders` → `paper` (idempotent `managed_by` migration) → `experience` (refactored
+onto the base); migration 1 of each store is its exact current schema, so
+existing `data/*.db` files open unchanged; +13 tests (`test_sqlite.py`). (2)
+`ui/server.py` imports hoisted to module top, and the private
+`orchestrator._WINDOW_DAYS` promoted to public `WINDOW_DAYS` (also updated
+`__main__.py` + the `test_models` wiring test). (3) `tests/test_architecture.py`
+(+6) makes the layering executable. Version 0.4.1 → 0.4.2, **470 tests green**,
+`selftest` PASS. No user-visible behavior changed. Nothing committed (the user
+hasn't asked). **Next:** optional audit follow-ups (report §11) or V0.4 Phase 4
+(`learning_mode` axis) — see `docs/ROADMAP-V0.4-EXPERIENCE.md` §11.
+
+**Before that: 2026-07-23, V0.4.1 Experience Engine phase 3 (branch `v3-ui`,
+uncommitted at time of writing).** Integrated the Experience Engine into the app. New
+`experience/snapshot.py` (`build_snapshot`) is the single centralized capture of
+an AI decision context, used by both the AI entry path (`_scan_symbol` →
+`_register_meta`, stored in `_TradeMeta.entry_context`) and the manual/coach path
+(`_capture_context` now routes through it) for feature symmetry. Tradeable
+signals get an advisory `_attach_historical` block (surfaced in the status
+payload + advice notification); `Orchestrator.experience_for_symbol` +
+`GET /api/experience[/similar]` expose the Experience API. `ExperienceRecord`
+gained the full snapshot fields; `ExperienceStore` migrated to schema v2
+(`market_regime`/`return_pct`/`hold_minutes` + SQL aggregates). New tests:
+`tests/test_snapshot.py` (+6), plus additions to `test_experience.py`,
+`test_similarity.py`, `test_ui_server.py`. Version 0.4.0 → 0.4.1, **454 tests
+green**. Advisory only — nothing touches the gate/risk/execution. Nothing
+committed (the user hasn't asked). No frontend change, so `verify.ps1`'s
+browser/chart checks were not re-run (the `pytest` suite was). **Next:** Phase 4
+(`learning_mode` axis + Exploration) — see the roadmap doc §11.
+
+**Before that: 2026-07-23, V0.4.0 Experience Engine phases 1–2 (branch `v3-ui`,
+uncommitted at time of writing).** Built the two load-bearing phases of the
+V0.4.0 sprint: the Experience Engine + store (Phase 1) and the Similarity Engine
+(Phase 2). New `optionspilot/experience/` package (`models.py`, `features.py`,
+`store.py`, `similarity.py`, `engine.py`, `__init__.py`); `tests/test_experience.py`
+(+20) and `tests/test_similarity.py` (+12); wired into `Orchestrator` after both
+`journal.record` sites, best-effort. Version 0.3.5 → 0.4.0, **424 tests green**.
+Three decisions taken with the user (calibration advisory-only; exploration →
+future orthogonal `learning_mode` axis; scope = Foundation + Similarity) are
+recorded in `docs/ROADMAP-V0.4-EXPERIENCE.md` §2. Nothing was committed (the
+user hasn't asked). No frontend change, so `verify.ps1`'s browser/chart checks
+were not re-run this session (the `pytest` suite was). **Next:** Phase 3
+(calibration surfacing + AI entry-context capture) — see the roadmap doc §11.
+
+**Before that: 2026-07-22, V3.3.1 chart reliability investigation (branch
+`v3-ui`, uncommitted at time of writing).** A pure root-cause investigation (no new
 features) of the intermittent "blank chart until restart." The market was
 CLOSED, so the live-load failure couldn't be reproduced directly; instead the
 lifecycle was instrumented (fetch start/finish/superseded/abort/empty, gen,
@@ -550,13 +616,17 @@ serving live data (see the current stopping point above).
 
 ## Next recommended task
 
-1. User review of the `v3-ui` branch → merge decision. Don't build on
-   the branch until then.
-2. If V3 continues: the remaining `ROADMAP-V3-UX.md` items (H5
-   notification center, N2 chart↔chain links, N4 toast stacking).
-3. Then the standing scope decision: V2-5 (replay engine), V2-6 (journal
-   dashboard), the V2-4 three-panel workspace layout, or pause to
-   accumulate paper-trading data — user's call.
+1. **V0.4.0 Phase 4** — the `learning_mode` axis (normal/exploration) added to
+   `config/settings.py` + `config/runtime.py` (orthogonal to
+   operating_mode/trading_mode), plus exploration-mode tagged, risk-capped
+   lower-confidence paper trades. Plumbing already exists
+   (`ExperienceRecord.exploration`, snapshot `learning_mode`). Then Phases 5–6
+   (AI Performance dashboard frontend, strategy discovery). Phase 3 (integration)
+   is done. Full plan: `docs/ROADMAP-V0.4-EXPERIENCE.md` §11.
+2. User review of the `v3-ui` branch → merge decision (V0.4.0 also lives here,
+   uncommitted).
+3. If V3 continues: the remaining `ROADMAP-V3-UX.md` items (H5 notification
+   center, N2 chart↔chain links, N4 toast stacking).
 4. Eventually: rebuild + smoke-test the exe (LAST, once the branch state
    settles).
 

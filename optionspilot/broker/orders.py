@@ -32,7 +32,6 @@ limit means when buying or selling a contract.
 from __future__ import annotations
 
 import enum
-import sqlite3
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -44,6 +43,8 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.paper import PaperBroker
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Direction, OptionContract, OptionRight
+from optionspilot.core.sqlite import connect as sqlite_connect
+from optionspilot.core.sqlite import run_migrations
 
 log = get_logger("broker")
 
@@ -137,15 +138,16 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 """
 
+# migration 1 == the current schema; an existing orders.db (user_version 0)
+# opens unchanged and lands at v1.
+_MIGRATIONS = [lambda conn: conn.executescript(_SCHEMA)]
+
 
 class OrderManager:
     def __init__(self, broker: PaperBroker, db_path: str | Path):
         self.broker = broker
-        if str(db_path) != ":memory:":
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        self._conn.executescript(_SCHEMA)
-        self._conn.commit()
+        self._conn = sqlite_connect(db_path, wal=False)
+        run_migrations(self._conn, _MIGRATIONS, label="orders.db")
         self._orders: dict[str, WorkingOrder] = self._load_working()
 
     # ── placement ────────────────────────────────────────────────────────────

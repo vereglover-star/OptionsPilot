@@ -5,10 +5,113 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-22, end of the V0.3.5 distribution/packaging
-investigation.
+**Last updated:** 2026-07-23, end of V0.4.2 architecture audit + three refactors.
 
-## What was completed most recently? (V0.3.5 — downloaded release crashed on launch)
+## What was completed most recently? (V0.4.2 — architecture audit + three refactors)
+
+A read-only architecture audit (full report: `docs/ARCHITECTURE-AUDIT-V0.4.2.md`)
+concluded the codebase is in good health — clean *verified* layering, no SQL
+outside the persistence modules, thin route handlers, zero real debt markers — so
+only **three** low-risk, behavior-preserving improvements were implemented, each
+a separate change with its own regression tests. **No user-visible behavior
+changed.** Version 0.4.1 → 0.4.2. 454 → **470 tests** (+16).
+
+1. **Shared SQLite foundation** (`core/sqlite.py`): `connect()` + versioned
+   `run_migrations()` (`PRAGMA user_version`), adopted by **all five** stores in
+   order `cache → journal → orders → paper → experience`. Migration 1 of each
+   store is its *exact current schema*, so existing `data/*.db` files open
+   unchanged. `paper.db`'s `managed_by` ALTER became an idempotent migration 2.
+   This gives the journal/paper/orders databases (and future Replay/Analytics/
+   Live-Broker DBs) the safe schema-evolution the experience store already had.
+   +13 in `test_sqlite.py`, incl. legacy-db + idempotent-ALTER hazards.
+2. **UI/server import cleanup**: ~15 imports hoisted from `ui/server.py` bodies
+   to the module top; the **private** `orchestrator._WINDOW_DAYS` reach-through
+   (in `ui/server.py` and `__main__.py`) removed by promoting it to public
+   `orchestrator.WINDOW_DAYS`.
+3. **Layering-guard tests** (`test_architecture.py`, +6): the dependency graph
+   is now executable — an AST allow-list asserts each subpackage imports only its
+   permitted siblings, composition roots don't import upward, and `ui/server.py`
+   stays free of function-level imports.
+
+**Optional / not done** (per the audit report, judgment over churn): orchestrator
+decomposition (Finding 2), `core→config` inversion (5), snapshot-bypass tidy (6).
+
+## What was completed before that? (V0.4.1 phase 3 — Experience Engine integration)
+
+Completed the integration of the Experience Engine into the rest of OptionsPilot:
+every AI recommendation now carries advisory historical context. **Backend + API
+only — no frontend** (dashboard is Phase 5). Version 0.4.0 → 0.4.1, a **454-test
+suite** (+30). Full design in `docs/ROADMAP-V0.4-EXPERIENCE.md` §12.
+
+1. **Centralized AI snapshot** (`experience/snapshot.py::build_snapshot`) — the
+   ONE place a deterministic decision context is captured (score, reasoning, HTF
+   trend, full evidence breakdown, gate result + rejection reasons, RSI/ADX/rvol/
+   ATR/EMA/MACD/VWAP/supertrend/divergence, contract Greeks, stop/target/RR,
+   operating/trading/learning modes). Duck-types the `EngineDecision` (no runtime
+   `engine/` dependency). Uncomputed fields (Bollinger, volume-profile histogram)
+   stored as None — never invented.
+2. **Feature symmetry** — AI entry (`_scan_symbol`→`_register_meta`, snapshot in
+   `_TradeMeta.entry_context`) and the manual/coach path (`_capture_context`, now
+   also built by `build_snapshot`) go through the one builder. Shared
+   `features._entry_fields` backs both a closed trade and a live query.
+3. **Advisory historical-similarity explanation** — for *tradeable* signals only,
+   `_attach_historical` attaches `explain_setup(snapshot)` (n similar / win rate /
+   return / calibrated confidence / grounded success & failure patterns) to the
+   status payload and the Human-Mode advice notification. Computed AFTER the
+   deterministic decision; never feeds back into it.
+4. **Experience API** (`ExperienceEngine`, no SQL past the store): `recent`,
+   `similar_trades`/`similar_to_snapshot` (→ `SimilarTrade` rows), `statistics`,
+   `strategy_statistics`, `regime_statistics`, `failure_modes`,
+   `success_patterns`, `explain_setup`. Over `GET /api/experience` and
+   `GET /api/experience/similar?symbol=`.
+5. **Storage v2** (`_migration_2`) — indexed `market_regime` (trend × IV vol) +
+   `return_pct`/`hold_minutes`, backfilled from payloads; SQL-only aggregates.
+
+**Safety reaffirmed:** nothing touches the gate/risk/sizing/entries/exits; the
+deterministic score is the sole trading input; every new call site is
+best-effort. All 424 prior tests still pass. Measured perf at 20k rows:
+similarity summarize well under 3s, SQL aggregate under 0.5s.
+
+## What was completed before that? (V0.4.0 phases 1–2 — the AI Experience Engine)
+
+The first two phases of the V0.4.0 sprint that turns the AI from a static
+analyzer into a system that learns from paper-trading experience. **Backend
+only — no frontend change** (so the shallow-frontend-coverage risk doesn't
+apply this session). Version 0.3.5 → 0.4.0. 392 → **424-test suite** (+32). Full
+design/rationale/forward-plan in **`docs/ROADMAP-V0.4-EXPERIENCE.md`** — read it
+before continuing this line of work.
+
+**What was built** — a new `optionspilot/experience/` subsystem, the AI's
+long-term memory, recorded **alongside** the journal (never instead of it; the
+journal stays the system of record and the sole learning input):
+
+1. **Experience Engine + store (Phase 1).** `ExperienceRecord` = a rich,
+   expandable superset of `TradeRecord` (outcome, decision context,
+   market/session indicators, reasoning, an exploration flag, and an `extra`
+   JSON blob for future fields — screenshots/news — with *no* migration).
+   `ExperienceStore` (`data/experience.db`) is built for 100k+ trades without a
+   redesign: indexed query columns + full-fidelity JSON payload + a
+   `PRAGMA user_version` migration framework (refuses a newer-than-supported
+   schema). `features.py` extracts the record + a fixed-range normalized feature
+   vector, purely.
+2. **Similarity Engine (Phase 2).** `SimilarityEngine` — deterministic weighted
+   distance (direction anchor + evidence Jaccard + setup/trend/tf/session +
+   numerics) → the k most similar historical trades, aggregated into evidence:
+   win rate, avg return/hold, most-common exit, typical failure mode, and an
+   **advisory** calibrated confidence (shrinkage blend of model + history).
+
+**Three decisions taken with the user** (see the roadmap doc §2): (A) calibrated
+confidence is **advisory/display-only** — the deterministic scorer remains the
+sole live-trading input; (B) "Exploration mode" becomes a **future orthogonal
+`learning_mode` axis**, not a `trading_mode` value (already modelled as
+`ExperienceRecord.exploration`); (C) this session = Foundation + Similarity only.
+
+**Integration:** `Orchestrator` builds `self.experience` and calls
+`record_trade` after both `journal.record` sites (AI + manual). Best-effort — a
+failure is logged and swallowed, never disturbing journaling/risk/trading
+(`test_record_trade_is_best_effort`). All 392 prior tests still pass unchanged.
+
+## What was completed before that? (V0.3.5 — downloaded release crashed on launch)
 
 The exe worked from the dev machine's `dist\` folder but crashed on another
 machine (or any re-downloaded copy) with `RuntimeError: Failed to resolve
@@ -25,7 +128,7 @@ Fix: `optionspilot_app.py::unblock_bundle()` deletes the `Zone.Identifier`
 stream from the app's own files at startup (frozen Windows only, before
 webview loads clr) — programmatically identical to Explorer's "Unblock".
 Tests: `TestUnblockBundle` (+3, in `tests/test_packaging.py`). Version
-0.3.4 → 0.3.5, 392 tests. Verified by MOTW-flagging a full release copy
+0.3.4 → 0.3.5, 392-test suite. Verified by MOTW-flagging a full release copy
 outside the repo and launching: the desktop window opens.
 
 ## What was completed before that? (V3.3.1 — chart reliability investigation)
@@ -392,9 +495,36 @@ run, the accessibility overlay).
 
 ## What should be worked on next?
 
+**Optional architecture follow-ups (from the V0.4.2 audit, `docs/ARCHITECTURE-
+AUDIT-V0.4.2.md` §11).** None urgent: Finding 2 (extract a `ManualTradeReconciler`
+from `orchestrator.py`) only if that file keeps growing; Finding 5 (de-invert
+`core→config` in `logging_setup`); a journal `overview()` SQL path when journaled
+trades approach five figures. Leave unless there's a reason.
+
+**V0.4.x continuation (Experience Engine).** The design doc
+`docs/ROADMAP-V0.4-EXPERIENCE.md` §11 has the full forward plan. Phase 3 is done.
+In order:
+
+- **Phase 4 — `learning_mode` axis + Exploration.** Add the third orthogonal
+  mode axis (normal/exploration) to `config/settings.py` + `config/runtime.py`
+  following the `trading_mode`/`operating_mode` orthogonality pattern; in
+  exploration mode take tagged, strictly risk-limited lower-confidence paper
+  trades. The plumbing already exists: `ExperienceRecord.exploration`, its store
+  column, the `learning_mode` snapshot field, and the exploration→record wiring.
+  (Promoting calibration into the gate is a *separate*, dedicated decision —
+  Decision A; do not fold it into Phase 4.)
+- **Phase 5 — AI Performance dashboard.** New tab over `/api/experience` +
+  `/api/experience/similar` (both already built). This is the **single-file
+  frontend** — **manually browser-verify** (no automated UI coverage).
+- **Phase 6 — Strategy discovery infrastructure.** Group experiences by shared
+  characteristics (the `extra["snapshot"]` evidence breakdown is the raw
+  material) for later pattern mining. Infra only.
+
+**Pre-existing, still open:**
+
 1. **The user reviews the `v3-ui` branch** (run `.\scripts\dev.ps1` on the
-   branch and click through) and decides on merging to `main`. Nothing
-   should be built on top of `v3-ui` until that call is made.
+   branch and click through) and decides on merging to `main`. The V0.4.0
+   Experience Engine work also lives on `v3-ui`, uncommitted.
 2. **Market-hours chart validation** (couldn't be done — market closed):
    confirm live candles/volume/indicators/price-line update during a
    session, and that the forming candle updates in place (the V3.1-6

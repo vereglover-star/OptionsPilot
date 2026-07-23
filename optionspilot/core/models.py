@@ -21,7 +21,7 @@ class Timeframe(enum.Enum):
 
     To add an interval: add the member here and a label below, then give it
     a fetch spec in `data/yfinance_provider._FETCH_SPEC`, a window in
-    `orchestrator._WINDOW_DAYS`, and a TTL in `data/cached.CANDLE_TTL` —
+    `orchestrator.WINDOW_DAYS`, and a TTL in `data/cached.CANDLE_TTL` —
     `tests/test_models.py::TestTimeframe::test_every_member_fully_wired`
     fails until all four agree.
     """

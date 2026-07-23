@@ -24,6 +24,8 @@ from pathlib import Path
 from optionspilot.broker.base import AccountState, Broker, BrokerError
 from optionspilot.config.settings import BrokerConfig
 from optionspilot.core.logging_setup import get_logger
+from optionspilot.core.sqlite import connect as sqlite_connect
+from optionspilot.core.sqlite import run_migrations
 from optionspilot.core.models import (
     Direction, Fill, OptionContract, OptionRight, Position, TradePlan,
 )
@@ -57,27 +59,34 @@ CREATE TABLE IF NOT EXISTS equity_history (
 );
 """
 
-_MIGRATIONS = [
-    # v2: manual trading — who manages this position's exits
-    "ALTER TABLE positions ADD COLUMN managed_by TEXT NOT NULL DEFAULT 'ai'",
-]
+def _migration_1(conn: sqlite3.Connection) -> None:
+    conn.executescript(_SCHEMA)
+
+
+def _migration_2(conn: sqlite3.Connection) -> None:
+    # v2: manual trading — who manages this position's exits. Idempotent: a
+    # database created before user_version tracking already has this column
+    # (added by the prior ALTER-on-every-open code and left at user_version 0),
+    # so a duplicate-column error is expected and swallowed — identical to the
+    # behavior this replaced.
+    try:
+        conn.execute(
+            "ALTER TABLE positions ADD COLUMN managed_by TEXT NOT NULL DEFAULT 'ai'")
+    except sqlite3.OperationalError:
+        pass  # column already present
+
+
+_MIGRATIONS = [_migration_1, _migration_2]
 
 
 class PaperBroker(Broker):
     def __init__(self, cfg: BrokerConfig, db_path: str | Path, starting_cash: float):
         self._cfg = cfg
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: the UI server calls from worker threads;
-        # access is serialized by UIServer's lock (sqlite itself is fine with
-        # cross-thread use as long as calls don't overlap).
-        self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
-        self._conn.executescript(_SCHEMA)
-        for migration in _MIGRATIONS:
-            try:
-                self._conn.execute(migration)
-            except sqlite3.OperationalError:
-                pass  # already applied
-        self._conn.commit()
+        # access is serialized by UIServer's lock. wal=False preserves the
+        # account database's historical rollback-journal mode.
+        self._conn = sqlite_connect(db_path, wal=False)
+        run_migrations(self._conn, _MIGRATIONS, label="paper.db")
         row = self._conn.execute("SELECT cash, realized_pnl FROM account").fetchone()
         if row is None:
             self._cash, self._realized = starting_cash, 0.0

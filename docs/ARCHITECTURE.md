@@ -49,7 +49,7 @@ optionspilot/
 │   ├── __main__.py                #   CLI: run/ui/serve/scan/status/journal/backtest/learn
 │   ├── orchestrator.py            #   the one event loop; composes every subsystem
 │   ├── config/                    #   settings.py (pydantic, startup) + runtime.py (live overlay)
-│   ├── core/                      #   domain models (dataclasses), logging setup
+│   ├── core/                      #   domain models (dataclasses), logging setup, sqlite foundation
 │   ├── data/                      #   MarketDataProvider ABC, yfinance adapter, caching, symbols
 │   ├── analysis/                  #   PURE FUNCTIONS: indicators, patterns, structure, SMC, options math
 │   ├── engine/                    #   MultiTimeframeAnalyzer → ConfluenceScorer → TradeGate → planner
@@ -58,6 +58,7 @@ optionspilot/
 │   ├── coach/                     #   TradeCoach (process-scored review) + CoachProfile (aggregation)
 │   ├── journal/                   #   SQLite trade record store
 │   ├── learning/                  #   evidence-weight tuning from journal history
+│   ├── experience/                #   AI long-term memory: rich trade store + similarity (V0.4.0)
 │   ├── backtest/                  #   event-driven replay through the SAME engine/risk/broker
 │   ├── notify/                    #   desktop toast + email notifications
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
