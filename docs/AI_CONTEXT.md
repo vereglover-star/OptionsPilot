@@ -255,6 +255,20 @@ into long-term memory:
    `Orchestrator.run_cycle()`'s logic** for a UI action. Either call into
    the orchestrator or add a narrowly-scoped public method to it (the
    `register_manual_entry`/`approve_manual_entry` pattern).
+9. **Never let a market-data adapter return an empty frame to signal
+   failure** (V0.5.2). Adapters raise typed `ProviderError`s; the empty
+   frame is reserved for "this window genuinely holds no bars." Collapsing
+   those two back together is the ancestor of every chart-history bug this
+   project has had — see `docs/MARKET_DATA.md` §1–2 for the proof. By the
+   same rule: never relax `CachedProvider.get_candles` /
+   `MarketDataService.get_history(allow_stale=False)` to serve stale data.
+   The engine's empty-means-skip behavior is load-bearing for trading
+   safety, and stale bars belong only on display surfaces.
+10. **Never re-derive a provider's history depth inside an adapter.** It
+   lives in `data/capabilities.py`, is *measured* (rerun
+   `scripts/marketdata_probe.py`), is asserted by `test_capabilities.py`,
+   and is measured **from now** — not from the request's end. That
+   distinction was the primary root cause fixed in V0.5.2.
 
 ## Common mistakes to avoid
 

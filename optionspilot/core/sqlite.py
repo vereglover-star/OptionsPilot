@@ -41,7 +41,16 @@ def connect(db_path: str | Path, *, wal: bool = True) -> sqlite3.Connection:
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     if wal and not is_memory:
-        conn.execute("PRAGMA journal_mode=WAL")
+        # A damaged file opens fine and fails on the first statement
+        # ("file is not a database"). Without this the connection object leaks
+        # with the OS file handle still open, and on Windows nothing can then
+        # rename, move or delete the file — which defeated CandleCache's
+        # quarantine-and-rebuild recovery entirely.
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+        except Exception:
+            conn.close()
+            raise
     return conn
 
 

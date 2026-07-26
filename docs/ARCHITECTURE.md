@@ -137,22 +137,54 @@ orchestrator exposes for exactly that purpose (see `register_manual_entry`,
 `approve_manual_entry`).
 
 ### 3.1 Data Engine (`optionspilot/data/`)
+
+Rebuilt in V0.5.2 into a multi-provider subsystem. **Full design, the measured
+provider limits, and the root causes it eliminates: `docs/MARKET_DATA.md`.**
+Summary of the layering (top to bottom):
+
+```
+MarketDataProvider (ABC)  ← everything above the data layer speaks only this
+      │
+CachedProvider            ← the ABC's face; quotes/chains memoized here
+      │ candles
+MarketDataService         ← the tier ladder + the four "no data" conditions
+      │
+ProviderRegistry          ← ordering, eligibility, circuit breakers
+      │
+HistoryAdapter × N        ← Yahoo JSON (10) · yfinance (20) · Stooq (30)
+      +  CandleCache · quality · diagnostics · capabilities
+```
+
 - `MarketDataProvider` (abstract): `get_candles(symbol, timeframe, start, end)`,
-  `get_quote(symbol)`, `get_option_chain(symbol, expiration)`.
-- `YFinanceProvider`: free provider used in v1. Delayed/EOD-quality data — fine for
-  paper trading and backtesting. Rate-limited (0.15s between requests).
-- `CachedProvider`: the caching/deduplicating layer the orchestrator wraps around
-  the real provider — timeframe-aware candle TTLs, short quote/chain/expiration
-  memos, in-flight request dedup, SQLite write-through for warm restarts. This is
-  why a manual "Scan now" right after a cycle completes in ~0.1s.
-- `CandleCache`: SQLite-backed cache so backtests and repeated scans don't
-  re-download. Thread-safe (single locked connection,
-  `check_same_thread=False`) because in serve/desktop mode every candle
-  fetch runs on a ThreadPoolExecutor worker or FastAPI threadpool thread —
-  see `CHANGELOG.md` V3-7 for the bug this fixed. Since V3-0 it also backs
-  `CachedProvider.get_candles_stale_ok()`, the Charts tab's display-only
-  fallback (any-age disk bars, flagged stale) when the live fetch fails;
-  the strict `get_candles` path the engine uses never serves stale data.
+  `get_quote(symbol)`, `get_option_chain(symbol, expiration)`. Unchanged — the
+  engine, risk, broker and backtester see exactly what they always did.
+- `build_provider()` is the composition root; `Orchestrator` calls it and never
+  names a provider.
+- **Capability-first.** Every provider declares, per interval, how far back it
+  can actually serve — measured from *now*, which is how the upstream limit
+  really works. A request outside that costs zero network calls and comes back
+  flagged `exhausted`, which is what lets the chart say "start of available
+  history" instead of retrying an impossible window forever.
+- **Typed failures, so failover is a decision rather than a guess.** Adapters
+  raise (`ProviderRangeError` / `RateLimited` / `SymbolError` / `Unavailable`)
+  instead of returning empty frames; "no data", "can't reach data" and "this
+  data cannot exist" are no longer the same value.
+- **Circuit breakers.** A repeatedly-failing provider leaves rotation and
+  returns by itself after a growing cooldown, via a single half-open probe — so
+  one dead source cannot add its timeout to every chart load.
+- `CandleCache`: durable SQLite history — atomic writes, `PRAGMA quick_check` on
+  open, corruption quarantined to `cache.db.corrupt-<ts>` and rebuilt (a damaged
+  cache degrades to a *cold* cache, never a crash), versioned migrations,
+  provider attribution per bar. Thread-safe (single locked connection,
+  `check_same_thread=False`) because in serve/desktop mode every candle fetch
+  runs on a ThreadPoolExecutor worker or FastAPI threadpool thread — see
+  `CHANGELOG.md` V3-7 for the bug this fixed.
+- The strict `get_candles` path the engine uses **never serves stale data**;
+  stale bars exist only behind `get_history()`/`allow_stale=True`, which display
+  surfaces use. The fail-closed trading rule is unchanged.
+- `GET /api/diagnostics/marketdata` returns provider health, cache stats and the
+  last N request traces, so a chart complaint is diagnosable without
+  reproducing it.
 - `symbols.py` + bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers):
   offline ticker validation and autocomplete search for the watchlist manager.
 - `presets.py`: static preset watchlists (Magnificent 7, S&P 500 Leaders, etc.).

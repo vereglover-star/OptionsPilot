@@ -26,11 +26,20 @@ class CountingProvider(MarketDataProvider):
 
     def __init__(self):
         self.calls = {"candles": 0, "quote": 0, "expirations": 0, "chain": 0}
-        self.frame = _frame()
+        self.frame = None      # set to force one fixed frame for every request
+
+    def frame_for(self, timeframe):
+        """Bars must be spaced like the timeframe that was asked for: the
+        service validates the interval it receives, and a fixture that answered
+        every request with 5-minute bars would be rejected on a 4h request —
+        correctly, but for a reason unrelated to what these tests measure."""
+        if self.frame is not None:
+            return self.frame
+        return _frame(freq=f"{timeframe.minutes}min")
 
     def get_candles(self, symbol, timeframe, start, end):
         self.calls["candles"] += 1
-        return self.frame
+        return self.frame_for(timeframe)
 
     def get_quote(self, symbol):
         self.calls["quote"] += 1
@@ -200,7 +209,7 @@ class FailingProvider(CountingProvider):
         self.calls["candles"] += 1
         if self.calls["candles"] <= self.fail_for:
             return pd.DataFrame()
-        return self.frame
+        return self.frame_for(timeframe)
 
 
 class TestEmptyFetchNotPoisoned:
@@ -280,8 +289,10 @@ class TestMemCacheBounded:
         for i in range(cached_mod.MEM_CACHE_MAX + 120):
             provider.get_candles(f"SYM{i}", Timeframe.M5,
                                  self._end() - WINDOW, self._end())
-        assert len(provider._mem) <= cached_mod.MEM_CACHE_MAX
+        # candle frames are memoized by the service the provider delegates to
+        memo = provider.service._mem
+        assert len(memo) <= cached_mod.MEM_CACHE_MAX
         # the most-recent symbol is still cached; the oldest was evicted
-        keys = list(provider._mem)
-        assert any(k[1] == f"SYM{cached_mod.MEM_CACHE_MAX + 119}" for k in keys)
-        assert not any(k[1] == "SYM0" for k in keys)
+        keys = list(memo)
+        assert any(k[0] == f"SYM{cached_mod.MEM_CACHE_MAX + 119}" for k in keys)
+        assert not any(k[0] == "SYM0" for k in keys)

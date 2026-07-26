@@ -5,11 +5,14 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-26, V0.5.0 Auto-Updater 1.0. Full
-651-test `pytest` suite green (+105), `selftest` PASS, HTML-id + doc checks green,
-updater verified fully offline via fakes. The ISCC compile + real install/upgrade
-runs and a live end-to-end update remain manual/CI (see `docs/AUTO_UPDATER.md`).
-See `PROJECT_STATE.md`.
+**Last verified:** 2026-07-26, V0.5.2 Market Data & Chart Reliability. Full
+880-test `pytest` suite green (+229), HTML-id + doc checks green, JS `node --check`
+clean, `scripts/marketdata_stress.py` 41/41 offline + 47/47 with `--live`, and
+`scripts/chart_check.py` 49/49 in a real headless browser (it had been failing at
+check 12 before this work — that failure is how the memo-poisoning root cause was
+found). The 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not**
+been run. The ISCC compile + real install/upgrade runs and a live end-to-end
+update remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
 ---
 
@@ -24,7 +27,17 @@ installed app now updates itself from GitHub Releases.
 
 ## Current phase
 
-**V0.5.0 Auto-Updater 1.0, on branch `v3-ui` — awaiting user review.** Adds an
+**V0.5.2 Market Data & Chart Reliability, on branch `v3-ui` — awaiting user
+review.** Chart history was replaced rather than patched: a capability-driven,
+multi-provider architecture (Yahoo chart JSON → yfinance → Stooq) with typed
+provider failures, circuit breakers, semantic validation, durable self-healing
+storage, and one diagnostics trace per request. The four conditions that used to
+arrive as one empty array — `exhausted` / `empty` / `stale` / `failed` — are now
+distinguished end to end, which is what lets the chart say "start of available
+history" instead of retrying an impossible window forever. No trading behavior
+changed. Design: `docs/MARKET_DATA.md`; manual QA: `docs/QA_MARKET_DATA.md`.
+
+**Before that: V0.5.0 Auto-Updater 1.0.** Adds an
 in-app self-updater (`optionspilot/update/`): a background launch-time check of
 GitHub Releases, a professional update dialog (version diff, release notes,
 size/ETA, Update Now / Remind Me Later / Skip), streamed installer download with
@@ -210,6 +223,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
 | V0.4.5 — Professional Release Pipeline 1.0 | GitHub Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) + `release.yml` (tag `v*`: reuse CI → tag/version guard → build → package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source version (`__version__` via pyproject `dynamic`/`attr`). `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`; unwired Inno Setup installer template. No behavior change | 0.4.5, 527-test suite green (+7) |
 | V0.4.6 — Professional Windows Installer 1.0 | Completed `installer/OptionsPilot.iss` (Inno Setup): installs to `C:\Program Files\OptionsPilot` (admin), stable AppId for in-place upgrades, Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere, Programs-and-Features registration, uninstall-time "remove my data?" prompt (default No). `scripts/build_installer.ps1` + `release.yml` now build/upload `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. No behavior change | 0.4.6, 546-test suite green (+19) |
+| V0.5.2 — Market data & chart reliability | Chart history replaced, not patched. New under `optionspilot/data/`: `capabilities` (per-interval depth **measured from now** — the primary root cause was the old clamp measuring from the request's *end*), `adapter` (`HistoryAdapter`; adapters raise typed errors instead of returning empty frames), `yahoo_provider` (v8 chart JSON over urllib, now primary — it reports *why* it refused), `yfinance_adapter`, `stooq_provider`, `legacy`, `registry` (ordering, pre-network eligibility, circuit breakers + half-open recovery), `service` (`MarketDataService` tier ladder; distinguishes `exhausted`/`empty`/`stale`/`failed`), `quality` (semantic validation + report), `diagnostics` + `/api/diagnostics/marketdata`. `cache.py` rebuilt as durable storage (atomic, integrity-checked, corruption-quarantining, versioned, provider-attributed). Frontend: explicit load state machine + honest "start of available history". Also fixed: a history-paging request poisoning the live memo (QQQ 1d returned ONE candle), a corrupt cache.db crashing startup, and a history prepend restoring a mid-drag viewport. No trading-behavior change | 0.5.1, 880-test suite green (+229); chart_check 44 → 49 and green end to end |
 | V0.5.0 — Auto-Updater 1.0 | New self-contained `optionspilot/update/` subpackage (core+stdlib only; `urllib`, no new dep): SemVer ordering, GitHub Releases client (installer asset only), checker (channel/frequency, never raises), streamed downloader (progress/cancel, atomic finalize), validation (size/hash/Authenticode-ready), installer launcher (mandatory `pre-update` backup → `/VERYSILENT` install → restart), `UpdateService` state machine. `/api/update/*` endpoints; launch-time background check gated on `run_loop`; prefs in `RuntimeSettings` (`updates` key). Frontend: Settings ▸ Software updates, Help ▸ Check for Updates…, update dialog. Verified offline via fakes | 0.5.0, 651-test suite green (+105) |
 
 ## Features complete
@@ -233,8 +247,8 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known limitations (deliberate, documented — not bugs)
 
-- yfinance data can be delayed (up to ~15 min for some symbols; in V3.3 live testing liquid ETFs/large-caps were only ~1 min behind) with limited intraday history (~60 days of 5m bars); paid-feed adapters are the documented upgrade path.
-- **yfinance serializes all requests through one process-wide throttle** (0.15s min interval, single lock). Under heavy concurrent load — the scan loop plus rapid chart symbol switching — fetch latency grows (10–15s+ measured under a synthetic hammer). As of V3.3.1 the chart's fetch is bounded (times out into a recoverable error + auto-retry, and superseded fetches are aborted), so this degrades gracefully instead of leaving a permanent blank; a streaming provider would remove the serialization entirely.
+- Free market data is delayed (up to ~15 min for some symbols; liquid ETFs/large-caps measure ~1 min behind) and **intraday history is genuinely shallow**: ~7 days of 1m, ~59 days of 5m/15m/30m, ~729 days of 1h, unlimited daily. Since V0.5.2 these are *measured* limits declared in `data/capabilities.py`, the chart states them plainly when a scroll-back reaches one, and an out-of-depth request costs zero upstream calls (`scripts/marketdata_probe.py` re-measures them). Deeper intraday history requires a paid feed — see `docs/MARKET_DATA.md` §4.
+- **`yfinance` serializes all requests through one process-wide throttle** (0.15s min interval, single lock), which under concurrent load pushed fetch latency to 10–15s+. V0.5.2 demoted it to the *secondary* provider behind a direct `urllib` call to Yahoo's chart JSON, which has no such global lock: 24 concurrent live chart loads now complete in **~0.5s with zero blanks**. The throttle still applies whenever the yfinance fallback is actually used, and to option chains/quotes, which still go through it.
 - **yfinance is poll-only (no streaming/websocket feed)** and returns the *current forming bar* as a flat placeholder with `volume=0` until it completes. So the chart cannot build the forming candle tick-by-tick like TradingView — it advances as fast as we poll (~7s intraday, V3.3), and the just-forming bar shows no intrabar volume/range until it closes. Completed bars match yfinance to the cent/share. A true real-time forming bar requires a **streaming provider**; the smallest change to support one is a new `MarketDataProvider` adapter that pushes bar updates over the existing `/api/candles` WebSocket path (the frontend already applies trailing-bar updates via `chTailUpdate`), so no chart rewrite is needed. See `docs/AI_HANDOFF.md`.
 - No historical option-chain data exists for free; the backtester reconstructs option prices via Black-Scholes.
 - Manual/working orders evaluate once per scan cycle against fresh quotes — no intrabar/tick simulation.
@@ -243,7 +257,21 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. Fixed in-session (2026-07-18, packaging-fix session): the
+None open. **Fixed in V0.5.2** (each reproduced from evidence before any code
+changed, each now covered by a regression test that fails without its fix):
+(1) intraday history depth was measured from the *request's end* instead of from
+*now*, so every scroll-back into older intraday data 422'd upstream, returned an
+empty frame, and was retried on every subsequent scroll — forever;
+(2) a history-paging request shared the live-window memo key and overwrote it, so
+a subsequent live load rendered the sliced overlap — observed as **QQQ 1d showing
+a single candle from nine months earlier**, `outcome: memo`, with no error
+anywhere; (3) the shipped depth caps for 5m/15m/30m/1h were each one day *past*
+Yahoo's real cliff, so a boundary request looked like an outage; (4) a corrupt
+`cache.db` crashed the app during `Orchestrator` construction, and leaked its
+Windows file handle so the file could not even be quarantined; (5) a history
+prepend restored a viewport captured mid-drag, yanking on-screen bars.
+
+Previously fixed in-session (2026-07-18, packaging-fix session): the
 packaged exe shipped without yfinance — every chart/quote/chain request
 failed with "No module named 'yfinance'". The performance pass (`f1bae42`)
 had made the yfinance import lazy via `importlib.import_module`, which
@@ -289,7 +317,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**651 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
+**880 tests, 100% passing** (`.\scripts\test.ps1`, ~45s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

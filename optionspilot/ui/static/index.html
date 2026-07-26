@@ -1968,7 +1968,42 @@ const CH = {
   viewport: null, historyLoading: false, historyExhausted: false,
   historyArmed: false, restoringViewport: false,
   fetchCtl: null, histCtl: null,   // V3.3.1: AbortControllers for in-flight fetches
+  state: "idle", stateDetail: "",  // V0.5.2: the explicit load state machine
+  earliest: null,                  // oldest bar any provider can serve for this tf
 };
+
+/* ── The chart load state machine (V0.5.2) ─────────────────────────────────
+   The chart used to INFER its state from whatever the last fetch happened to
+   leave behind: an empty candles array meant "error", a stuck flag meant
+   "still loading", and nothing distinguished "the feed is down" from "this is
+   genuinely the start of history". That ambiguity is what produced spinners
+   that never resolved and scroll-backs that retried an impossible window
+   forever.
+
+   Now every load declares exactly where it is. The state is mirrored onto
+   #ch-main as `data-ch-state` so the headless regression suite (and a human
+   with devtools) can assert on it directly rather than guessing from pixels.
+
+     idle        nothing requested yet
+     loading     request in flight, nothing usable on screen
+     receiving   response arrived, being parsed/merged
+     rendering   handed to the chart library
+     complete    fresh bars on screen
+     cached      on screen, but knowingly older than live (banner shown)
+     empty       the window legitimately holds no bars (holiday/pre-listing)
+     exhausted   older than ANY provider serves — the true start of history
+     failed      nothing could answer; the error overlay owns the screen
+
+   `complete`, `cached`, `empty`, `exhausted` and `failed` are terminal. */
+const CH_STATES = ["idle", "loading", "receiving", "rendering", "complete",
+                   "cached", "empty", "exhausted", "failed"];
+function chSetState(state, detail = "") {
+  CH.state = state;
+  CH.stateDetail = detail;
+  const el = $("ch-main");
+  if (el) el.setAttribute("data-ch-state", state);
+  chHistoryTrace("state", { state, detail });
+}
 // A chart data fetch must never wait forever. Under a backend throttle backlog
 // (many concurrent yfinance fetches serialize through one 0.15s-per-request
 // lock → 10-15s+ latency measured under load) or a hung upstream connection,
@@ -2584,17 +2619,32 @@ function chMergeHistory(existing, older) {
   });
   return merged;
 }
-function chHistPill(state) {
+function chHistPill(state, detail = "") {
   const p = $("ch-histpill");
   if (!state) { p.classList.remove("show"); return; }
   p.classList.add("show");
   p.innerHTML = state === "loading"
     ? '<span class="ch-spinner"></span>Loading history…'
-    : "◄ Start of available history";
-  if (state === "end") setTimeout(() => {
-    if ($("ch-histpill").textContent.includes("Start"))
+    : state === "unavailable"
+      ? "⚠ Couldn't load older bars — scroll again to retry"
+      : "◄ Start of available history" + (detail ? ` · ${detail}` : "");
+  // The transient pills auto-hide; "start of history" is a fact about the data
+  // and stays until the user changes symbol or timeframe.
+  if (state === "unavailable") setTimeout(() => {
+    if ($("ch-histpill").textContent.includes("older bars"))
       $("ch-histpill").classList.remove("show");
-  }, 2200);
+  }, 3000);
+}
+/* Why a scroll into older bars stopped, in the user's terms. `exhausted` is a
+   backend FACT (the window predates every provider's depth for this interval),
+   not a guess from an empty response — see MarketDataService's tier ladder. */
+function chExhaustedDetail(d) {
+  const iso = d?.earliest_available;
+  if (!iso) return "";
+  const when = new Date(iso);
+  if (isNaN(when)) return "";
+  return `${tfLabel(CH.tf)} data starts ${when.toLocaleDateString(
+    [], { year: "numeric", month: "short", day: "numeric" })}`;
 }
 async function chLoadHistoryChunk() {
   if (!CH.data || CH.historyLoading || CH.historyExhausted) return;
@@ -2637,21 +2687,39 @@ async function chLoadHistoryChunk() {
       });
       return;
     }
+    if (d.exhausted) {
+      // The backend states, as a fact rather than an inference, that no
+      // provider serves this interval any earlier. Stop asking — this is the
+      // real start of history. Before this existed the same impossible window
+      // was re-requested on every single scroll, forever.
+      CH.historyExhausted = true;
+      CH.earliest = d.earliest_available || null;
+      chHistPill("end", chExhaustedDetail(d));
+      chHistoryTrace("history-request-exhausted", {
+        earliest: d.earliest_available, message: d.message || "",
+      });
+      return;
+    }
     if (d.error || !d.candles || !d.candles.length) {
-      // a failed history fetch is not proof of exhaustion — leave the flag
-      // clear so the next scroll retries; only an all-older-bars-absent
-      // merge (below) marks the true start of history.
+      // A failed history fetch is not proof of exhaustion — leave the flag
+      // clear so the next scroll retries; only `exhausted` above, or an
+      // all-older-bars-absent merge (below), marks the true start of history.
+      // `outcome === "empty"` means the window genuinely holds no bars (a
+      // holiday); anything else means nothing could answer, which is worth
+      // telling the user about rather than silently doing nothing.
       if (d.error) console.error("history load failed:", d.error);
       chHistoryTrace("history-request-empty", {
         returnedBarCount: d?.candles?.length ?? 0,
+        outcome: d?.outcome, message: d?.message || "",
       });
-      chHistPill(null);
+      chHistPill(d.error || (d.outcome && d.outcome !== "empty")
+        ? "unavailable" : null);
       return;
     }
     const merged = chMergeHistory(CH.data, d);
     if (merged.candles.length === CH.data.candles.length) {
       CH.historyExhausted = true;
-      chHistPill("end");
+      chHistPill("end", chExhaustedDetail(d));
       chHistoryTrace("history-request-end", {
         requestFinish: Date.now(),
         returnedBarCount: d.candles.length,
@@ -2659,7 +2727,14 @@ async function chLoadHistoryChunk() {
       });
       return;
     }
-    chRenderData(merged, {key, time: viewport || chViewport()});
+    // Restore the range as it is NOW, not as it was when this fetch started.
+    // A history load is armed by the range-change event *during* a pan, so the
+    // captured range is a mid-drag snapshot; by the time the merge lands the
+    // user has usually dragged further. Restoring the stale snapshot yanks the
+    // on-screen bars back to where they were mid-gesture — the exact thing a
+    // history prepend must never do. The captured range stays as a fallback
+    // for the case where the chart has no readable range at merge time.
+    chRenderData(merged, {key, time: chViewport() || viewport});
     chHistPill(null);
     chHistoryTrace("history-request-finish", {
       requestFinish: Date.now(),
@@ -2727,6 +2802,7 @@ async function loadChart(symbol) {
                                  // and the viewport (V3.2.1 root cause).
     CH.historyLoading = false;
     CH.historyExhausted = false;
+    CH.earliest = null;          // depth is per (symbol·tf)
     chHistPill(null);
   }
   const gen = ++CH.gen;
@@ -2746,6 +2822,7 @@ async function loadChart(symbol) {
     chRenderData(cached.data, viewOpts());
   }
   if (firstPaint) {
+    chSetState("loading");
     chOverlay("loading");
     chStale(null);
     $("ch-legend").innerHTML =
@@ -2780,11 +2857,13 @@ async function loadChart(symbol) {
       `/api/candles?symbol=${encodeURIComponent(CH.sym)}&tf=${CH.tf}` +
       (CH.ext ? "&ext=1" : ""), { signal: ctl.signal });
     d = await r.json();
+    if (gen === CH.gen) chSetState("receiving");
   } catch {
     clearTimeout(timer);
     // An abort from a NEWER load (superseded) is silent; a real network error or
     // our own TIMEOUT for the CURRENT symbol falls through to graceful recovery.
     if (gen !== CH.gen) return;
+    chSetState("failed", timedOut ? "timeout" : "network");
     if (firstPaint) chOverlay("error", timedOut
       ? "Data is taking too long — the feed may be busy. Retrying automatically…"
       : "Couldn't reach the data service. Check your connection and retry.");
@@ -2793,10 +2872,24 @@ async function loadChart(symbol) {
   }
   clearTimeout(timer);
   if (gen !== CH.gen) return;
+  if (d.earliest_available) CH.earliest = d.earliest_available;
   if (d.error || !d.candles || !d.candles.length) {
-    const msg = d.error
+    // Four different conditions used to arrive here as one empty array. The
+    // backend now names which one it is (`outcome`), so the message can be
+    // true instead of a guess — and `empty`/`exhausted` are NOT errors.
+    const outcome = d.error ? "failed" : (d.outcome || "failed");
+    const msg = d.error || d.message
       || `No data available for ${CH.sym} — the symbol may be invalid, `
        + `or the data feed is temporarily down.`;
+    chSetState(outcome === "failed" ? "failed" : outcome, msg);
+    if (outcome === "exhausted" || outcome === "empty") {
+      // Nothing is wrong; there is simply nothing in this window. Keep any
+      // chart already on screen and never raise the red error overlay.
+      if (firstPaint) chOverlay("error", msg);
+      else chHistPill(outcome === "exhausted" ? "end" : null,
+                      chExhaustedDetail(d));
+      return;
+    }
     if (firstPaint) chOverlay("error", msg);
     else { toast(msg, false);
            chStale(CH.data.candles[CH.data.candles.length - 1].time); }
@@ -2820,9 +2913,13 @@ async function loadChart(symbol) {
   const sig = chSig(out);
   if (CH.dataKey === key && CH.dataSig === sig) {
     chStale(chStaleAsOf(out));
+    chSetState(d.stale ? "cached" : "complete", "unchanged");
     return;
   }
+  chSetState("rendering");
   chRenderData(out, viewOpts());
+  chSetState(d.stale ? "cached" : "complete",
+             d.provider ? `via ${d.provider}` : "");
 }
 
 /* Merge a freshly-fetched RECENT window (`fresh`, the base window a refresh

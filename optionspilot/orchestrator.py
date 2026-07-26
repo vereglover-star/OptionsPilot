@@ -40,7 +40,7 @@ from optionspilot.core.paths import AppPaths
 from optionspilot.core.models import (
     Direction, Fill, Position, Timeframe, TradePlan, TradeRecord, utcnow,
 )
-from optionspilot.data import CachedProvider, MarketDataProvider, YFinanceProvider
+from optionspilot.data import MarketDataProvider, build_provider
 from optionspilot.engine import DecisionEngine
 from optionspilot.experience import ExperienceEngine, build_snapshot
 from optionspilot.journal import TradeJournal
@@ -174,9 +174,11 @@ class Orchestrator:
         # data_dir is the user-data directory; when omitted it resolves to the
         # per-user storage root (AppPaths) so the app never writes beside the exe.
         data_dir = Path(data_dir) if data_dir is not None else AppPaths().get_data_dir()
-        self.provider = provider or CachedProvider(
-            YFinanceProvider(), data_dir / "cache.db"
-        )
+        # `build_provider` is the market-data composition root: the full
+        # provider chain (Yahoo JSON -> yfinance -> Stooq), one shared cache,
+        # validation and diagnostics. Everything here still sees only the
+        # MarketDataProvider interface.
+        self.provider = provider or build_provider(data_dir / "cache.db")
         self.broker = broker or create_broker(
             config, data_dir / "paper.db", config.risk.starting_balance
         )

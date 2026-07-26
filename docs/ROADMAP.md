@@ -9,6 +9,18 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.5.2 — Market data & chart reliability (2026-07-26, uncommitted)
+
+Chart history — the last inconsistent subsystem — replaced rather than patched.
+A capability-driven, multi-provider architecture (Yahoo chart JSON → yfinance →
+Stooq) with typed failures, circuit breakers, semantic validation, durable
+self-healing storage, and per-request diagnostics. The four conditions that used
+to arrive as one empty array (`exhausted` / `empty` / `stale` / `failed`) are now
+distinguished end to end, which is what lets the chart say "start of available
+history" instead of retrying an impossible window forever. 651 → 880 tests.
+Design: `docs/MARKET_DATA.md`. Manual QA: `docs/QA_MARKET_DATA.md`.
+
+
 ### v1 — Original 8-phase build (2026-07-11, commit `40eb1ea`)
 
 Foundation, analysis suite, AI decision engine, risk manager + paper

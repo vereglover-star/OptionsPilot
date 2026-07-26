@@ -1,4 +1,4 @@
-﻿from datetime import timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +9,7 @@ from optionspilot.ui.server import create_app
 from tests.test_notify import CollectingNotifier
 from tests.test_orchestrator import CFG, NOW, FakeProvider, bullish_candles
 from optionspilot.core.models import Timeframe
+from optionspilot.data.adapter import ProviderUnavailable
 
 
 @pytest.fixture
@@ -562,3 +563,165 @@ class TestCoachAPI:
         # second call with no new review reuses the cached object
         client.get("/api/coach")
         assert client.server._coach_cache is cached
+
+
+class TestMarketDataStateAPI:
+    """`/api/candles` must tell the frontend WHICH no-data condition it hit.
+
+    One empty `candles` array used to mean four different things — the window
+    predates every provider, the window is a holiday, the feed is down, or the
+    symbol is bogus — and the frontend had to guess. Guessing is what made a
+    scroll into old intraday history retry the same impossible request forever.
+    These tests drive the real `CachedProvider` + `MarketDataService` stack with
+    scripted adapters so each condition is asserted end to end.
+    """
+
+    @pytest.fixture
+    def md_client(self, tmp_path, monkeypatch, request):
+        """A client whose provider is the real market-data stack."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        script = getattr(request, "param", None)
+        if script is None:
+            script = [frame(80, Timeframe.M5, end=NOW)]
+        adapter = ScriptedAdapter("scripted", script, capabilities=UNLIMITED)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        quotes = FakeProvider(bullish_candles(), 100.0, NOW.date())
+        provider = CachedProvider(quotes, service=service)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(cfg, provider=provider,
+                            notifier=NotificationCenter(cfg.notify,
+                                                        [CollectingNotifier()]),
+                            data_dir=tmp_path)
+        app = create_app(cfg, orchestrator=orch, run_loop=False,
+                         data_dir=tmp_path)
+        with TestClient(app) as c:
+            c.adapter = adapter
+            c.service = service
+            yield c
+
+    def test_a_live_payload_names_its_provider_and_quality(self, md_client):
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["outcome"] == "live"
+        assert d["provider"] == "scripted"
+        assert d["quality"] == 100.0
+        assert d["stale"] is False and d["exhausted"] is False
+        assert d["trace_id"] is not None
+        assert len(d["candles"]) == 80
+
+    def test_an_exhausted_window_is_flagged_not_reported_as_an_error(self, tmp_path,
+                                                                    monkeypatch):
+        """The fix for 'scrolling back retries forever'. The frontend reads
+        `exhausted` as a FACT and stops asking, and `earliest_available` is
+        what it shows the user."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.capabilities import YAHOO_CAPABILITIES
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        adapter = ScriptedAdapter("yahoo", [frame(10, Timeframe.M5, end=NOW)],
+                                  capabilities=YAHOO_CAPABILITIES)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(
+            cfg,
+            provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                                 NOW.date()), service=service),
+            notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+            data_dir=tmp_path)
+        with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                                   data_dir=tmp_path)) as c:
+            start = (NOW - timedelta(days=200)).isoformat()
+            end = (NOW - timedelta(days=120)).isoformat()
+            d = c.get("/api/candles", params={"symbol": "SPY", "tf": "5m",
+                                              "start": start, "end": end}).json()
+        assert d["candles"] == []
+        assert d["outcome"] == "exhausted" and d["exhausted"] is True
+        assert d["earliest_available"] is not None
+        assert "only goes back to" in d["message"]
+        assert adapter.calls == [], "an impossible window must cost no request"
+
+    @pytest.mark.parametrize("md_client", [[None]], indirect=True)
+    def test_a_genuinely_empty_window_is_not_an_error(self, md_client):
+        """A holiday. The chart must not raise a red error overlay for it."""
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["candles"] == []
+        assert d["outcome"] == "empty" and d["exhausted"] is False
+
+    @pytest.mark.parametrize("md_client", [[ProviderUnavailable("feed down")]],
+                             indirect=True)
+    def test_a_dead_feed_reports_failed_with_the_reason(self, md_client):
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["candles"] == []
+        assert d["outcome"] == "failed"
+        assert "feed down" in d["message"]
+
+    def test_a_repeat_request_reports_the_memo_tier(self, md_client):
+        md_client.get("/api/candles?symbol=SPY&tf=5m")
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["outcome"] == "memo"
+        assert len(md_client.adapter.calls) == 1
+
+    def test_the_payload_stays_backward_compatible(self, md_client):
+        """Existing consumers read `candles`/`indicators`/`stale`/`market_open`;
+        the new fields are additive."""
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert set(d) >= {"symbol", "timeframe", "candles", "indicators",
+                          "stale", "market_open", "extended_hours"}
+
+
+class TestMarketDataDiagnosticsAPI:
+    def test_diagnostics_report_providers_cache_and_traces(self, tmp_path,
+                                                           monkeypatch):
+        """The design goal: a chart complaint should be answerable from one
+        JSON response, without reproducing it."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        adapter = ScriptedAdapter("scripted", [frame(30, Timeframe.M5, end=NOW)],
+                                  capabilities=UNLIMITED)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(
+            cfg,
+            provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                                 NOW.date()), service=service),
+            notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+            data_dir=tmp_path)
+        with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                                   data_dir=tmp_path)) as c:
+            c.get("/api/candles?symbol=SPY&tf=5m")
+            d = c.get("/api/diagnostics/marketdata").json()
+
+        assert d["available"] is True
+        assert [p["name"] for p in d["providers"]] == ["scripted"]
+        assert d["cache"]["bars"] == 30
+        assert d["requests"]["total_requests"] == 1
+        assert d["requests"]["success_rate"] == 1.0
+        trace = d["traces"][0]
+        assert trace["symbol"] == "SPY" and trace["outcome"] == "live"
+        assert trace["attempts"][0]["provider"] == "scripted"
+        assert trace["validation"]["usable"] is True
+
+    def test_diagnostics_degrade_gracefully_on_a_plain_provider(self, client):
+        """Any injected `MarketDataProvider` must still be safe to ask."""
+        d = client.get("/api/diagnostics/marketdata").json()
+        assert d["available"] is False and "reason" in d

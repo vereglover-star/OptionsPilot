@@ -5,13 +5,89 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-26, end of V0.5.0 Auto-Updater 1.0.
+**Last updated:** 2026-07-26, end of V0.5.2 Market Data & Chart Reliability.
 
-## What was completed most recently? (V0.5.0 — Auto-Updater 1.0)
+## What was completed most recently? (V0.5.2 — market-data subsystem)
+
+Chart history was the last subsystem that behaved inconsistently. It was
+**replaced**, not patched. 651 → **880 tests** (+229). No version bump, no
+trading-behavior change. **Not committed — awaiting user review.**
+Full design + measurements + provider survey: `docs/MARKET_DATA.md`.
+84 manual checks: `docs/QA_MARKET_DATA.md`.
+
+**Root causes, proven from evidence (not guessed):**
+
+1. **Depth measured from the wrong point.** Yahoo's intraday limit runs from
+   *now* ("must be within the last 60 days", its own 422 body);
+   `_clamp_history_window` measured from the *request's end*. A scroll-back
+   whose start was 62 days old but whose end was 31 days old passed unclamped,
+   422'd, came back empty, and was retried on every scroll forever. Verbatim in
+   `logs/data.log` with the clamp reporting no change.
+2. **A history-paging request poisoned the live-window memo.** Both share the
+   key `(symbol, timeframe, session)`; a past-ending window overwrote the live
+   frame, and the next live load rendered the sliced overlap. Found by
+   `chart_check.py`: **QQQ 1d returned one candle from nine months earlier**,
+   `outcome: memo`, no error anywhere.
+3. Shipped depth caps were one day *past* Yahoo's real cliff (60 vs 59, 730 vs
+   729) — a boundary request looked like an outage.
+4. A **corrupt `cache.db` crashed the app at startup** (the connection raised
+   before the recovery block, and leaked its Windows file handle so the file
+   could not even be quarantined).
+5. A history prepend restored a viewport captured **mid-drag**, yanking
+   on-screen bars — invisible while the backend was slow, reproducible once it
+   was fast.
+6. pandas 3 changed `DatetimeIndex.astype("int64")` from nanoseconds to
+   **microseconds**; any spacing math built on the old assumption is off 1000x.
+
+**What was built** — all inside `optionspilot/data/`, so the layering and the
+`MarketDataProvider` contract are unchanged:
+
+- `capabilities.py` — per-provider, per-interval depth **measured from now**;
+  an impossible request is answered from the table for zero network cost.
+  `scripts/marketdata_probe.py` re-measures it live and flags drift.
+- `adapter.py` — `HistoryAdapter`: one shape per source. **Adapters raise
+  instead of returning empty frames**, with typed failures driving
+  retry-vs-failover. Adding a provider is one file + one registry entry.
+- Three adapters: **`YahooChartAdapter`** (priority 10, `v8/finance/chart` JSON
+  over `urllib` — faster, no hidden global throttle, and *it reports why it
+  refused*), **`YFinanceAdapter`** (20, same data by an independent code path),
+  **`StooqAdapter`** (30, the only non-Yahoo source; daily+ only; refuses HTML
+  anti-bot pages rather than parsing them as prices). Plus
+  `LegacyProviderAdapter` for any plain `MarketDataProvider`.
+- `registry.py` — ordering, pre-network eligibility checks, circuit breakers
+  with half-open recovery.
+- `service.py` — the tier ladder (memo → disk → providers → half-open probes →
+  stale disk → explained failure) and the one place `exhausted` / `empty` /
+  `stale` / `failed` are told apart.
+- `quality.py` — semantic validation returning a report. Gaps carry no penalty;
+  interval conformance is judged on the **tightest** spacing (a 4h chart's
+  20-hour overnight gap is not a defect).
+- `diagnostics.py` + `GET /api/diagnostics/marketdata` — one trace per request;
+  every `/api/candles` response carries its `trace_id`.
+- `cache.py` rebuilt as durable storage: atomic writes, integrity check on open,
+  corruption quarantined + rebuilt, versioned migrations (a v1 `cache.db` keeps
+  every row), provider attribution, validation on read.
+- Frontend: an explicit state machine mirrored to `#ch-main`'s `data-ch-state`;
+  reaching the start of history shows **"◄ Start of available history · 5m data
+  starts May 28, 2026"** and stops requesting.
+
+**Verification:** 880 tests (250 market-data, all offline);
+`scripts/marketdata_stress.py` 41 offline scenarios (now in `verify.ps1`) + 6
+live behind `--live`; `scripts/chart_check.py` at 49 checks and **green end to
+end** — it had been dying at check 12 on `main`, which is how root cause #2 was
+found. Measured: **24 concurrent live chart loads in 0.5s, zero blanks**
+(10–15s before).
+
+**Still open:** the 84-item manual QA (`docs/QA_MARKET_DATA.md`) has not been
+run by hand — several checks need market hours and DevTools throttling. An
+optional second non-Yahoo intraday provider (Tiingo / Twelve Data, free key) is
+the natural next reliability step; streaming needs a paid feed.
+
+## What was completed before that? (V0.5.0 — Auto-Updater 1.0)
 
 OptionsPilot now **keeps itself up to date** like a modern desktop app. **No
 trading behavior changed; user data is never touched by an update.** 546 →
-**651 tests** (+105). Full design: `docs/AUTO_UPDATER.md`.
+a **651-test suite** (+105) at the time. Full design: `docs/AUTO_UPDATER.md`.
 
 1. **New subpackage `optionspilot/update/`** (depends only on `core` + stdlib;
    networking is `urllib`, **no new runtime dependency**), layered and each layer

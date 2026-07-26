@@ -1130,6 +1130,93 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                   f"non-monotonic payload is sanitized (chart renders, {new_errs} new console errors)")
             page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
 
+            # ── V0.5.2 market-data architecture ──────────────────────────────
+            # 35. The chart's load state must be EXPLICIT, not inferred. Every
+            #     terminal state is mirrored onto #ch-main as data-ch-state so a
+            #     stuck spinner, a silent timeout and a blank canvas are all
+            #     distinguishable from the outside (and from each other).
+            state = page.evaluate("() => $('ch-main').getAttribute('data-ch-state')")
+            detail = page.evaluate("() => CH.stateDetail")
+            # A fresh symbol load must reach a terminal state AND name its
+            # provider; a same-data refresh legitimately settles as "unchanged".
+            page.fill("#ch-symbol", "MSFT"); page.press("#ch-symbol", "Enter")
+            wait_loaded("MSFT", "1d")
+            fresh_state = page.evaluate("() => $('ch-main').getAttribute('data-ch-state')")
+            fresh_detail = page.evaluate("() => CH.stateDetail")
+            check(state in ("complete", "cached")
+                  and fresh_state in ("complete", "cached")
+                  and "via " in (fresh_detail or ""),
+                  f"load state machine reaches an explicit terminal state "
+                  f"({state}/{detail!r} then {fresh_state}/{fresh_detail!r})")
+            page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
+
+            # 36. The payload must name WHICH no-data condition it hit, so the
+            #     frontend never has to guess from an empty array.
+            payload_meta = page.evaluate("""async () => {
+                const r = await fetch('/api/candles?symbol=SPY&tf=1d');
+                const d = await r.json();
+                return {outcome: d.outcome, provider: d.provider,
+                        quality: d.quality, exhausted: d.exhausted,
+                        trace: d.trace_id};
+            }""")
+            check(payload_meta["outcome"] in ("live", "memo", "cache", "stale")
+                  and payload_meta["provider"] and payload_meta["trace"],
+                  f"/api/candles reports its tier and provider ({payload_meta})")
+
+            # 37. THE root-cause regression. Scrolling back through intraday
+            #     history must terminate at the provider's real depth floor,
+            #     say so, and then STOP REQUESTING. Before the capability model
+            #     the same impossible window was re-requested on every scroll,
+            #     forever, each one a guaranteed upstream 422.
+            page.evaluate("() => loadChart('SPY')")
+            page.click('#ch-tfs button[data-tf="5m"]'); wait_loaded("SPY", "5m")
+            page.evaluate("() => { CH.historyExhausted = false; }")
+            for _ in range(30):
+                if page.evaluate("() => CH.historyExhausted"):
+                    break
+                page.evaluate("() => { CH.historyArmed = true; "
+                              "CH.historyLoading = false; chLoadHistoryChunk(); }")
+                page.wait_for_timeout(700)
+            exhausted = page.evaluate("() => CH.historyExhausted")
+            pill = page.evaluate("() => $('ch-histpill').textContent")
+            # once exhausted, further scrolls must cost ZERO requests
+            reqs_before = len(candle_reqs)
+            for _ in range(5):
+                page.evaluate("() => { CH.historyArmed = true; chLoadHistoryChunk(); }")
+                page.wait_for_timeout(200)
+            spent = len(candle_reqs) - reqs_before
+            check(exhausted and "Start of available history" in pill and spent == 0,
+                  f"intraday scroll-back terminates at the provider floor "
+                  f"({pill.strip()!r}) and then costs 0 further requests ({spent})")
+
+            # 38. An exhausted window is NOT an error: no red overlay, and the
+            #     chart already on screen is left alone.
+            overlay_up = page.evaluate(
+                "() => $('ch-overlay').classList.contains('show')")
+            still_drawn = page.evaluate("() => CH.data && CH.data.candles.length > 3")
+            check(not overlay_up and still_drawn,
+                  "reaching the start of history shows no error overlay")
+
+            # 39. Diagnostics: one request should be answerable from one JSON
+            #     response — provider health, cache stats and recent traces.
+            diagnostics = page.evaluate("""async () => {
+                const r = await fetch('/api/diagnostics/marketdata?traces=5');
+                const d = await r.json();
+                return {available: d.available,
+                        providers: (d.providers || []).map(p => p.name),
+                        cache_bars: d.cache && d.cache.bars,
+                        total: d.requests && d.requests.total_requests,
+                        trace: (d.traces || [])[0]};
+            }""")
+            check(diagnostics["available"] and diagnostics["providers"]
+                  and diagnostics["total"] > 0 and diagnostics["trace"],
+                  f"/api/diagnostics/marketdata explains the session "
+                  f"(providers={diagnostics['providers']}, "
+                  f"requests={diagnostics['total']}, "
+                  f"cached bars={diagnostics['cache_bars']})")
+            page.evaluate("() => loadChart('SPY')")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
+
             browser.close()
 
         if errors:

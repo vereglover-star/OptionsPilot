@@ -3,7 +3,23 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-26, after **V0.5.0 Auto-Updater 1.0** (branch `v3-ui`,
+**Last updated:** 2026-07-26, after **V0.5.2 Market Data & Chart Reliability**
+(branch `v3-ui`, uncommitted). Chart history — the last subsystem that behaved
+inconsistently — was **replaced**, not patched, with a capability-driven
+multi-provider architecture inside `optionspilot/data/` (Yahoo chart JSON →
+yfinance → Stooq, typed failures, circuit breakers, semantic validation, durable
+self-healing storage, per-request diagnostics). The primary root cause was
+proven from `logs/data.log`, not inferred: Yahoo's intraday depth limit runs from
+*now*, and the old clamp measured it from the *request's end*, so every
+scroll-back into older intraday data 422'd upstream, returned an empty frame,
+and was retried forever. A second, equally damaging cause was found by
+`chart_check.py` — a history-paging request overwrote the live-window memo, so
+QQQ 1d could come back as a **single candle from nine months earlier** with no
+error anywhere. 651 → **880 tests** (+229). No version bump, no trading-behavior
+change. Full design: `docs/MARKET_DATA.md`; 84 manual checks (**not yet run**):
+`docs/QA_MARKET_DATA.md`.
+
+**Prior update:** 2026-07-26, after **V0.5.0 Auto-Updater 1.0** (branch `v3-ui`,
 uncommitted — see "Exact stopping point" below). The installed app now
 **self-updates from GitHub Releases** with **no trading behavior change** and
 without ever touching user data. New self-contained `optionspilot/update/`
@@ -225,7 +241,32 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-26, V0.5.0 Auto-Updater 1.0 (branch `v3-ui`, uncommitted at time of
+**2026-07-26, V0.5.2 Market Data & Chart Reliability (branch `v3-ui`,
+uncommitted).** The chart pipeline was traced end to end and instrumented before
+any code changed; both primary root causes were reproduced from evidence (a live
+`logs/data.log` line for the depth-clamp bug; a `chart_check.py` run for the
+memo-poisoning bug) and each now has a regression test that fails without its
+fix. New modules under `optionspilot/data/`: `capabilities`, `adapter`,
+`yahoo_provider`, `yfinance_adapter`, `stooq_provider`, `legacy`, `registry`,
+`quality`, `service`, `diagnostics`; `cache.py` rebuilt; `cached.py` reduced to a
+facade over `MarketDataService`; `build_provider()` added as the composition root
+and adopted by `Orchestrator`. `ui/server.py` gained the richer `/api/candles`
+payload and `GET /api/diagnostics/marketdata`; `ui/static/index.html` gained the
+explicit load state machine and the honest end-of-history pill. Two fixes landed
+outside `data/`: `core/sqlite.connect` now closes a connection whose first PRAGMA
+fails (a corrupt db otherwise leaked a Windows file handle and could not be
+quarantined), and `chLoadHistoryChunk` restores the viewport as it is at merge
+time rather than a mid-drag snapshot. New scripts: `marketdata_stress.py` (41
+offline torture scenarios, wired into `verify.ps1`; 6 more behind `--live`) and
+`marketdata_probe.py` (re-measures provider depth and flags table drift).
+`chart_check.py` 44 → 49 checks — and **green end to end for the first time**;
+it had been dying at check 12 on `main`, which is how the memo bug surfaced.
+880 tests green, `check_html_ids` green, `check_docs` green, JS `node --check`
+passes, live stress green (24 concurrent chart loads in 0.5s, zero blanks).
+**Not done:** the 84-item manual QA in `docs/QA_MARKET_DATA.md` (several checks
+need market hours and DevTools throttling), and the exe has not been rebuilt.
+
+**Prior stopping point — 2026-07-26, V0.5.0 Auto-Updater 1.0 (branch `v3-ui`, uncommitted at time of
 writing).** After inspecting the storage/backup layer (`core/paths.py`,
 `core/migration.py::create_backup`), config (`settings.py`/`runtime.py`), the UI
 server/desktop wiring, and the installer's silent-install support, built a
@@ -772,23 +813,27 @@ serving live data (see the current stopping point above).
 
 ## Next recommended task
 
-0. **Authenticode code signing** (the natural follow-up to the auto-updater):
+0. **Run the market-data manual QA** (`docs/QA_MARKET_DATA.md`, 84 checks).
+   Everything automatable is automated and green; what remains genuinely needs a
+   human, market hours, and DevTools throttling. Sections F (degraded states)
+   and D (history paging) carry the most value.
+1. **Authenticode code signing** (the natural follow-up to the auto-updater):
    sign the setup + app exe in `release.yml`, add a signature-verification check
    to `update/validation.py`, and publish a SHA-256 checksums asset the validator
    can enforce. Also: one manual end-to-end update QA on real Windows
    (`docs/AUTO_UPDATER.md` §7) and replace the placeholder `LICENSE`.
-1. **V0.4.0 Phase 4** — the `learning_mode` axis (normal/exploration) added to
+2. **V0.4.0 Phase 4** — the `learning_mode` axis (normal/exploration) added to
    `config/settings.py` + `config/runtime.py` (orthogonal to
    operating_mode/trading_mode), plus exploration-mode tagged, risk-capped
    lower-confidence paper trades. Plumbing already exists
    (`ExperienceRecord.exploration`, snapshot `learning_mode`). Then Phases 5–6
    (AI Performance dashboard frontend, strategy discovery). Phase 3 (integration)
    is done. Full plan: `docs/ROADMAP-V0.4-EXPERIENCE.md` §11.
-2. User review of the `v3-ui` branch → merge decision (V0.4.0 also lives here,
+3. User review of the `v3-ui` branch → merge decision (V0.4.0 also lives here,
    uncommitted).
-3. If V3 continues: the remaining `ROADMAP-V3-UX.md` items (H5 notification
+4. If V3 continues: the remaining `ROADMAP-V3-UX.md` items (H5 notification
    center, N2 chart↔chain links, N4 toast stacking).
-4. Eventually: rebuild + smoke-test the exe (LAST, once the branch state
+5. Eventually: rebuild + smoke-test the exe (LAST, once the branch state
    settles).
 
 ## Current priorities

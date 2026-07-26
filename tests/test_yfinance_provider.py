@@ -134,11 +134,79 @@ def test_intraday_history_requests_are_clamped_to_yahoo_window(monkeypatch):
 
     monkeypatch.setattr(yfmod, "_yf", lambda: RangeTrackingYF())
     provider = YFinanceProvider(min_request_interval=0.0)
-    end = datetime(2026, 7, 22, tzinfo=timezone.utc)
-    start = end - timedelta(days=120)
+    now = datetime(2026, 7, 22, tzinfo=timezone.utc)
+    monkeypatch.setattr(yfmod, "utcnow", lambda: now)
+    start = now - timedelta(days=120)
 
-    df = provider.get_candles("SPY", Timeframe.M15, start, end)
+    df = provider.get_candles("SPY", Timeframe.M15, start, now)
 
     assert not df.empty
-    assert RangeTrackingTicker.calls[0][0] == end - timedelta(days=60)
-    assert RangeTrackingTicker.calls[0][1] == end
+    # Clamped to Yahoo's 15m depth measured from NOW — see the regression test
+    # below for why "from the request's end" is wrong.
+    assert RangeTrackingTicker.calls[0][0] == now - timedelta(days=59)
+    assert RangeTrackingTicker.calls[0][1] == now
+
+
+def _tracking_yf(monkeypatch, calls: list):
+    class Ticker:
+        def __init__(self, symbol: str):
+            self.symbol = symbol
+
+        def history(self, **kwargs):
+            calls.append((kwargs["start"], kwargs["end"]))
+            return _bars()
+
+    monkeypatch.setattr(yfmod, "_yf", lambda: type("YF", (), {"Ticker": Ticker}))
+
+
+def test_intraday_depth_is_measured_from_now_not_from_the_request_end(monkeypatch):
+    """The V0.5.2 root cause, as a regression test.
+
+    Yahoo's intraday depth limit runs from NOW ("the requested range must be
+    within the last 60 days" — its own words, in the 422 body). The old clamp
+    measured it from the REQUEST'S END, so a history-paging request whose start
+    was 62 days before now but only 31 days before its own end sailed through
+    unclamped, 422'd upstream, and came back as an empty frame the chart
+    retried on every scroll. Straight from `logs/data.log` on 2026-07-23:
+
+        history fetch empty IWM 5m requested 2026-05-22..2026-06-22
+                                    (clamped 2026-05-22..2026-06-22)
+
+    Correct behaviour: clamp the START up to Yahoo's floor so the part of the
+    window that CAN be served actually is.
+    """
+    calls: list = []
+    _tracking_yf(monkeypatch, calls)
+    now = datetime(2026, 7, 23, tzinfo=timezone.utc)
+    monkeypatch.setattr(yfmod, "utcnow", lambda: now)
+    provider = YFinanceProvider(min_request_interval=0.0)
+
+    df = provider.get_candles("IWM", Timeframe.M5,
+                              datetime(2026, 5, 22, tzinfo=timezone.utc),
+                              datetime(2026, 6, 22, tzinfo=timezone.utc))
+
+    assert not df.empty
+    requested_start, requested_end = calls[0]
+    assert requested_start == now - timedelta(days=59), \
+        "start must be clamped to Yahoo's 5m floor measured from now"
+    assert requested_end == datetime(2026, 6, 22, tzinfo=timezone.utc)
+
+
+def test_history_window_entirely_older_than_yahoos_depth_costs_no_request(monkeypatch):
+    """When the WHOLE window predates Yahoo's depth there is nothing to clamp
+    to — the request is skipped instead of being spent on a guaranteed 422.
+    This is what lets the chart say "start of available history" instead of
+    retrying the same impossible window forever."""
+    calls: list = []
+    _tracking_yf(monkeypatch, calls)
+    now = datetime(2026, 7, 23, tzinfo=timezone.utc)
+    monkeypatch.setattr(yfmod, "utcnow", lambda: now)
+    provider = YFinanceProvider(min_request_interval=0.0)
+
+    df = provider.get_candles("IWM", Timeframe.M5,
+                              datetime(2026, 3, 1, tzinfo=timezone.utc),
+                              datetime(2026, 4, 1, tzinfo=timezone.utc))
+
+    assert df.empty
+    assert calls == [], \
+        "a window older than Yahoo's 5m depth must cost no upstream request"

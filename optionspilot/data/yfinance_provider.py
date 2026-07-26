@@ -20,6 +20,7 @@ import pandas as pd
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionContract, OptionRight, Quote, Timeframe, utcnow
 from optionspilot.data.base import MarketDataProvider, validate_candles
+from optionspilot.data.capabilities import YAHOO_CAPABILITIES
 
 log = get_logger("data")
 
@@ -61,27 +62,10 @@ _FETCH_SPEC: dict[Timeframe, tuple[str, str | None]] = {
     Timeframe.MN1: ("1mo", None),
 }
 
-# Yahoo's free intraday feed has a tighter usable window than the app's
-# broader chart-history window. If we ask for an older range than Yahoo can
-# serve for that interval, the provider returns an empty frame and the chart
-# looks like history simply "stopped" at an arbitrary date. Clamp the request
-# to the first supported start so the app still reaches the earliest bar Yahoo
-# can actually provide for that interval.
-_HISTORY_MAX_DAYS: dict[Timeframe, int | None] = {
-    Timeframe.M1: 7,
-    Timeframe.M2: 7,
-    Timeframe.M3: 7,
-    Timeframe.M5: 60,
-    Timeframe.M10: 60,
-    Timeframe.M15: 60,
-    Timeframe.M30: 60,
-    Timeframe.H1: 730,
-    Timeframe.H2: 730,
-    Timeframe.H4: 730,
-    Timeframe.D1: None,
-    Timeframe.W1: None,
-    Timeframe.MN1: None,
-}
+# Yahoo's intraday depth limits now live in ONE place — `capabilities.py` —
+# shared by this provider and by the adapter-based chain, so the two can never
+# drift apart. See `YAHOO_INTERVALS` for the measured values and how they were
+# obtained.
 
 
 def _symbol_candidates(symbol: str) -> list[str]:
@@ -102,12 +86,30 @@ def _symbol_candidates(symbol: str) -> list[str]:
     return list(dict.fromkeys(v for v in variants if v))
 
 
-def _clamp_history_window(timeframe: Timeframe, start: datetime, end: datetime
-                          ) -> tuple[datetime, datetime]:
-    max_days = _HISTORY_MAX_DAYS.get(timeframe)
+def _clamp_history_window(timeframe: Timeframe, start: datetime, end: datetime,
+                          now: datetime | None = None
+                          ) -> tuple[datetime, datetime] | None:
+    """Clamp `[start, end)` to what Yahoo can serve for `timeframe`.
+
+    Returns None when the ENTIRE window predates Yahoo's depth for this
+    interval — the caller must not spend a request on it.
+
+    The depth limit is measured from NOW, not from the request's end. That
+    distinction is the bug this function used to have: a history-paging request
+    for, say, 5-minute bars from two months ago has a start that sits happily
+    inside `end - 60 days`, so the old clamp passed it through untouched,
+    Yahoo answered HTTP 422, yfinance turned that into an empty frame, and the
+    chart retried the same impossible window on every scroll (proved from
+    `logs/data.log`: repeated "history fetch empty IWM 5m requested
+    2026-05-22..2026-06-22" with the clamp reporting no change).
+    """
+    now = now or utcnow()
+    max_days = YAHOO_CAPABILITIES.max_lookback_days(timeframe)
     if max_days is None:
         return start, end
-    oldest_allowed = end - timedelta(days=max_days)
+    oldest_allowed = now - timedelta(days=max_days)
+    if end <= oldest_allowed:
+        return None
     if start < oldest_allowed:
         return oldest_allowed, end
     return start, end
@@ -138,7 +140,15 @@ class YFinanceProvider(MarketDataProvider):
         self._throttle()
         interval, resample_rule = _FETCH_SPEC[timeframe]
         requested_start = start
-        start, end = _clamp_history_window(timeframe, start, end)
+        window = _clamp_history_window(timeframe, start, end)
+        if window is None:
+            log.info("history request for %s %s is entirely older than Yahoo's "
+                     "%s-day window for that interval (%s..%s) — not fetching",
+                     symbol, timeframe,
+                     YAHOO_CAPABILITIES.max_lookback_days(timeframe),
+                     requested_start, end)
+            return validate_candles(pd.DataFrame())
+        start, end = window
         if start != requested_start:
             log.info("history request for %s %s clamped to Yahoo-supported window %s..%s (requested %s..%s)",
                      symbol, timeframe, start, end, requested_start, end)

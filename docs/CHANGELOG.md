@@ -4,6 +4,118 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-26 — V0.5.2: the market-data subsystem
+
+*651 → **880 tests** (+229). No version bump, no trading-behavior change. The
+last inconsistent subsystem — chart history — replaced with a multi-provider
+architecture. Full design, measurements and provider survey:
+`docs/MARKET_DATA.md`; 84 manual checks: `docs/QA_MARKET_DATA.md`.*
+
+**The root cause.** Every chart-history bug in this project's history shares one
+ancestor: the old stack could not distinguish *"there is no data"* from *"I
+can't reach the data"* from *"this data cannot exist"*. `yfinance` returns an
+empty DataFrame for all three, `CachedProvider` memoized that empty frame, and
+the frontend guessed. Two concrete failures were reproduced from evidence rather
+than inferred:
+
+1. **The depth window was measured from the wrong point.** Yahoo's intraday
+   limits run from *now* — its own 422 body says "must be within the last 60
+   days" — but `_clamp_history_window` measured from the *request's end*. A
+   scroll-back for 5-minute bars starting 62 days ago but ending 31 days ago
+   sailed through unclamped, 422'd upstream, and returned empty; the frontend
+   correctly refused to treat that as exhaustion and retried on every subsequent
+   scroll, forever, at three guaranteed-422 requests each. Visible verbatim in
+   `logs/data.log` with the clamp reporting no change.
+2. **A history-paging request poisoned the live-window memo.** The memo is keyed
+   `(symbol, timeframe, session)` — it must be, or the live poll would never hit
+   it — but nothing stopped a past-ending window writing to that key. The next
+   live load found a "valid" entry, sliced it to the live window, and rendered
+   the overlap. Caught by `chart_check.py`: **QQQ 1d returned a single candle
+   from nine months earlier**, `outcome: memo`, no error anywhere.
+
+Three more were found and fixed along the way: the shipped depth limits were one
+day *past* Yahoo's real cliff for 5m/15m/30m/1h; a corrupt `cache.db` crashed the
+app during `Orchestrator` construction (the connection raised before the recovery
+block, and leaked its Windows file handle so the file could not even be moved);
+and a history prepend restored a viewport captured mid-drag, yanking on-screen
+bars — invisible while the backend was slow, reproducible once it was fast.
+
+**New architecture** (all inside `optionspilot/data/`, so the layering and the
+`MarketDataProvider` contract are unchanged — the engine, risk, broker and
+backtester see exactly what they always did):
+
+- **`capabilities.py`** — each provider declares, per interval, what it can serve
+  and how far back, *measured from now*. An impossible request is answered from
+  this table for zero network cost. The values are measured, not assumed:
+  `scripts/marketdata_probe.py` walks each interval back until Yahoo 422s and
+  compares the result against the shipped table (1m: 8d, 2m–30m: 59d, 1h: 729d,
+  daily+: unlimited back to 1993).
+- **`adapter.py`** — `HistoryAdapter`, one shape for every source. The base class
+  supplies interval mapping, resampling, canonical normalization, window
+  clamping, throttling, health and quality scoring, so a concrete adapter is
+  transport + parser only. **Adapters raise instead of returning empty frames**,
+  with typed failures (`ProviderRangeError` / `RateLimited` / `SymbolError` /
+  `Unavailable`) that drive retry-vs-failover — the rule that ends the ambiguity
+  above. Adding a provider is one file plus one registry entry.
+- **Three adapters.** `YahooChartAdapter` (priority 10) talks to Yahoo's
+  `v8/finance/chart` JSON directly over `urllib` — faster than yfinance, no
+  hidden global throttle, and *it reports why it refused*, which is why it is now
+  the primary. `YFinanceAdapter` (20) reaches the same data by a completely
+  independent code path, so the two fail for independent reasons.
+  `StooqAdapter` (30) is the only source not dependent on Yahoo at all
+  (daily/weekly/monthly, decades deep); it refuses HTML anti-bot pages rather
+  than parsing them as prices. `LegacyProviderAdapter` folds any plain
+  `MarketDataProvider` (test fakes, backtest fixtures) into the same ladder.
+- **`registry.py`** — ordering, eligibility checks *before* the network, and
+  per-provider circuit breakers with exponential cooldown and half-open
+  recovery, so one dead provider stops adding its timeout to every chart load
+  and comes back by itself without a restart.
+- **`service.py`** — `MarketDataService` and its tier ladder: memo → disk cache →
+  providers (retry, then fail over) → half-open probes → knowingly-stale disk →
+  an explicit, explained failure. This is the one place the four conditions are
+  told apart: **`exhausted`** (older than any provider serves — stop asking),
+  **`empty`** (a holiday; legitimate, not an error), **`stale`**, **`failed`**.
+- **`quality.py`** — semantic validation returning a report, not just a cleaned
+  frame: OHLC consistency, ordering, duplicates, future timestamps, non-finite
+  values, isolated bad prints, interval conformance. Gaps are recorded with *no*
+  penalty (a 4h US-equity chart legitimately has 20-hour overnight gaps —
+  judging conformance on a share-of-bars-on-grid basis rejected perfectly good
+  data, so it is judged on the tightest spacing instead).
+- **`diagnostics.py` + `GET /api/diagnostics/marketdata`** — one trace per
+  request (every provider tried, why each was skipped or failed, which tier
+  answered, what validation found, timings) in a bounded ring, plus provider
+  health and cache stats. Every `/api/candles` response carries its `trace_id`,
+  so a screenshot of a wrong chart maps to an exact trace. **A chart complaint
+  is now answerable from one JSON response, without reproducing it.**
+- **`cache.py` rebuilt as durable storage**, not a disposable cache — it is the
+  last tier before a blank chart. Atomic writes, `PRAGMA quick_check` on open,
+  corruption quarantined to `cache.db.corrupt-<ts>` and rebuilt (a damaged cache
+  degrades to a *cold* cache, never a crash), runtime self-healing, versioned
+  migrations (an existing v1 `cache.db` opens and keeps every row), per-bar
+  provider attribution, and validation on read.
+
+**Frontend** (`ui/static/index.html`): an explicit load state machine
+(`idle → loading → receiving → rendering → complete | cached | empty |
+exhausted | failed`), mirrored onto `#ch-main` as `data-ch-state` so a stuck
+spinner, a silent timeout and a blank canvas are distinguishable from the
+outside. Reaching the start of history now shows **"◄ Start of available history
+· 5m data starts May 28, 2026"** and stops requesting; `empty` and `exhausted`
+no longer raise the red error overlay.
+
+**Safety unchanged and re-asserted.** `get_candles` still never returns stale
+data — the engine's fail-closed rule (no data ⇒ skip the symbol) is covered by
+its own tests, and stale bars remain available only behind `get_history()` /
+`allow_stale=True`, which display surfaces use and the trading path does not.
+
+**Verification.** 880 tests (250 of them market-data, all offline against
+scripted providers); `scripts/marketdata_stress.py` — 41 offline torture
+scenarios (concurrency, rapid switching, hostile providers, corrupt cache,
+malformed data, memory, thread safety) now part of `verify.ps1`, plus 6 live
+ones behind `--live`; `scripts/chart_check.py` grown to 49 real-browser checks,
+**and now passing end to end** — it had been dying at check 12 on `main`, which
+is how root cause #2 was found. Measured: 24 concurrent live chart loads in
+**0.5s with zero blanks**, against 10–15s under yfinance's global throttle.
+
 ## [Uncommitted] 2026-07-26 — V0.5.1: updater smoke-test release
 
 *Version 0.5.0 → 0.5.1. A deliberately tiny, cosmetic change to exercise the

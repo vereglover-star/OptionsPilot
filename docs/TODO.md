@@ -12,6 +12,31 @@ is. This file is the flat, actionable checklist version.
       the placeholder `LICENSE`, and run one manual end-to-end update QA on real
       Windows (`docs/AUTO_UPDATER.md` §7).
 
+- [x] **V0.5.2 Market-data subsystem** — done 2026-07-26. Replaced the chart
+      history stack with a capability-driven, multi-provider architecture inside
+      `optionspilot/data/`: `capabilities` (measured per-interval depth, from
+      *now*), `adapter` (`HistoryAdapter`; adapters raise typed errors instead of
+      returning empty frames), three adapters (Yahoo chart JSON / yfinance /
+      Stooq) + `LegacyProviderAdapter`, `registry` (ordering, pre-network
+      eligibility, circuit breakers with half-open recovery), `service`
+      (`MarketDataService`'s tier ladder, and the one place `exhausted` /
+      `empty` / `stale` / `failed` are told apart), `quality` (semantic
+      validation with a report), `diagnostics` + `/api/diagnostics/marketdata`,
+      and a rebuilt `cache` (atomic, integrity-checked, self-healing, versioned,
+      provider-attributed). Frontend gained an explicit load state machine and
+      an honest "start of available history". +229 tests (870);
+      `scripts/marketdata_stress.py` (41 offline scenarios, wired into
+      `verify.ps1`) and `scripts/marketdata_probe.py` (re-measures provider
+      limits) are new; `chart_check.py` 44 → 49 and now green end to end.
+      Full design: `docs/MARKET_DATA.md`. **Manual QA not yet run:**
+      `docs/QA_MARKET_DATA.md` (84 checks).
+
+- [ ] **Optional: a second non-Yahoo intraday provider** — Tiingo or Twelve
+      Data behind a free API key would make an entire Yahoo outage survivable at
+      intraday resolution (Stooq only covers daily+). The chain is already built
+      for it: one adapter file plus one `default_registry()` entry. See
+      `docs/MARKET_DATA.md` §4 for the survey and §12 for the rationale.
+
 - [x] **V0.5.0 Auto-Updater 1.0** — done 2026-07-26. Self-contained
       `optionspilot/update/` subpackage (core + stdlib only, `urllib`, no new
       dep): SemVer ordering, GitHub Releases client (installer asset only),

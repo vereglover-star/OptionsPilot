@@ -31,18 +31,51 @@ choices onto a freshly loaded config at bootstrap; `_apply_mode` always
 preserves the caller's current `operating_mode` when restoring the baseline
 for a trading-mode switch. `MAX_WATCHLIST = 30`.
 
-## Data (`optionspilot/data/`)
+## Data (`optionspilot/data/`) — full design in `docs/MARKET_DATA.md`
 - `MarketDataProvider` ABC — `get_candles/get_quote/get_expirations/get_option_chain`.
 - Canonical candle frame: UTC index `ts`, columns `open high low close volume`
   (enforced by `base.validate_candles`).
-- `YFinanceProvider` — free delayed data; 4h resampled from 1h.
-- `CandleCache` — SQLite upsert cache keyed (symbol, timeframe, ts).
-- `CachedProvider` (`cached.py`) — caching/dedup layer over any provider:
-  per-timeframe candle TTLs (`CANDLE_TTL`), 5s quote / 30s chain / 1h
-  expirations memos, in-flight request dedup, write-through to
-  `CandleCache` (`data/cache.db`) for warm restarts. The orchestrator
-  wraps `YFinanceProvider` in this by default; injected test providers
-  bypass it. `invalidate_quotes()` drops quote/chain memos on demand.
+- `build_provider(cache_db)` — **the composition root**: assembles the shipped
+  chain (Yahoo JSON → yfinance → Stooq) with one cache and one diagnostics
+  recorder. The orchestrator calls this; nothing else needs to know which
+  providers exist or in what order.
+- `capabilities.py` — `ProviderCapabilities`: what each provider can serve, per
+  interval, including its real history depth **measured from now**
+  (`YAHOO_INTERVALS`). Answers "can this request be served at all?" without
+  spending a request. `scripts/marketdata_probe.py` re-measures it live.
+- `adapter.py` — `HistoryAdapter`, the one shape every source takes. Supplies
+  interval mapping, resampling, normalization, window clamping, throttling and
+  health bookkeeping, so a concrete adapter is transport + parser only. Typed
+  failures (`ProviderRangeError` / `RateLimited` / `SymbolError` /
+  `Unavailable`) drive retry-vs-failover.
+- `yahoo_provider.YahooChartAdapter` (priority 10) — Yahoo's `v8/finance/chart`
+  JSON over `urllib`; the **primary**, because it reports *why* it refused.
+- `yfinance_adapter.YFinanceAdapter` (20) — the same data by an independent
+  code path, so the two fail for independent reasons.
+- `stooq_provider.StooqAdapter` (30) — the only source not dependent on Yahoo;
+  daily/weekly/monthly only, decades deep.
+- `legacy.LegacyProviderAdapter` — wraps any plain `MarketDataProvider` (test
+  fakes, backtest fixtures) into the same ladder.
+- `registry.ProviderRegistry` — ordering, eligibility (interval/symbol/depth
+  checks *before* the network), and per-provider circuit breakers with
+  half-open recovery.
+- `quality.py` — semantic validation returning a `HistoryReport`: OHLC
+  consistency, ordering, duplicates, future timestamps, non-finite values, bad
+  prints, interval conformance. Gaps are recorded, never penalised.
+- `service.MarketDataService` — the tier ladder (memo → disk → providers →
+  half-open probes → stale cache → explained failure) and the one place the
+  four distinct "no data" conditions (`exhausted`/`empty`/`stale`/`failed`) are
+  told apart. Returns a `HistoryResult`.
+- `diagnostics.py` — one `RequestTrace` per request in a bounded ring; served by
+  `GET /api/diagnostics/marketdata`.
+- `CandleCache` (`cache.py`) — durable SQLite history keyed
+  (symbol, timeframe, ts), with provider attribution, atomic writes, integrity
+  check on open, corruption quarantine + rebuild, and versioned migrations.
+- `CachedProvider` (`cached.py`) — the `MarketDataProvider` face: candles go to
+  `MarketDataService`; quotes/chains/expirations stay memoized (5s / 30s / 1h)
+  over `YFinanceProvider` with in-flight dedup. `get_history()` returns the full
+  result for the API; `get_candles()` stays strict (never stale) for the engine.
+  `invalidate_quotes()` drops quote/chain memos on demand.
 - `symbols.py` — `is_known(symbol)`, `search(query)` (autocomplete), backed by
   the bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers).
 - `presets.py` — static preset watchlists (`PRESETS: dict[str, list[str]]`).

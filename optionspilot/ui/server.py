@@ -299,17 +299,31 @@ class UIServer:
         # aggregates so the flag is forced off there (keeps the cache key and the
         # session tagging honest).
         ext = extended_hours and tf.minutes < Timeframe.D1.minutes
-        stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
-        # Only thread the kwarg when actually requesting extended hours, so plain
-        # 4-arg providers (test fakes, legacy adapters) are unaffected.
-        if stale_ok is not None:
-            df, stale = (stale_ok(symbol, tf, start, end, extended_hours=True)
-                         if ext else stale_ok(symbol, tf, start, end))
+        # `get_history` returns the full result — which tier answered, which
+        # provider, whether the window is older than anything can serve, the
+        # validation report and the diagnostics trace id — so the frontend can
+        # be EXPLICIT about its state instead of inferring one from an empty
+        # array. Feature-detected so tests injecting a bare fake provider (and
+        # any legacy adapter) keep working on the older two-method contract.
+        get_history = getattr(self.orch.provider, "get_history", None)
+        meta: dict = {}
+        if get_history is not None:
+            result = (get_history(symbol, tf, start, end, extended_hours=True)
+                      if ext else get_history(symbol, tf, start, end))
+            df, stale = result.frame, result.stale
+            meta = result.as_meta()
         else:
-            df = (self.orch.provider.get_candles(symbol, tf, start, end,
-                                                 extended_hours=True)
-                  if ext else self.orch.provider.get_candles(symbol, tf, start, end))
-            stale = False
+            stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
+            # Only thread the kwarg when actually requesting extended hours, so
+            # plain 4-arg providers are unaffected.
+            if stale_ok is not None:
+                df, stale = (stale_ok(symbol, tf, start, end, extended_hours=True)
+                             if ext else stale_ok(symbol, tf, start, end))
+            else:
+                df = (self.orch.provider.get_candles(symbol, tf, start, end,
+                                                     extended_hours=True)
+                      if ext else self.orch.provider.get_candles(symbol, tf, start, end))
+                stale = False
         # One sanitization choke point for everything derived below: candles
         # AND indicator series. Providers validate their own output, but this
         # endpoint must stay robust to any that don't — a single non-finite
@@ -324,8 +338,16 @@ class UIServer:
         # means the display has genuinely fallen behind live prices.
         market_open = self.orch.market_open(utcnow())
         if df.empty:
+            # An empty payload is NOT one condition. `meta["outcome"]` says
+            # which of them it is — `exhausted` (the window predates every
+            # provider: the true start of history, and the frontend must stop
+            # asking), `empty` (a holiday or pre-listing window: legitimate),
+            # or `failed` (nothing could answer: the only case that deserves an
+            # error state). Conflating the three is what made a scroll into old
+            # intraday history retry forever.
             return {"symbol": symbol, "timeframe": timeframe, "candles": [],
-                    "indicators": {}, "stale": False, "market_open": market_open}
+                    "indicators": {}, "stale": False, "market_open": market_open,
+                    **meta}
 
         import math
         icfg = self.cfg.indicators
@@ -377,7 +399,25 @@ class UIServer:
         return {"symbol": symbol, "timeframe": timeframe,
                 "candles": candles, "indicators": series, "stale": stale,
                 "as_of": times[-1] if stale else None,
-                "market_open": market_open, "extended_hours": ext}
+                "market_open": market_open, "extended_hours": ext, **meta}
+
+    def marketdata_diagnostics(self, traces: int = 25) -> dict:
+        """Provider health + cache stats + recent request traces.
+
+        Provider-only, like `candles_payload` — no orchestrator state, so no
+        lock is taken and asking for diagnostics can never contend with (or be
+        blocked by) a running scan. Returns `{"available": False}` rather than
+        erroring when the injected provider predates this architecture, so the
+        endpoint is safe to call against any build."""
+        health = getattr(self.orch.provider, "health", None)
+        diagnostics = getattr(self.orch.provider, "diagnostics", None)
+        if health is None or diagnostics is None:
+            return {"available": False,
+                    "reason": "this provider does not expose diagnostics"}
+        payload = health()
+        payload["available"] = True
+        payload["traces"] = diagnostics.recent(max(0, min(traces, 200)))
+        return payload
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
@@ -739,6 +779,15 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             log.error("candles fetch failed: %s", exc)
             return JSONResponse({"error": f"candles unavailable: {exc}"},
                                 status_code=502)
+
+    @app.get("/api/diagnostics/marketdata")
+    def marketdata_diagnostics(traces: int = 25):
+        """Everything needed to diagnose a chart complaint without reproducing
+        it: per-provider health and circuit-breaker state, cache size and
+        schema, aggregate request outcomes, and the most recent request traces
+        (which providers were tried, why each was skipped or failed, which tier
+        answered, and what validation found)."""
+        return server.marketdata_diagnostics(traces)
 
     @app.get("/api/status")
     def status():
