@@ -5,6 +5,15 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.4.6 Professional Windows Installer 1.0** — done 2026-07-26. Completed
+      `installer/OptionsPilot.iss` (Inno Setup: C:\Program Files install, stable
+      AppId in-place upgrades, Start Menu + optional desktop shortcut, app icon,
+      Programs-and-Features registration, uninstall-time data prompt default No);
+      `scripts/build_installer.ps1`; `release.yml` builds + uploads the setup exe
+      alongside the zip. +19 tests (546). Full design: `docs/INSTALLER.md`.
+      **Next:** Authenticode code signing (SmartScreen); then auto-updater;
+      manual installer QA on real Windows; replace placeholder `LICENSE`.
+
 - [x] **V0.4.5 Professional Release Pipeline 1.0** — done 2026-07-23. GitHub
       Actions `ci.yml` (push/PR, reusable) + `release.yml` (tag `v*`: build +
       package + GitHub Release); single-source `__version__` (pyproject dynamic);

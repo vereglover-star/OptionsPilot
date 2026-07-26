@@ -5,13 +5,40 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-23, end of V0.4.5 Professional Release Pipeline 1.0.
+**Last updated:** 2026-07-23, end of V0.4.6 Professional Windows Installer 1.0.
 
-## What was completed most recently? (V0.4.5 — Professional Release Pipeline 1.0)
+## What was completed most recently? (V0.4.6 — Professional Windows Installer 1.0)
+
+OptionsPilot is now a **professionally installable Windows app**, and the
+installer is wired into the release pipeline. **No application behavior changed.**
+527 → **546 tests** (+19). Full design: `docs/INSTALLER.md`.
+
+1. **Installer** (`installer/OptionsPilot.iss`, Inno Setup — evolved from the
+   V0.4.5 template, same stable `AppId`): installs to `C:\Program
+   Files\OptionsPilot` (admin, changeable dir); Start Menu folder (app +
+   Uninstall) + optional desktop shortcut (default checked); app icon everywhere;
+   Programs-and-Features registration; **in-place upgrades** (stable AppId,
+   `UsePreviousAppDir`, `CloseApplications`).
+2. **Uninstall** asks *"also remove my personal data?"* at uninstall time,
+   **default No** (`MB_DEFBUTTON2`); only an explicit Yes deletes
+   `%LOCALAPPDATA%\OptionsPilot`. Because user data lives in that separate root,
+   upgrades/reinstalls never touch journal/coach/settings/trades/watchlists/backups.
+3. **Pipeline**: `scripts/build_installer.ps1` (locates ISCC, reuses
+   `dist\OptionsPilot`, stamps the single-source version) →
+   `OptionsPilot-Setup-vX.Y.Z.exe`. `release.yml` installs Inno Setup, builds it,
+   and uploads it **alongside** the retained zip.
+4. **Tests**: +19 (`tests/test_installer.py`) static guards on the `.iss` +
+   pipeline wiring. ISCC compile + install/upgrade/uninstall are manual/CI.
+
+**Still open before a friction-free public release:** Authenticode **code
+signing** (SmartScreen warns until then; `SignTool` hook stubbed in the `.iss`),
+and replacing the placeholder `LICENSE` with a real choice.
+
+## What was completed before that? (V0.4.5 — Professional Release Pipeline 1.0)
 
 A release-automation milestone: a version tag now becomes a downloadable GitHub
 Release with **zero manual steps**. **No application behavior changed** — only
-how releases are built, tested, packaged, and published. 520 → **527 tests**
+how releases are built, tested, packaged, and published. A **527-test suite**
 (+7). Full design: `docs/RELEASE.md`.
 
 1. **GitHub Actions** (`.github/workflows/`): `ci.yml` (push/PR + reusable via
@@ -597,15 +624,17 @@ run, the accessibility overlay).
 
 ## What should be worked on next?
 
-**Release Pipeline 1.1 (installer + updater).** The release automation is done;
-the natural next infra step is the Windows installer, then the auto-updater.
-Groundwork is in place: `installer/OptionsPilot.iss` (Inno Setup, unwired) and
-`docs/RELEASE.md` "Installer preparation" (paths/shortcuts/AppData/uninstall).
-To wire it: add a `Compile installer` step to `release.yml`
-(`ISCC installer\OptionsPilot.iss /DMyAppVersion=<ver>`) and upload the setup exe
-as a second Release asset. Then the updater (replace the install dir only; never
-the storage root; `create_backup` before applying). **Before any public
-release:** replace the placeholder `LICENSE` with a real license choice.
+**Release delivery — remaining infra.** The installer is built and wired
+(`docs/INSTALLER.md`). Next, in order: (1) **Authenticode code signing** of the
+setup + app exe (removes the SmartScreen warning — a real prerequisite for a
+frictionless public release; `SignTool` hook is stubbed in `installer/
+OptionsPilot.iss`, and it needs a cert secret in `release.yml`). (2) **Automatic
+updater** — check GitHub Releases for a newer tag, download the installer, run it
+(replaces the install dir only; never the storage root; `create_backup` first).
+(3) Optional installer polish: branded wizard bitmaps (`WizardImageFile`).
+**Before any public release:** replace the placeholder `LICENSE`. Also do the
+**manual installer QA** in `docs/INSTALLER.md` (fresh/upgrade/repair/uninstall on
+a real Windows box) — it can't be automated.
 
 **Optional architecture follow-ups (from the V0.4.2 audit, `docs/ARCHITECTURE-
 AUDIT-V0.4.2.md` §11).** None urgent: Finding 2 (extract a `ManualTradeReconciler`

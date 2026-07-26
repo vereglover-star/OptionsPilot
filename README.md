@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace), and the V3 product-quality sprint is underway on
-branch `v3-ui`. **527 tests, 100% passing.** See
+branch `v3-ui`. **546 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -74,10 +74,30 @@ option chain, order ticket, working orders, account metrics), **Coach**
 exercises), **Watchlist**, **Journal**, **Backtest**, **Learning**, and
 **Settings**. Keyboard 1–9 switches tabs.
 
-### Package as a normal Windows app
+### Install on Windows (end users)
+
+Download from the [Releases](https://github.com/vereglover-star/OptionsPilot/releases)
+page — each release has two options:
+
+- **`OptionsPilot-Setup-vX.Y.Z.exe`** — the installer. Installs to
+  `C:\Program Files\OptionsPilot`, adds Start Menu + desktop shortcuts, and
+  registers in Windows "Installed Apps" (upgrade/uninstall supported).
+- **`OptionsPilot-vX.Y.Z.zip`** — portable; extract and run `OptionsPilot.exe`,
+  no install.
+
+Your data (paper account, journal, coach reviews, settings, watchlists, backups)
+lives under `%LOCALAPPDATA%\OptionsPilot`, **separate from the program files**, so
+**upgrades and reinstalls never lose it**. Uninstalling asks whether to also
+delete that data — the default is **No**. Details: [docs/INSTALLER.md](docs/INSTALLER.md).
+
+The setup exe is not yet code-signed, so Windows SmartScreen may warn on first
+run ("More info" → "Run anyway").
+
+### Package / build the installer yourself (developers)
 
 ```powershell
-.\scripts\build_exe.ps1        # -> dist\OptionsPilot\OptionsPilot.exe
+.\scripts\build_exe.ps1         # -> dist\OptionsPilot\OptionsPilot.exe
+.\scripts\build_installer.ps1   # -> installer\Output\OptionsPilot-Setup-v<version>.exe  (needs Inno Setup 6)
 ```
 
 Double-click the exe to open the desktop app. CLI commands pass through:
@@ -212,7 +232,7 @@ scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
                  make_icon.py, fetch_symbols.py
 docs/            see "Documentation" below
-tests/           pytest suite (527 tests)
+tests/           pytest suite (546 tests)
 ```
 
 ## Documentation
@@ -240,6 +260,9 @@ you're a human contributor. The full set:
   the granular per-phase checklist.
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — dated, prose changelog by feature.
 - [docs/TODO.md](docs/TODO.md) — flat, actionable work queue.
+- [docs/RELEASE.md](docs/RELEASE.md) — CI/CD & release pipeline;
+  [docs/INSTALLER.md](docs/INSTALLER.md) — the Windows installer (build, upgrade,
+  uninstall, AppData preservation).
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — coding conventions, commit
   style, testing expectations, definition of done, the developer scripts.
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — the exact,

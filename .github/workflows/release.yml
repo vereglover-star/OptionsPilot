@@ -54,19 +54,32 @@ jobs:
         shell: pwsh
         run: .\scripts\package_release.ps1
 
+      # Inno Setup (ISCC) isn't preinstalled on the runner; Chocolatey is.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      # Reuses the dist\OptionsPilot\ built above -> OptionsPilot-Setup-v<ver>.exe.
+      - name: Build the Windows installer
+        shell: pwsh
+        run: .\scripts\build_installer.ps1
+
       - name: Generate release notes from CHANGELOG
         shell: pwsh
         run: |
           $ver = "${{ github.ref_name }}".TrimStart('v')
           python scripts/release_notes.py $ver | Out-File -Encoding utf8 release_notes.md
 
+      # Publish BOTH artifacts: the portable zip and the installer.
       - name: Create GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = Get-ChildItem dist\OptionsPilot-v*.zip | Select-Object -First 1
+          $setup = Get-ChildItem installer\Output\OptionsPilot-Setup-v*.exe | Select-Object -First 1
           if (-not $zip) { throw "no release zip produced" }
-          gh release create "${{ github.ref_name }}" $zip.FullName `
+          if (-not $setup) { throw "no installer produced" }
+          gh release create "${{ github.ref_name }}" $zip.FullName $setup.FullName `
             --title "OptionsPilot ${{ github.ref_name }}" `
             --notes-file release_notes.md

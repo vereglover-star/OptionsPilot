@@ -3,16 +3,22 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-23, after **V0.4.5 Professional Release Pipeline 1.0**
-(branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
-release-automation milestone with **no application behavior change**: GitHub
-Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) and
-`release.yml` (on `v*` tags: reuse CI → verify tag == `__version__` → build →
-package `OptionsPilot-vX.Y.Z.zip` → GitHub Release with CHANGELOG notes). Made
-`__version__` the single source of truth (pyproject `dynamic`/`attr`); added
-`scripts/package_release.ps1` + `release_notes.py`, a placeholder `LICENSE`, and
-an unwired Inno Setup installer template. 527 tests (+7); packaging verified
-locally. Full design: `docs/RELEASE.md`.
+**Last updated:** 2026-07-26, after **V0.4.6 Professional Windows Installer 1.0**
+(branch `v3-ui`, uncommitted — see "Exact stopping point" below). Turned
+OptionsPilot into a professionally installable Windows app with **no application
+behavior change**. Completed `installer/OptionsPilot.iss` (Inno Setup): installs
+to `C:\Program Files\OptionsPilot` (admin), stable `AppId` for in-place upgrades,
+Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere,
+Programs-and-Features registration, and an uninstall-time "remove my data?"
+prompt (default No). New `scripts/build_installer.ps1`; `release.yml` now builds
++ uploads `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. 546 tests (+19);
+installer config + wiring statically validated (ISCC compile + install runs are
+manual/CI). Full design: `docs/INSTALLER.md`.
+
+**Prior update:** 2026-07-23, after **V0.4.5 Professional Release Pipeline 1.0** —
+GitHub Actions `ci.yml` + `release.yml` (tag → build → `OptionsPilot-vX.Y.Z.zip`
+→ GitHub Release), single-source `__version__`, `scripts/package_release.ps1` +
+`release_notes.py`. 527-test suite (+7). Full design: `docs/RELEASE.md`.
 
 **Prior update:** 2026-07-23, after **V0.4.4 persistent storage & data
 migration** — user data fully separated from binaries via `core/paths.py::
@@ -206,8 +212,32 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-23, V0.4.5 Professional Release Pipeline 1.0 (branch `v3-ui`,
-uncommitted at time of writing).** After auditing the existing build/release
+**2026-07-26, V0.4.6 Professional Windows Installer 1.0 (branch `v3-ui`,
+uncommitted at time of writing).** After inspecting the V0.4.5 installer template
++ release pipeline, completed the Windows installer and wired it in.
+`installer/OptionsPilot.iss` evolved from per-user template to a production
+installer: `DefaultDirName={autopf}\OptionsPilot` (C:\Program Files, admin,
+x64), stable `AppId` retained for in-place upgrades (`UsePreviousAppDir`,
+`CloseApplications`), Start Menu group (app + Uninstall shortcut), optional
+desktop shortcut (default checked), `SetupIconFile`/app-icon everywhere,
+Programs-and-Features metadata (publisher, URLs, copyright, `UninstallDisplayName`
+/`Icon`), and a `[Code] CurUninstallStepChanged` prompt that deletes
+`%LOCALAPPDATA%\OptionsPilot` only on explicit Yes (default No). Removed the old
+install-time `removedata` task + `[UninstallDelete]`. New
+`scripts/build_installer.ps1` (finds ISCC, reuses `dist\OptionsPilot`, stamps
+`/DMyAppVersion=<__version__>` → `installer\Output\OptionsPilot-Setup-v<ver>.exe`).
+`release.yml` gained: install Inno Setup (choco) → `build_installer.ps1` → upload
+the setup exe alongside the retained zip. Added `/installer/Output/` to
+`.gitignore`. Bumped 0.4.5 → 0.4.6. +19 tests (`tests/test_installer.py`, static
+`.iss` + pipeline guards), 546 total green; `check_docs` green; workflow YAML
+parses. **Inno Setup is not installed here, so the ISCC compile and the
+fresh-install/upgrade/repair/uninstall runs were NOT executed — they are
+manual/CI** (checklist in `docs/INSTALLER.md`). Nothing committed (user hasn't
+asked). **Next infra:** Authenticode code signing (SmartScreen); then the
+auto-updater; replace the placeholder `LICENSE` before public release.
+
+**Before that: 2026-07-23, V0.4.5 Professional Release Pipeline 1.0 (branch
+`v3-ui`, uncommitted at time of writing).** After auditing the existing build/release
 setup (`scripts/build_exe.ps1`, `build.ps1`, `release.ps1`, `bump_version.py`,
 `OptionsPilot.spec`), implemented release automation with no app behavior change.
 New `.github/workflows/ci.yml` (push/PR + `workflow_call`: install pip-cached →

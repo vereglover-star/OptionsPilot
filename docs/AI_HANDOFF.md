@@ -428,7 +428,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (527 tests as of this writing, all passing)
+# Tests (546 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -448,8 +448,16 @@ and `.github/workflows/release.yml` (on a `v*` tag: reuse CI → verify tag ==
 `OptionsPilot-vX.Y.Z.zip` → GitHub Release). The version has a **single source of
 truth** — `optionspilot/__init__.py::__version__`; `pyproject.toml` derives it
 via `[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`, so
-`scripts/bump_version.py` edits one line. Full guide: `docs/RELEASE.md`. A Windows
-installer is prepared but not built (`installer/OptionsPilot.iss`, unwired).
+`scripts/bump_version.py` edits one line. Full guide: `docs/RELEASE.md`.
+
+**Windows installer (V0.4.6).** A `v*` tag also builds and publishes
+`OptionsPilot-Setup-vX.Y.Z.exe` (Inno Setup, `installer/OptionsPilot.iss`,
+compiled by `scripts/build_installer.ps1`) **alongside** the portable zip. It
+installs to `C:\Program Files\OptionsPilot` (admin), registers with Programs and
+Features, upgrades in place (stable `AppId`), and prompts before removing user
+data on uninstall (default No). User data stays in `%LOCALAPPDATA%\OptionsPilot`,
+untouched by upgrades/reinstalls. Code signing is still TODO (SmartScreen warns).
+Full guide: `docs/INSTALLER.md`.
 
 **Distribution (V0.3.5):** a release zip downloaded from GitHub and extracted
 with Explorer stamps every file with the Mark-of-the-Web (`Zone.Identifier`
@@ -497,7 +505,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (527 tests cover this
+   exercises the FastAPI layer via `TestClient` (546 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

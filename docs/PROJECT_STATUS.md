@@ -5,37 +5,44 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-23, V0.4.5 Professional Release Pipeline 1.0. Full
-527-test `pytest` suite green (+7), `selftest` PASS, CI/Release workflow YAML
-validated, release packaging produced a clean versioned zip locally, doc checks
-green. See `PROJECT_STATE.md`.
+**Last verified:** 2026-07-23, V0.4.6 Professional Windows Installer 1.0. Full
+546-test `pytest` suite green (+19), `selftest` PASS, installer config + pipeline
+wiring statically validated, workflow YAML parses, doc checks green. The ISCC
+compile + install/upgrade/uninstall runs are manual/CI (see `docs/INSTALLER.md`).
+See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.4.5` — single source of truth: `optionspilot/__init__.py::__version__`
+`0.4.6` — single source of truth: `optionspilot/__init__.py::__version__`
 (pyproject derives it dynamically). Pre-1.0, actively developed; bumped from
-`0.4.4` at the V0.4.5 release-pipeline milestone (the footer reads it from
-`/api/status`). Releases are now automated via GitHub Actions on a `v*` tag
-(`docs/RELEASE.md`); the packaged artifact is `OptionsPilot-vX.Y.Z.zip`.
+`0.4.5` at the V0.4.6 Windows-installer milestone (the footer reads it from
+`/api/status`). A `v*` tag now publishes both `OptionsPilot-Setup-vX.Y.Z.exe`
+(installer) and `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions.
 
 ## Current phase
 
-**V0.4.5 Professional Release Pipeline 1.0, on branch `v3-ui` — awaiting user
-review.** Release-automation milestone; no application behavior changed. Added
-GitHub Actions `ci.yml` (push/PR: install, full `pytest`, `selftest`,
-`check_html_ids`, `check_docs`; pip-cached, fail-fast; reusable via
-`workflow_call`) and `release.yml` (on `v*` tags: reuse CI → verify tag matches
-`__version__` → build exe → package `OptionsPilot-vX.Y.Z.zip` → create GitHub
-Release with CHANGELOG notes). Made `__version__` the **single source of truth**
-(pyproject `dynamic`/`attr`); `bump_version.py` edits one file; `check_docs.py`
-enforces it. New `scripts/package_release.ps1` (clean versioned zip: app +
-LICENSE/README/CHANGELOG, excludes user data/source) and `scripts/release_notes
-.py`. Added a placeholder `LICENSE` (flagged) and an unwired Inno Setup installer
-template (`installer/OptionsPilot.iss`) with documented paths/shortcuts/AppData/
-uninstall. +7 tests (release tooling); packaging verified locally (54 MB zip).
-Full design in `docs/RELEASE.md`.
+**V0.4.6 Professional Windows Installer 1.0, on branch `v3-ui` — awaiting user
+review.** Turns OptionsPilot into a professionally installable Windows app; no
+application behavior changed. Completed `installer/OptionsPilot.iss` (Inno Setup):
+installs to `C:\Program Files\OptionsPilot` (admin, changeable dir), stable
+`AppId` for **in-place upgrades**, Start Menu folder (app + Uninstall), optional
+desktop shortcut (default checked), app icon everywhere, Programs-and-Features
+registration (publisher/URLs/copyright/version), and an **uninstall-time** prompt
+to also delete `%LOCALAPPDATA%\OptionsPilot` (default **No**). Because user data
+lives in that separate root, upgrades/reinstalls never touch journal, coach,
+settings, trades, watchlists, or backups. New `scripts/build_installer.ps1`
+compiles it (stamping the single-source version); `release.yml` now installs Inno
+Setup, builds the installer, and uploads it **alongside** the zip (zip retained).
++19 in `test_installer.py` (static config + pipeline guards). Full design in
+`docs/INSTALLER.md`.
+
+**Before that: V0.4.5 Professional Release Pipeline 1.0.** GitHub Actions `ci.yml`
+(push/PR: tests + selftest + checks, reusable) + `release.yml` (tag `v*`: build →
+package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source `__version__`
+(pyproject `dynamic`/`attr`); `scripts/package_release.ps1` + `release_notes.py`.
+527-test suite (+7).
 
 **Before that: V0.4.4 persistent storage & automatic data migration.** User data
 fully separated from the binaries: new `core/paths.py::AppPaths` (single source
@@ -196,6 +203,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V0.4.3 — AI Coach 2.0 (phase 1) | Per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot on each review; mentor dashboard (`coach/analytics.py`): sub-scores, category trends, streaks, pattern detection w/ confidence, improvement timeline, ≤5 auto-expiring action items; `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades only, additive, backward-compatible | 0.4.3, 492-test suite green (+22) |
 | V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
 | V0.4.5 — Professional Release Pipeline 1.0 | GitHub Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) + `release.yml` (tag `v*`: reuse CI → tag/version guard → build → package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source version (`__version__` via pyproject `dynamic`/`attr`). `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`; unwired Inno Setup installer template. No behavior change | 0.4.5, 527-test suite green (+7) |
+| V0.4.6 — Professional Windows Installer 1.0 | Completed `installer/OptionsPilot.iss` (Inno Setup): installs to `C:\Program Files\OptionsPilot` (admin), stable AppId for in-place upgrades, Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere, Programs-and-Features registration, uninstall-time "remove my data?" prompt (default No). `scripts/build_installer.ps1` + `release.yml` now build/upload `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. No behavior change | 0.4.6, 546-test suite green (+19) |
 
 ## Features complete
 
@@ -269,7 +277,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**527 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
+**546 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

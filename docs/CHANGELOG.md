@@ -4,6 +4,61 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-23 — V0.4.6: Professional Windows Installer 1.0
+
+*Version 0.4.5 → 0.4.6. 527 → 546 tests (+19). Turns OptionsPilot into a
+professionally installable Windows desktop app and wires the installer into the
+release pipeline. **No application behavior changed** — only how the app is
+delivered. Full details in `docs/INSTALLER.md`.*
+
+**Windows installer (`installer/OptionsPilot.iss`).** Completed the Inno Setup
+script (evolved from the V0.4.5 template, preserving its stable `AppId`). It:
+installs to **`C:\Program Files\OptionsPilot`** by default (`{autopf}`, 64-bit,
+admin; the directory page lets the user choose another location); creates a Start
+Menu folder **OptionsPilot** with **OptionsPilot** and **Uninstall OptionsPilot**
+entries; offers an optional **desktop shortcut, checked by default**; uses the
+app icon (`assets/optionspilot.ico`) for the setup exe, shortcuts, and
+uninstaller; and registers with Windows **Installed Apps / Programs and Features**
+(publisher, version, publisher/support URLs, copyright, auto-computed size).
+
+**Upgrades & data safety.** The stable `AppId` (`{{4C0D3A7E-…}`) lets Windows
+recognize an existing install and upgrade it **in place** (`UsePreviousAppDir`),
+replacing only application files; `CloseApplications=yes` closes a running
+instance first. Because all user data lives in a **separate root**
+(`%LOCALAPPDATA%\OptionsPilot`, via `core/paths.py::AppPaths`) that the installer
+never writes to, upgrades and reinstalls never touch the journal, coach reviews,
+settings, trades, watchlists, logs, or backups.
+
+**Uninstall.** The uninstaller asks, at uninstall time, *"Do you also want to
+remove your personal OptionsPilot data?"* defaulting to **No** (`MB_DEFBUTTON2`,
+so silent/accidental uninstalls keep data); only an explicit **Yes** deletes
+`%LOCALAPPDATA%\OptionsPilot` (via `DelTree` in a `[Code]` block). This replaced
+the template's install-time "removedata" task — the decision now happens where it
+belongs.
+
+**Pipeline integration (`scripts/build_installer.ps1` + `release.yml`).** New
+`scripts/build_installer.ps1` locates `ISCC.exe`, reuses the built
+`dist\OptionsPilot\`, and compiles the installer stamping the single-source
+version (`/DMyAppVersion=<optionspilot.__version__>`) →
+`installer\Output\OptionsPilot-Setup-v<ver>.exe`. `release.yml` now installs Inno
+Setup (`choco install innosetup`), runs that script, and uploads the setup exe
+**alongside** the retained `OptionsPilot-vX.Y.Z.zip` on the GitHub Release. Added
+`/installer/Output/` to `.gitignore`.
+
+**Tests:** +19 (`tests/test_installer.py`) — static guards on the installer's
+load-bearing decisions (Program Files target, admin, stable AppId, Start-Menu +
+uninstall entries, desktop-icon-default-checked, app icon everywhere,
+uninstall-time data prompt defaulting to No, no install-time data removal,
+in-place upgrade, versioned output) and the pipeline wiring (Inno install +
+installer build + both assets uploaded, zip retained). The ISCC compile and the
+fresh-install / upgrade / repair / uninstall runs are **manual/CI** (documented
+in `docs/INSTALLER.md`), as there is no headless way to drive a Windows installer.
+
+**Still open (not this milestone):** Authenticode **code signing** of the setup +
+exe (SmartScreen warns until then; `SignTool` hook stubbed in the `.iss`), and
+the placeholder `LICENSE` still needs a real license choice before a public
+release.
+
 ## [Uncommitted] 2026-07-23 — V0.4.5: Professional Release Pipeline 1.0
 
 *Version 0.4.4 → 0.4.5. 520 → 527 tests (+7). A release-automation milestone —

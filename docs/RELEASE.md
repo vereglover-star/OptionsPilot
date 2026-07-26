@@ -1,9 +1,9 @@
 # RELEASE.md — CI/CD & release pipeline (Professional Release Pipeline 1.0)
 
-How OptionsPilot is built, tested, packaged, and published. This milestone
-automates everything from a version tag to a downloadable GitHub Release; the
-Windows installer is *prepared for* but not yet built (see "Installer
-preparation").
+How OptionsPilot is built, tested, packaged, and published. A version tag now
+produces a full GitHub Release: the professional **Windows installer**
+(`OptionsPilot-Setup-vX.Y.Z.exe`) **and** the portable zip
+(`OptionsPilot-vX.Y.Z.zip`). Installer specifics live in `docs/INSTALLER.md`.
 
 ## Overview
 
@@ -48,20 +48,26 @@ The version lives in **one place**: `optionspilot/__init__.py` (`__version__`).
 
 ## Artifacts
 
-`scripts/package_release.ps1` produces **`dist/OptionsPilot-vX.Y.Z.zip`**
-containing:
+Each release publishes **two** artifacts:
 
-```
-OptionsPilot-v0.5.0.zip
-  OptionsPilot/        ← the PyInstaller one-dir bundle (OptionsPilot.exe + _internal\ + config.yaml)
-  LICENSE
-  README.md
-  CHANGELOG.md
-```
+1. **`OptionsPilot-Setup-vX.Y.Z.exe`** — the Windows installer (Inno Setup;
+   installs to `C:\Program Files\OptionsPilot`, Start Menu + desktop shortcuts,
+   Programs-and-Features registration, upgrade/uninstall). Full details in
+   `docs/INSTALLER.md`. Built by `scripts/build_installer.ps1`.
+2. **`OptionsPilot-vX.Y.Z.zip`** — the portable, no-install bundle, from
+   `scripts/package_release.ps1`:
 
-It **excludes** source, tests, build caches, and any local user state (`data\`,
-`logs\`) a local build may have left beside the exe — a release never ships a
-developer's paper account.
+   ```
+   OptionsPilot-v0.5.0.zip
+     OptionsPilot/        ← the PyInstaller one-dir bundle (OptionsPilot.exe + _internal\ + config.yaml)
+     LICENSE
+     README.md
+     CHANGELOG.md
+   ```
+
+The zip **excludes** source, tests, build caches, and any local user state
+(`data\`, `logs\`) a local build may have left beside the exe — a release never
+ships a developer's paper account.
 
 ## How to publish a release
 
@@ -85,9 +91,10 @@ developer's paper account.
    git push origin main --tags
    ```
 4. **GitHub Actions does the rest**: `release.yml` runs the tests, builds the
-   exe, packages the zip, and creates the **GitHub Release `v0.5.0`** with the
-   zip attached and notes drawn from `docs/CHANGELOG.md`. Watch it under the
-   repo's **Actions** tab.
+   exe, packages the zip, compiles the installer, and creates the **GitHub
+   Release `v0.5.0`** with **both** `OptionsPilot-Setup-v0.5.0.exe` and
+   `OptionsPilot-v0.5.0.zip` attached and notes drawn from `docs/CHANGELOG.md`.
+   Watch it under the repo's **Actions** tab.
 
 `scripts/release.ps1 -Version 0.5.0` still works as the local dry run (verify +
 build + a printed checklist); it never tags or publishes. The tag is the trigger.
@@ -103,30 +110,26 @@ build + a printed checklist); it never tags or publishes. The tag is the trigger
 To re-run a failed release without changing code, delete and re-push the tag:
 `git push --delete origin v0.5.0 && git tag -d v0.5.0 && git tag v0.5.0 && git push origin --tags`.
 
-## Installer preparation (not built yet)
+## Installer (Professional Windows Installer 1.0)
 
-The V0.4.4 storage split (all user data under `%LOCALAPPDATA%\OptionsPilot`, via
-`core/paths.py::AppPaths`) is what makes a clean installer possible: the
-installer only ever touches program files, never user data. A ready-to-compile
-**Inno Setup template** lives at `installer/OptionsPilot.iss` (see its header for
-how the release job will invoke `ISCC`). Expected behavior:
+The Windows installer is built and published automatically. It installs to
+`C:\Program Files\OptionsPilot` (admin), registers with Programs and Features,
+creates Start Menu + optional Desktop shortcuts, upgrades in place, and prompts
+at uninstall before removing user data (default No). Because all user data lives
+under `%LOCALAPPDATA%\OptionsPilot` (via `core/paths.py::AppPaths`, separate from
+the install dir), upgrades and reinstalls never touch it. **Full details:
+`docs/INSTALLER.md`.**
 
-| Aspect | Plan |
-|---|---|
-| **Install path** | Per-user, no admin: `%LOCALAPPDATA%\Programs\OptionsPilot\` (`PrivilegesRequired=lowest`). The whole `dist\OptionsPilot\` bundle is copied there. |
-| **Shortcuts** | Start Menu entry always; Desktop shortcut optional (unchecked task). Both point at `{app}\OptionsPilot.exe`. |
-| **AppData / user data** | `%LOCALAPPDATA%\OptionsPilot\` (`data/ logs/ backups/ exports/ migrations/`), created and owned by the app. The installer never writes there. |
-| **Upgrade** | Same `AppId` GUID → a new version installs over the old program files in place; user data is untouched (it's in a separate root). |
-| **Uninstall** | Removes program files + shortcuts. **Leaves user data by default**; a clearly-labeled, unchecked "also delete my data" task removes `%LOCALAPPDATA%\OptionsPilot` only if the user opts in. |
-| **Code signing** | Not yet. `SignTool` hook is stubbed in the `.iss`; sign both the exe and the setup once a certificate is available. |
+In this pipeline: `release.yml` installs Inno Setup (`choco install innosetup`),
+runs `scripts/build_installer.ps1` (which reuses the built `dist\OptionsPilot\`
+and stamps `/DMyAppVersion=<__version__>`), and uploads the resulting
+`OptionsPilot-Setup-vX.Y.Z.exe` as a second Release asset.
 
-Integration points to add later (kept minimal by design):
-1. A `- name: Compile installer` step in `release.yml` after packaging:
-   `ISCC installer\OptionsPilot.iss /DMyAppVersion=<ver>` (Inno Setup is
-   available on `windows-latest` or installable via Chocolatey).
-2. Upload `installer\Output\OptionsPilot-Setup-v<ver>.exe` as a second Release
-   asset alongside the zip.
-3. (Optional) Authenticode signing before upload.
+**Still open (a real prerequisite for a friction-free public release):
+Authenticode code signing** — the setup and app exe are unsigned, so SmartScreen
+warns on first run. A `SignTool` hook is stubbed in the `.iss`; wire it once a
+certificate is available. Optional wizard bitmaps can be added for extra polish
+(see `docs/INSTALLER.md` "Missing / optional assets").
 
 ## Maintaining the workflows
 

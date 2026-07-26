@@ -1,22 +1,26 @@
-; OptionsPilot — Inno Setup script (TEMPLATE, not yet wired into the release pipeline)
+; OptionsPilot — Inno Setup installer script (Professional Windows Installer 1.0)
 ; =============================================================================
-; This is groundwork for "Professional Release Pipeline 1.1". It is NOT built by
-; the GitHub Actions release workflow today. When the installer step is added,
-; the release job will:
-;   1. build the app        -> scripts\build.ps1        (dist\OptionsPilot\)
-;   2. compile this script   -> ISCC OptionsPilot.iss /DMyAppVersion=<x.y.z>
-;   3. upload Output\OptionsPilot-Setup-v<x.y.z>.exe as a Release asset
+; Produces a professional Windows setup: installs to C:\Program Files\OptionsPilot
+; (all users, elevated), registers with Windows "Installed Apps" / Programs and
+; Features, creates Start Menu + (optional) Desktop shortcuts, and supports
+; repair, in-place upgrade, and uninstall.
 ;
-; Compile locally with the free Inno Setup compiler (https://jrsoftware.org):
-;   iscc installer\OptionsPilot.iss /DMyAppVersion=0.5.0
+; Built by the release pipeline (see .github/workflows/release.yml ->
+; scripts/build_installer.ps1):
+;   1. build the app  -> scripts\build.ps1                 (dist\OptionsPilot\)
+;   2. compile         -> ISCC installer\OptionsPilot.iss /DMyAppVersion=<x.y.z>
+;   3. output          -> installer\Output\OptionsPilot-Setup-v<x.y.z>.exe
+; Compile locally the same way (free Inno Setup 6 compiler, https://jrsoftware.org):
+;   iscc installer\OptionsPilot.iss /DMyAppVersion=0.5.0     (or run scripts\build_installer.ps1)
 ;
-; Design decisions (see docs/RELEASE.md "Installer preparation"):
-;   * Per-USER install, no admin/UAC — matches a no-elevation desktop app whose
-;     data already lives under %LOCALAPPDATA%. Install dir: %LOCALAPPDATA%\Programs\OptionsPilot.
-;   * User data lives in %LOCALAPPDATA%\OptionsPilot (managed by the app via
-;     AppPaths). The installer NEVER writes there; the uninstaller NEVER deletes
-;     it by default (opt-in checkbox below) — so upgrades and uninstall/reinstall
-;     preserve the paper account, journal, coach reviews, and settings.
+; DATA SAFETY — the load-bearing design decision:
+;   User data lives in %LOCALAPPDATA%\OptionsPilot (managed by the app via
+;   AppPaths), which is SEPARATE from the install directory. The installer only
+;   ever writes to {app} (Program Files\OptionsPilot). Therefore:
+;     * Upgrades / reinstalls replace only application files — journal, coach,
+;       settings, trades, watchlists, logs, and backups are never touched.
+;     * Uninstall leaves that data intact UNLESS the user explicitly opts in at
+;       uninstall time (the prompt in [Code] below, defaulting to NO).
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"   ; overridden on the command line with /DMyAppVersion=x.y.z
@@ -24,45 +28,96 @@
 #define MyAppName "OptionsPilot"
 #define MyAppExeName "OptionsPilot.exe"
 #define MyAppPublisher "the OptionsPilot authors"
+#define MyAppURL "https://github.com/vereglover-star/OptionsPilot"
+#define MyAppSupportURL "https://github.com/vereglover-star/OptionsPilot/issues"
+#define MyAppCopyright "Copyright (C) 2026 the OptionsPilot authors"
 
 [Setup]
-AppId={{4C0D3A7E-0000-4E00-9000-4F5054494C00}   ; stable GUID — keep constant across versions so upgrades replace in place
+; A stable AppId is what lets Windows recognize an existing installation and
+; upgrade it in place (same GUID across versions). NEVER change this GUID.
+AppId={{4C0D3A7E-0000-4E00-9000-4F5054494C00}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-AppPublisher={#MyAppPublisher}
+AppVerName={#MyAppName} {#MyAppVersion}
 VersionInfoVersion={#MyAppVersion}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppSupportURL}
+AppUpdatesURL={#MyAppURL}/releases
+AppCopyright={#MyAppCopyright}
+
+; Install into Program Files (64-bit), all users. The directory page is shown so
+; a user may choose another location. Elevation is required for Program Files.
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-PrivilegesRequired=lowest                        ; per-user, no admin prompt
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+MinVersion=10.0
 DisableProgramGroupPage=yes
+UsePreviousAppDir=yes
+
+; Programs and Features / Installed Apps registration + branding.
+UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\assets\optionspilot.ico
+WizardStyle=modern
+
+; Close a running OptionsPilot (via Restart Manager) so an upgrade can replace
+; its files, and don't auto-restart it afterwards.
+CloseApplications=yes
+RestartApplications=no
+
 OutputDir=Output
 OutputBaseFilename=OptionsPilot-Setup-v{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
-WizardStyle=modern
-; SignTool=...   ; (future) wire Authenticode signing of the setup + exe here
+; SignTool=signtool   ; (future) Authenticode-sign the setup + exe once a cert exists
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
+; Checked by default (Step 6). The user can uncheck it on the "Select Additional
+; Tasks" page.
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"
-; Opt-in, OFF by default: only removes user data if the user explicitly asks.
-Name: "removedata"; Description: "Also delete my OptionsPilot data (paper account, journal, coach, settings)"; GroupDescription: "On uninstall:"; Flags: unchecked
 
 [Files]
-; The entire PyInstaller one-dir bundle produced by scripts\build.ps1.
+; The entire PyInstaller one-dir bundle produced by scripts\build.ps1. This is
+; ONLY application files — user data lives elsewhere (see the header).
 Source: "..\dist\OptionsPilot\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
+; Start Menu folder "OptionsPilot" with the app and its uninstaller (Step 5).
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename: "{app}\{#MyAppExeName}"
+; Optional desktop shortcut (Step 6).
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch OptionsPilot"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-; Remove user data ONLY if the 'removedata' task was selected. Default uninstall
-; leaves %LOCALAPPDATA%\OptionsPilot untouched so reinstalling keeps everything.
-Type: filesandordirs; Name: "{localappdata}\OptionsPilot"; Tasks: removedata
+[Code]
+{ Uninstall-time prompt (Step 4). Ask whether to also remove personal data,
+  defaulting to NO so an accidental uninstall never destroys the paper account,
+  journal, coach reviews, settings, watchlists, or backups. In silent uninstall
+  the default (keep data) is used automatically. }
+procedure CurUninstallStepChanged(CurStep: TUninstallStep);
+var
+  DataDir: String;
+begin
+  if CurStep = usUninstall then
+  begin
+    DataDir := ExpandConstant('{localappdata}\{#MyAppName}');
+    if DirExists(DataDir) then
+    begin
+      if MsgBox('Do you also want to remove your personal OptionsPilot data?' + #13#10#13#10 +
+                'This permanently deletes your paper-trading account, journal, coach ' +
+                'reviews, settings, watchlists, and backups:' + #13#10 +
+                DataDir + #13#10#13#10 +
+                'Choose No to keep your data for a future reinstall.',
+                mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+        DelTree(DataDir, True, True, True);
+    end;
+  end;
+end;
