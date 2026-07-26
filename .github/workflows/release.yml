@@ -19,10 +19,16 @@ jobs:
     name: Build, package & publish
     needs: test
     runs-on: windows-latest
-    env:
-      OPTIONSPILOT_HOME: ${{ runner.temp }}\OptionsPilot
     steps:
       - uses: actions/checkout@v4
+
+      # Set OPTIONSPILOT_HOME here rather than in job-level env: — the `runner`
+      # context isn't available at workflow-parse time, so ${{ runner.temp }}
+      # in a job `env:` block is rejected before the job starts. $GITHUB_ENV
+      # exports it to every subsequent step, preserving the original behavior.
+      - name: Configure storage root
+        shell: pwsh
+        run: '"OPTIONSPILOT_HOME=$env:RUNNER_TEMP\OptionsPilot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Set up Python
         uses: actions/setup-python@v5
