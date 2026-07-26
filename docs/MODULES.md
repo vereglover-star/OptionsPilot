@@ -225,6 +225,38 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
   looks, never *whether* it trades.
 - Config gate: `integrations.tradingview_webhook` + 16-char minimum secret.
 
+## Update (`update/`, V0.5.0) — the self-updater
+- Self-contained; depends only on `core` + stdlib (`urllib` — no new runtime
+  dep). Every layer takes an injected transport/collaborator → fully offline
+  tests. Full guide: `docs/AUTO_UPDATER.md`.
+- `version.Version` — SemVer parse (`parse`/`try_parse`, leading `v` ok) +
+  correct non-lexical ordering (`0.4.10 > 0.4.9`; prerelease < release).
+- `transport.urllib_open` / `with_retries` — the ONLY networking: 10s
+  timeouts, bounded exponential backoff on transient failures, proxy env
+  support; raises `NetworkError` (retryable flag), never bare urllib errors.
+- `github_api.GitHubReleases` — `list_releases()` (drops drafts),
+  `latest_release(include_prereleases)` (max by parsed Version).
+  `INSTALLER_RE` selects only `OptionsPilot-Setup-vX.Y.Z.exe` assets.
+- `checker.UpdateChecker.check(channel)` — never raises; returns
+  `UpdateCheckResult`. `is_check_due(frequency, last_checked)` throttles
+  (launch/daily/weekly).
+- `downloader.Downloader.download(asset, dest_dir, progress_cb, cancel)` —
+  streams to `%TEMP%\OptionsPilotUpdater`, `.part` → atomic rename, progress
+  snapshots (bytes/speed/ETA), `threading.Event` cancellation.
+- `validation.validate(path, expected_size, expected_sha256)` — the gate
+  before execution (exists/name/size[/hash]); Authenticode slots in here.
+- `installer.InstallerLauncher` — `create_pre_update_backup()` (mandatory;
+  `create_backup(paths, "pre-update")`), `launch(path)` with
+  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL [/RESTARTAPPLICATIONS]`,
+  `relaunch_app()` fallback.
+- `service.UpdateService` — facade + thread-safe `UpdatePhase` state machine;
+  `maybe_check_on_launch()` (background, never blocks), `check_now()`,
+  `start_download()`/`cancel_download()`, `apply_update()` (validate → backup
+  → launch → install hook), `snapshot()` (the UI payload),
+  `set_preferences()`. Prefs live in `RuntimeSettings.update_prefs()`.
+- `ui.py` — pure formatting: `format_bytes/speed/eta`, safe
+  `render_release_notes_html` (escape-first markdown subset), dialog payloads.
+
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop, runtime)` — FastAPI app.
   `/api/scan` is non-blocking by default (background cycle; progress in the
@@ -243,7 +275,9 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
   (add/remove/reorder/pin/favorites/presets), `/api/symbols/search`,
   `/api/mode` (trading_mode switch), `/api/operating_mode` (ai/human
   switch), `/api/coach` (reviews + profile), `/api/risk/reset_halt`,
-  `/api/backtest` (job slot, GET/POST), `/ws` (2s status push),
+  `/api/backtest` (job slot, GET/POST),
+  `/api/update/{status,check,download,progress,cancel,apply,skip,settings}`
+  (the self-updater, V0.5.0 — see `update/` above), `/ws` (2s status push),
   `/webhook/tradingview`. All orchestrator access serialized through
   `UIServer.lock`.
 - `ui/static/index.html` — self-contained dark dashboard (no build step;

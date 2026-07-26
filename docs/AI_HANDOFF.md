@@ -428,7 +428,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (546 tests as of this writing, all passing)
+# Tests (651 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -458,6 +458,24 @@ Features, upgrades in place (stable `AppId`), and prompts before removing user
 data on uninstall (default No). User data stays in `%LOCALAPPDATA%\OptionsPilot`,
 untouched by upgrades/reinstalls. Code signing is still TODO (SmartScreen warns).
 Full guide: `docs/INSTALLER.md`.
+
+**Auto-updater (V0.5.0).** `optionspilot/update/` is a self-contained subpackage
+(depends only on `core` + stdlib; no new runtime dep — networking is `urllib`)
+that checks GitHub Releases, downloads the installer to `%TEMP%\OptionsPilotUpdater`,
+validates it, backs up data (`create_backup(paths, "pre-update")`), and launches
+the installer silently (`/VERYSILENT …`) then restarts. Layers: `version`
+(SemVer ordering), `transport` (the only networking, retries/backoff/proxy),
+`github_api`, `checker`, `downloader`, `validation` (size/hash/Authenticode-ready),
+`installer`, `ui` (presentation), `service` (`UpdateService` facade + state
+machine). Exposed over `/api/update/{status,check,download,progress,cancel,apply,
+skip,settings}`; `UIServer` owns an `UpdateService(__version__, runtime)` and
+kicks a background launch-time check **gated on `run_loop`** (so the test suite
+never hits the network). Preferences (auto_check/frequency/channel/skip_version/
+last_checked) live in `RuntimeSettings` under the `updates` key of settings.json.
+Frontend: Settings ▸ Software updates panel, Help ▸ Check for Updates…, and the
+update dialog in `index.html`. The updater is verified fully offline via fakes
+(`tests/update_helpers.py`); a real Inno upgrade must be QA'd manually. Full
+guide: `docs/AUTO_UPDATER.md`.
 
 **Distribution (V0.3.5):** a release zip downloaded from GitHub and extracted
 with Explorer stamps every file with the Mark-of-the-Web (`Zone.Identifier`
@@ -505,7 +523,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (546 tests cover this
+   exercises the FastAPI layer via `TestClient` (651 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

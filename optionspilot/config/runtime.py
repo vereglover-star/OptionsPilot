@@ -33,6 +33,18 @@ log = get_logger("ui")
 
 MAX_WATCHLIST = 30   # scan cycles are ~seconds per symbol on the free feed
 
+# Auto-updater preferences. Live-editable from Settings (hence here, not in the
+# structural config.yaml), persisted under the "updates" key of settings.json.
+# The UpdateService reads/writes these through update_prefs()/set_update_prefs().
+DEFAULT_UPDATE_PREFS: dict = {
+    "auto_check": True,          # check GitHub Releases in the background on launch
+    "frequency": "daily",        # "launch" | "daily" | "weekly"
+    "channel": "stable",         # "stable" | "beta" (beta accepts prereleases)
+    "skip_version": None,        # a version the user chose to dismiss
+    "last_checked": None,        # ISO-8601 timestamp of the last check
+    "last_seen_version": None,   # the latest version observed at last check
+}
+
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
     "min_confidence": ("engine", "min_confidence"),
@@ -175,6 +187,27 @@ class RuntimeSettings:
     def custom_settings(self) -> dict:
         with self._lock:
             return dict(self._doc.get("custom") or {})
+
+    # ── auto-updater preferences (PreferencesStore for UpdateService) ─────────
+
+    def update_prefs(self) -> dict:
+        """Current updater preferences, defaults filled in for any missing key."""
+        with self._lock:
+            stored = self._doc.get("updates") or {}
+            return {**DEFAULT_UPDATE_PREFS, **stored}
+
+    def set_update_prefs(self, **patch) -> dict:
+        """Merge a partial preferences update and persist. Only known keys are
+        stored; unknown keys are ignored so a future field can't be smuggled in.
+        Returns the full effective preferences."""
+        with self._lock:
+            current = {**DEFAULT_UPDATE_PREFS, **(self._doc.get("updates") or {})}
+            for key, value in patch.items():
+                if key in DEFAULT_UPDATE_PREFS:
+                    current[key] = value
+            self._doc["updates"] = current
+            self._save()
+            return dict(current)
 
     # ── persistence ──────────────────────────────────────────────────────────
 

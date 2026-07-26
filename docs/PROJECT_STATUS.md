@@ -5,27 +5,33 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-23, V0.4.6 Professional Windows Installer 1.0. Full
-546-test `pytest` suite green (+19), `selftest` PASS, installer config + pipeline
-wiring statically validated, workflow YAML parses, doc checks green. The ISCC
-compile + install/upgrade/uninstall runs are manual/CI (see `docs/INSTALLER.md`).
+**Last verified:** 2026-07-26, V0.5.0 Auto-Updater 1.0. Full
+651-test `pytest` suite green (+105), `selftest` PASS, HTML-id + doc checks green,
+updater verified fully offline via fakes. The ISCC compile + real install/upgrade
+runs and a live end-to-end update remain manual/CI (see `docs/AUTO_UPDATER.md`).
 See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.4.6` — single source of truth: `optionspilot/__init__.py::__version__`
+`0.5.0` — single source of truth: `optionspilot/__init__.py::__version__`
 (pyproject derives it dynamically). Pre-1.0, actively developed; bumped from
-`0.4.5` at the V0.4.6 Windows-installer milestone (the footer reads it from
-`/api/status`). A `v*` tag now publishes both `OptionsPilot-Setup-vX.Y.Z.exe`
-(installer) and `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions.
+`0.4.6` at the V0.5.0 Auto-Updater milestone (the footer reads it from
+`/api/status`). A `v*` tag publishes both `OptionsPilot-Setup-vX.Y.Z.exe`
+(installer) and `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions, and the
+installed app now updates itself from GitHub Releases.
 
 ## Current phase
 
-**V0.4.6 Professional Windows Installer 1.0, on branch `v3-ui` — awaiting user
-review.** Turns OptionsPilot into a professionally installable Windows app; no
-application behavior changed. Completed `installer/OptionsPilot.iss` (Inno Setup):
+**V0.5.0 Auto-Updater 1.0, on branch `v3-ui` — awaiting user review.** Adds an
+in-app self-updater (`optionspilot/update/`): a background launch-time check of
+GitHub Releases, a professional update dialog (version diff, release notes,
+size/ETA, Update Now / Remind Me Later / Skip), streamed installer download with
+progress + cancel, pre-update backup, silent install, and restart. Settings ▸
+Software updates (auto-check/frequency/beta) and Help ▸ Check for Updates…. No
+trading behavior changed; user data is never touched by an update. The prior
+milestone remains: `installer/OptionsPilot.iss` (Inno Setup) —
 installs to `C:\Program Files\OptionsPilot` (admin, changeable dir), stable
 `AppId` for **in-place upgrades**, Start Menu folder (app + Uninstall), optional
 desktop shortcut (default checked), app icon everywhere, Programs-and-Features
@@ -204,6 +210,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
 | V0.4.5 — Professional Release Pipeline 1.0 | GitHub Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) + `release.yml` (tag `v*`: reuse CI → tag/version guard → build → package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source version (`__version__` via pyproject `dynamic`/`attr`). `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`; unwired Inno Setup installer template. No behavior change | 0.4.5, 527-test suite green (+7) |
 | V0.4.6 — Professional Windows Installer 1.0 | Completed `installer/OptionsPilot.iss` (Inno Setup): installs to `C:\Program Files\OptionsPilot` (admin), stable AppId for in-place upgrades, Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere, Programs-and-Features registration, uninstall-time "remove my data?" prompt (default No). `scripts/build_installer.ps1` + `release.yml` now build/upload `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. No behavior change | 0.4.6, 546-test suite green (+19) |
+| V0.5.0 — Auto-Updater 1.0 | New self-contained `optionspilot/update/` subpackage (core+stdlib only; `urllib`, no new dep): SemVer ordering, GitHub Releases client (installer asset only), checker (channel/frequency, never raises), streamed downloader (progress/cancel, atomic finalize), validation (size/hash/Authenticode-ready), installer launcher (mandatory `pre-update` backup → `/VERYSILENT` install → restart), `UpdateService` state machine. `/api/update/*` endpoints; launch-time background check gated on `run_loop`; prefs in `RuntimeSettings` (`updates` key). Frontend: Settings ▸ Software updates, Help ▸ Check for Updates…, update dialog. Verified offline via fakes | 0.5.0, 651-test suite green (+105) |
 
 ## Features complete
 
@@ -273,11 +280,16 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Next milestone
 
-Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` for scope detail on each, `NEXT_SESSION.md` for the immediate handoff.
+**Authenticode code signing** (of the setup + app exe, plus signature
+verification in `update/validation.py`) is the natural follow-up to the
+auto-updater — it removes SmartScreen warnings and closes the updater's last
+security gap. After that: whichever of V2-5 / V2-6 / workspace-layout the user
+selects. See `ROADMAP.md` for scope detail, `NEXT_SESSION.md` for the immediate
+handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**546 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
+**651 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

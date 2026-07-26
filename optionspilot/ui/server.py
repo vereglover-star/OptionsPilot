@@ -45,6 +45,8 @@ from optionspilot.engine.scorer import DEFAULT_WEIGHTS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
+from optionspilot.update.models import UpdateError
+from optionspilot.update.service import UpdateService
 
 log = get_logger("ui")
 
@@ -109,6 +111,11 @@ class UIServer:
         self._reports_dir = data_dir / "reports"
         self._symbol_meta: dict[str, dict] = self._load_meta()
         self._kick_meta_refresh(self.cfg.data.watchlist)
+        # Self-updater: reads GitHub Releases, downloads to a temp dir, and (on
+        # explicit user action) launches the installer. Preferences persist via
+        # RuntimeSettings. Constructing it touches no network — a launch-time
+        # check is kicked separately (see create_app), only for the real app.
+        self.updater = UpdateService(__version__, self.runtime)
 
     # ── cycle loop ───────────────────────────────────────────────────────────
 
@@ -688,6 +695,15 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     app.state.server = server
     if run_loop:
         server.start_loop()
+        # Quietly check for updates in the background on launch (respecting the
+        # user's auto-check + frequency preferences). Gated on run_loop so the
+        # test suite — which builds the app with run_loop=False — never touches
+        # the network. Failures are swallowed inside the service; startup is
+        # never blocked or slowed by this call.
+        try:
+            server.updater.maybe_check_on_launch()
+        except Exception:  # noqa: BLE001 - a failed update check must never break launch
+            log.debug("launch-time update check could not start", exc_info=True)
 
     @app.get("/")
     def index():
@@ -969,6 +985,59 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             summary = server.orch.scan_single(alert.symbol)
         return {"source": "tradingview", "symbol": alert.symbol,
                 "note": alert.note, **summary}
+
+    # ── auto-updater ─────────────────────────────────────────────────────────
+    @app.get("/api/update/status")
+    def update_status():
+        """Current updater state (version, availability, prefs, progress).
+
+        Pure read of in-memory state — never triggers a network call, so the
+        Settings panel and the dialog can poll it freely.
+        """
+        return server.updater.snapshot()
+
+    @app.post("/api/update/check")
+    def update_check():
+        """Manual 'Check for Updates' — runs a synchronous check and returns the
+        fresh snapshot. Never raises; a network failure comes back as
+        ``error`` in the snapshot with ``update_available=False``."""
+        server.updater.check_now()
+        return server.updater.snapshot()
+
+    @app.post("/api/update/download")
+    def update_download():
+        started = server.updater.start_download()
+        if not started:
+            return JSONResponse(
+                {"error": "no update is available to download"}, status_code=409)
+        return server.updater.snapshot()
+
+    @app.get("/api/update/progress")
+    def update_progress():
+        return server.updater.snapshot()["progress"]
+
+    @app.post("/api/update/cancel")
+    def update_cancel():
+        server.updater.cancel_download()
+        return {"cancelled": True}
+
+    @app.post("/api/update/apply")
+    def update_apply():
+        result = server.updater.apply_update()
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=422)
+        return result
+
+    @app.post("/api/update/skip")
+    def update_skip():
+        return server.updater.skip_current()
+
+    @app.post("/api/update/settings")
+    def update_settings(payload: dict):
+        try:
+            return server.updater.set_preferences(**(payload or {}))
+        except UpdateError as exc:
+            return JSONResponse({"error": exc.message}, status_code=422)
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket):

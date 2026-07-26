@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace), and the V3 product-quality sprint is underway on
-branch `v3-ui`. **546 tests, 100% passing.** See
+branch `v3-ui`. **651 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -89,6 +89,13 @@ Your data (paper account, journal, coach reviews, settings, watchlists, backups)
 lives under `%LOCALAPPDATA%\OptionsPilot`, **separate from the program files**, so
 **upgrades and reinstalls never lose it**. Uninstalling asks whether to also
 delete that data — the default is **No**. Details: [docs/INSTALLER.md](docs/INSTALLER.md).
+
+Once installed, OptionsPilot **keeps itself up to date**: it quietly checks
+GitHub Releases on launch and, when a newer version exists, offers a one-click
+update that backs up your data, installs, and restarts — no manual downloads. It
+is configurable in **Settings ▸ Software updates** (auto-check on/off, frequency,
+opt-in beta channel) and available any time from **Help ▸ Check for Updates…**.
+Your data is never touched by an update. Details: [docs/AUTO_UPDATER.md](docs/AUTO_UPDATER.md).
 
 The setup exe is not yet code-signed, so Windows SmartScreen may warn on first
 run ("More info" → "Run anyway").
@@ -232,7 +239,7 @@ scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
                  make_icon.py, fetch_symbols.py
 docs/            see "Documentation" below
-tests/           pytest suite (546 tests)
+tests/           pytest suite (651 tests)
 ```
 
 ## Documentation
@@ -262,7 +269,9 @@ you're a human contributor. The full set:
 - [docs/TODO.md](docs/TODO.md) — flat, actionable work queue.
 - [docs/RELEASE.md](docs/RELEASE.md) — CI/CD & release pipeline;
   [docs/INSTALLER.md](docs/INSTALLER.md) — the Windows installer (build, upgrade,
-  uninstall, AppData preservation).
+  uninstall, AppData preservation);
+  [docs/AUTO_UPDATER.md](docs/AUTO_UPDATER.md) — the in-app self-updater
+  (architecture, flow, failure recovery, security).
 - [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) — coding conventions, commit
   style, testing expectations, definition of done, the developer scripts.
 - [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md) — the exact,

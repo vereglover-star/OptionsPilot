@@ -5,13 +5,52 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-23, end of V0.4.6 Professional Windows Installer 1.0.
+**Last updated:** 2026-07-26, end of V0.5.0 Auto-Updater 1.0.
 
-## What was completed most recently? (V0.4.6 — Professional Windows Installer 1.0)
+## What was completed most recently? (V0.5.0 — Auto-Updater 1.0)
 
-OptionsPilot is now a **professionally installable Windows app**, and the
-installer is wired into the release pipeline. **No application behavior changed.**
-527 → **546 tests** (+19). Full design: `docs/INSTALLER.md`.
+OptionsPilot now **keeps itself up to date** like a modern desktop app. **No
+trading behavior changed; user data is never touched by an update.** 546 →
+**651 tests** (+105). Full design: `docs/AUTO_UPDATER.md`.
+
+1. **New subpackage `optionspilot/update/`** (depends only on `core` + stdlib;
+   networking is `urllib`, **no new runtime dependency**), layered and each layer
+   injectable so the whole thing is tested offline: `version` (correct, non-lexical
+   SemVer ordering), `transport` (the only networking — timeouts/retries/backoff/
+   proxy), `github_api` (Releases → installer asset only), `checker` (channel +
+   frequency; **never raises**), `downloader` (stream to `%TEMP%\OptionsPilotUpdater`,
+   progress + cancel, atomic `.part`→final), `validation` (size/hash;
+   Authenticode-ready), `installer` (mandatory `pre-update` backup → `/VERYSILENT`
+   install → restart), `ui` (presentation), `service` (`UpdateService` facade +
+   state machine).
+2. **Wiring**: `/api/update/{status,check,download,progress,cancel,apply,skip,
+   settings}` in `ui/server.py`; `UIServer` owns an `UpdateService(__version__,
+   runtime)` and kicks a background launch-time check **gated on `run_loop`** (so
+   tests never hit the network); `ui/desktop.py` registers an install hook to
+   close the window cleanly. Prefs persist in `RuntimeSettings` under the
+   `updates` key of `settings.json`.
+3. **Frontend** (`ui/static/index.html`): Settings ▸ Software updates panel
+   (auto-check, frequency, beta channel, current/latest, last-checked, Check now),
+   Help ▸ Check for Updates…, and a professional update dialog (version diff,
+   rendered release notes, size/ETA, progress bar, Update Now / Remind Me Later /
+   Skip This Version). Manual browser QA still required (no automated UI driver).
+4. **Tests**: +105 across `test_update_{version,github,checker,downloader,
+   validation,installer,service,endpoints}.py` (+ runtime-prefs), all offline via
+   `tests/update_helpers.py` fakes; `test_architecture.py` now allow-lists the
+   `update` subpackage (core-only).
+
+**Still open before a friction-free public release:** Authenticode **code
+signing** (SmartScreen warns until then; also enables signature verification in
+`update/validation.py`), a published **SHA-256 checksums** asset the validator can
+enforce, replacing the placeholder `LICENSE`, and a **manual end-to-end update
+QA** on real Windows (see `docs/AUTO_UPDATER.md` §7). **Do not commit** — awaiting
+user review.
+
+## What was completed before that? (V0.4.6 — Professional Windows Installer 1.0)
+
+OptionsPilot became a **professionally installable Windows app**, and the
+installer was wired into the release pipeline. **No application behavior changed.**
+A **546-test suite** (+19). Full design: `docs/INSTALLER.md`.
 
 1. **Installer** (`installer/OptionsPilot.iss`, Inno Setup — evolved from the
    V0.4.5 template, same stable `AppId`): installs to `C:\Program

@@ -62,6 +62,7 @@ optionspilot/
 │   ├── backtest/                  #   event-driven replay through the SAME engine/risk/broker
 │   ├── notify/                    #   desktop toast + email notifications
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
+│   ├── update/                    #   self-updater: GitHub Releases → verify → backup → silent install (V0.5.0, core+stdlib only; docs/AUTO_UPDATER.md)
 │   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py)
 │   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
 │   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)

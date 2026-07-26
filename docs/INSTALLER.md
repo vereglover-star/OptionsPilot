@@ -33,6 +33,14 @@ to. Journal, coach reviews, settings, trades, watchlists, logs, and backups all
 survive upgrades untouched. If OptionsPilot is running during an upgrade, Inno's
 Restart Manager (`CloseApplications=yes`) closes it so its files can be replaced.
 
+**Auto-updates (V0.5.0+).** The installed app updates itself through this same
+installer: the in-app updater (`docs/AUTO_UPDATER.md`) downloads the newer
+`OptionsPilot-Setup-vX.Y.Z.exe` from GitHub Releases, backs up the user's data
+(`create_backup(paths, "pre-update")`), and runs it silently
+(`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /RESTARTAPPLICATIONS`) —
+so this script's unattended behavior is part of the update contract. Keep the
+output filename pattern and the silent-install semantics stable.
+
 ## Uninstall behavior
 
 The uninstaller removes the program files and shortcuts. At uninstall time it

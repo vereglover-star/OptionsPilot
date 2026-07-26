@@ -69,6 +69,14 @@ The zip **excludes** source, tests, build caches, and any local user state
 (`data\`, `logs\`) a local build may have left beside the exe — a release never
 ships a developer's paper account.
 
+**The installer asset name matters (V0.5.0+):** the in-app auto-updater
+(`docs/AUTO_UPDATER.md`) finds a release's installer by matching
+`OptionsPilot-Setup-vX.Y.Z.exe` and will only ever download that asset. Keep the
+naming produced by `scripts/build_installer.ps1` stable — renaming the setup
+asset would silently make releases invisible to installed apps. The updater also
+skips **drafts** always and **prereleases** unless the user opts into the beta
+channel, so mark experimental tags as prereleases on GitHub.
+
 ## How to publish a release
 
 1. **Bump the version** and update the changelog:

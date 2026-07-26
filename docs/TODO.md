@@ -5,6 +5,26 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [ ] **Authenticode code signing + checksums** — the remaining security gap:
+      sign the setup + app exe in `release.yml` (removes SmartScreen warnings),
+      add signature verification to `update/validation.py` (designed as a drop-in
+      check), publish a SHA-256 checksums asset the validator enforces, replace
+      the placeholder `LICENSE`, and run one manual end-to-end update QA on real
+      Windows (`docs/AUTO_UPDATER.md` §7).
+
+- [x] **V0.5.0 Auto-Updater 1.0** — done 2026-07-26. Self-contained
+      `optionspilot/update/` subpackage (core + stdlib only, `urllib`, no new
+      dep): SemVer ordering, GitHub Releases client (installer asset only),
+      never-raising checker (stable/beta channel, launch/daily/weekly frequency),
+      streamed downloader (progress/cancel, atomic finalize), validation
+      (size/hash, Authenticode-ready), installer launcher (mandatory `pre-update`
+      backup → `/VERYSILENT` → restart), `UpdateService` state machine.
+      `/api/update/*`; launch check gated on `run_loop`; prefs in
+      `RuntimeSettings`. Frontend: Settings ▸ Software updates, Help ▸ Check for
+      Updates…, update dialog. +105 tests (651), all offline via fakes. Full
+      design: `docs/AUTO_UPDATER.md`. **Deferred within scope:** delta updates,
+      private update servers, enterprise policies (§8).
+
 - [x] **V0.4.6 Professional Windows Installer 1.0** — done 2026-07-26. Completed
       `installer/OptionsPilot.iss` (Inno Setup: C:\Program Files install, stable
       AppId in-place upgrades, Start Menu + optional desktop shortcut, app icon,

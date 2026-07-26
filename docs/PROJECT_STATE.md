@@ -3,17 +3,30 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-26, after **V0.4.6 Professional Windows Installer 1.0**
-(branch `v3-ui`, uncommitted — see "Exact stopping point" below). Turned
-OptionsPilot into a professionally installable Windows app with **no application
-behavior change**. Completed `installer/OptionsPilot.iss` (Inno Setup): installs
-to `C:\Program Files\OptionsPilot` (admin), stable `AppId` for in-place upgrades,
-Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere,
-Programs-and-Features registration, and an uninstall-time "remove my data?"
-prompt (default No). New `scripts/build_installer.ps1`; `release.yml` now builds
-+ uploads `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. 546 tests (+19);
-installer config + wiring statically validated (ISCC compile + install runs are
-manual/CI). Full design: `docs/INSTALLER.md`.
+**Last updated:** 2026-07-26, after **V0.5.0 Auto-Updater 1.0** (branch `v3-ui`,
+uncommitted — see "Exact stopping point" below). The installed app now
+**self-updates from GitHub Releases** with **no trading behavior change** and
+without ever touching user data. New self-contained `optionspilot/update/`
+subpackage (core + stdlib only; `urllib`, no new dependency): SemVer ordering,
+GitHub Releases client (installer asset only), checker (channel/frequency, never
+raises), streamed downloader (progress/cancel), validation (size/hash/Authenticode-
+ready), installer launcher (mandatory `pre-update` backup → `/VERYSILENT` install
+→ restart), and an `UpdateService` state machine. `/api/update/*` endpoints; a
+launch-time background check gated on `run_loop`; prefs in `RuntimeSettings`
+(`updates` key). Frontend: Settings ▸ Software updates, Help ▸ Check for Updates…,
+and an update dialog. 651 tests (+105), all updater tests offline via fakes; a
+real Inno upgrade / live end-to-end update is manual/CI. Full design:
+`docs/AUTO_UPDATER.md`.
+
+**Prior update:** 2026-07-26, after **V0.4.6 Professional Windows Installer 1.0** —
+turned OptionsPilot into a professionally installable Windows app with **no
+application behavior change**. Completed `installer/OptionsPilot.iss` (Inno Setup):
+installs to `C:\Program Files\OptionsPilot` (admin), stable `AppId` for in-place
+upgrades, Start Menu (app + Uninstall) + optional desktop shortcut, app icon
+everywhere, Programs-and-Features registration, and an uninstall-time "remove my
+data?" prompt (default No). New `scripts/build_installer.ps1`; `release.yml`
+builds + uploads `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. 546 tests
+(+19). Full design: `docs/INSTALLER.md`.
 
 **Prior update:** 2026-07-23, after **V0.4.5 Professional Release Pipeline 1.0** —
 GitHub Actions `ci.yml` + `release.yml` (tag → build → `OptionsPilot-vX.Y.Z.zip`
@@ -212,7 +225,36 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-26, V0.4.6 Professional Windows Installer 1.0 (branch `v3-ui`,
+**2026-07-26, V0.5.0 Auto-Updater 1.0 (branch `v3-ui`, uncommitted at time of
+writing).** After inspecting the storage/backup layer (`core/paths.py`,
+`core/migration.py::create_backup`), config (`settings.py`/`runtime.py`), the UI
+server/desktop wiring, and the installer's silent-install support, built a
+self-contained `optionspilot/update/` subpackage (10 modules: `version`,
+`models`, `transport`, `github_api`, `checker`, `downloader`, `validation`,
+`installer`, `ui`, `service`) that depends only on `core` + stdlib (networking is
+`urllib` — **no new runtime dependency**). Each layer takes an injected transport/
+collaborator so the whole updater is tested fully offline with fakes
+(`tests/update_helpers.py`). Extended `RuntimeSettings` with `update_prefs()`/
+`set_update_prefs()` (persisted under the `updates` key, defaults in
+`DEFAULT_UPDATE_PREFS`). Wired `/api/update/{status,check,download,progress,cancel,
+apply,skip,settings}` into `ui/server.py`; `UIServer` constructs
+`UpdateService(__version__, runtime)` and `create_app` kicks a launch-time
+background check **gated on `run_loop`** (tests never hit the network);
+`ui/desktop.py` sets an install hook that closes the window + releases the
+single-instance lock. Frontend (`ui/static/index.html`): CSS + a Settings ▸
+Software updates panel, a header Help ▸ Check for Updates… menu, a `#ver` update
+dot, and the update dialog, all driven by an `Updater` JS module polling
+`/api/update/status`. Bumped 0.4.6 → 0.5.0. +105 tests (8 `test_update_*.py`
+files + runtime-prefs); `test_architecture.py` allow-lists the core-only `update`
+subpackage. 651 total green; `check_html_ids` green; JS `node --check` passes.
+**The ISCC compile and a real launch→download→install→restart update were NOT
+executed here (Inno Setup not installed; no live GitHub release with an installer
+asset) — they are manual/CI** (checklist in `docs/AUTO_UPDATER.md` §7). Nothing
+committed (user hasn't asked). **Next infra:** Authenticode code signing (removes
+SmartScreen warnings + enables signature verification in `update/validation.py`);
+a published SHA-256 checksums asset; replace the placeholder `LICENSE`.
+
+**Before that: 2026-07-26, V0.4.6 Professional Windows Installer 1.0 (branch `v3-ui`,
 uncommitted at time of writing).** After inspecting the V0.4.5 installer template
 + release pipeline, completed the Windows installer and wired it in.
 `installer/OptionsPilot.iss` evolved from per-user template to a production
@@ -730,6 +772,11 @@ serving live data (see the current stopping point above).
 
 ## Next recommended task
 
+0. **Authenticode code signing** (the natural follow-up to the auto-updater):
+   sign the setup + app exe in `release.yml`, add a signature-verification check
+   to `update/validation.py`, and publish a SHA-256 checksums asset the validator
+   can enforce. Also: one manual end-to-end update QA on real Windows
+   (`docs/AUTO_UPDATER.md` §7) and replace the placeholder `LICENSE`.
 1. **V0.4.0 Phase 4** — the `learning_mode` axis (normal/exploration) added to
    `config/settings.py` + `config/runtime.py` (orthogonal to
    operating_mode/trading_mode), plus exploration-mode tagged, risk-capped

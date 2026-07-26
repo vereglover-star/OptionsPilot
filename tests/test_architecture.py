@@ -33,6 +33,10 @@ ALLOWED: dict[str, set[str]] = {
     "coach": {"core"},
     "notify": {"core", "config"},
     "integrations": {"core"},
+    # Self-updater: reads GitHub, downloads to temp, backs up + launches the
+    # installer. Depends only on core (paths, migration.create_backup, logging)
+    # plus stdlib — deliberately independent of the trading stack.
+    "update": {"core"},
 }
 
 # Composition roots — allowed to import any subpackage. Still constrained by the

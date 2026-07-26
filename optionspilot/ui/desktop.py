@@ -66,6 +66,20 @@ def launch(config: AppConfig, runtime=None, data_dir=None) -> None:  # pragma: n
     ))
     threading.Thread(target=server.run, daemon=True, name="uvicorn").start()
 
+    # When the updater launches the installer, gracefully close the window and
+    # release the single-instance lock so the installer can replace the exe and
+    # (via /RESTARTAPPLICATIONS) relaunch it cleanly.
+    def _on_install_launched() -> None:
+        import webview as _wv
+        server.should_exit = True
+        try:
+            for w in list(_wv.windows):
+                w.destroy()
+        except Exception:  # noqa: BLE001 - best-effort shutdown
+            pass
+
+    app.state.server.updater.set_install_hook(_on_install_launched)
+
     url = f"http://127.0.0.1:{port}"
     for _ in range(100):  # wait for the server to come up
         try:

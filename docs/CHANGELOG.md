@@ -4,6 +4,73 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-26 — V0.5.0: Auto-Updater 1.0
+
+*Version 0.4.6 → 0.5.0. 546 → 651 tests (+105). Makes the installed app
+self-updating from GitHub Releases, like Discord/VS Code/Spotify. **No trading
+behavior changed; user data is never touched by an update.** Full details in
+`docs/AUTO_UPDATER.md`.*
+
+**New subpackage `optionspilot/update/`.** A self-contained, layered updater that
+depends only on `core` (paths, `migration.create_backup`, logging) and the
+standard library — networking is `urllib`, so there is **no new runtime
+dependency**. Every layer takes an injected transport/collaborator, so the whole
+thing is verified fully offline with fakes (`tests/update_helpers.py`): no
+sockets, no real installer runs. Layers: `version.py` (semantic-version parsing
+and **correct, non-lexical ordering** — `0.4.9 < 0.4.10 < 0.5.0 < 1.0.0`,
+prereleases below releases); `transport.py` (the only networking — conservative
+timeouts, bounded retries with exponential backoff on transient failures, offline
+tolerance, proxy support, descriptive User-Agent); `github_api.py` (GitHub
+Releases → `ReleaseInfo`, selecting **only** the `OptionsPilot-Setup-vX.Y.Z.exe`
+asset — source zips and look-alikes are ignored by construction); `checker.py`
+(is-there-a-newer-release decision with channel + frequency helpers; **never
+raises** — offline is a quiet, expected outcome); `downloader.py` (streams the
+installer to `%TEMP%\OptionsPilotUpdater` with progress/speed/ETA, cancellation,
+and an atomic `.part`→final rename so a cancelled/failed download leaves no
+partial file); `validation.py` (verifies exists/size/name before anything runs,
+structured so SHA-256 and Authenticode checks slot in with no caller changes);
+`installer.py` (a **mandatory `pre-update` backup** via `create_backup`, then a
+silent `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL` install, then restart);
+`ui.py` (pure presentation — human sizes/ETA, safe markdown→HTML for release
+notes with everything escaped first); and `service.py` (`UpdateService` — the
+app-facing facade and thread-safe state machine).
+
+**Experience.** On launch the app quietly checks GitHub in the background
+(respecting the user's auto-check + frequency preferences); if it's current,
+nothing happens. If a newer version exists, a professional dialog shows the
+version diff, release date, download size, estimated time, and rendered release
+notes, with **Update Now / Remind Me Later / Skip This Version**. Update Now
+streams the installer with a live progress bar (downloaded/total MB, speed, ETA)
+and a Cancel button, then one click validates, backs up, installs silently, and
+restarts. Because user data lives in `%LOCALAPPDATA%\OptionsPilot` (V0.4.4) and
+the installer only replaces Program Files, an update can never lose the journal,
+paper account, coach history, settings, watchlists, or backups.
+
+**Wiring.** `/api/update/{status,check,download,progress,cancel,apply,skip,
+settings}` on the FastAPI layer; `UIServer` owns an `UpdateService(__version__,
+runtime)` and kicks the launch-time check **gated on `run_loop`** so the test
+suite never touches the network; `ui/desktop.py` registers an install hook that
+closes the window and releases the single-instance lock so the exe can be
+replaced. Preferences (auto-check, frequency `launch|daily|weekly`, `stable|beta`
+channel, skipped version, last-checked) persist via `RuntimeSettings` under the
+`updates` key of `settings.json`. Frontend (`ui/static/index.html`): a Settings ▸
+**Software updates** panel, a header **Help ▸ Check for Updates…** menu, and the
+update dialog.
+
+**Security & future-readiness.** Only the configured repository is trusted (fixed
+in code), only a recognized installer asset is ever downloaded, and validation
+runs before anything executes — with hash and Authenticode verification designed
+in as drop-in checks. Downloads land only in a scratch temp dir. Still open before
+a public release: code signing, a published checksums asset, and a manual
+end-to-end update QA on real Windows (the automated tests can't drive a real Inno
+upgrade).
+
+**Tests (+105).** `test_update_version.py`, `test_update_github.py`,
+`test_update_checker.py`, `test_update_downloader.py`, `test_update_validation.py`,
+`test_update_installer.py`, `test_update_service.py`, `test_update_endpoints.py`,
+plus runtime-prefs coverage; `test_architecture.py` allow-lists the new
+core-only `update` subpackage.
+
 ## [Uncommitted] 2026-07-23 — V0.4.6: Professional Windows Installer 1.0
 
 *Version 0.4.5 → 0.4.6. 527 → 546 tests (+19). Turns OptionsPilot into a
