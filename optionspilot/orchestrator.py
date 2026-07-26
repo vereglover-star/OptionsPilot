@@ -36,6 +36,7 @@ from optionspilot.broker import OrderManager, PositionManager, create_broker
 from optionspilot.broker.base import Broker
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
+from optionspilot.core.paths import AppPaths
 from optionspilot.core.models import (
     Direction, Fill, Position, Timeframe, TradePlan, TradeRecord, utcnow,
 )
@@ -166,11 +167,13 @@ class Orchestrator:
         broker: Broker | None = None,
         journal: TradeJournal | None = None,
         notifier: NotificationCenter | None = None,
-        data_dir: str | Path = "data",
+        data_dir: str | Path | None = None,
         learned_weights: dict[str, float] | None = None,
     ):
         self.cfg = config
-        data_dir = Path(data_dir)
+        # data_dir is the user-data directory; when omitted it resolves to the
+        # per-user storage root (AppPaths) so the app never writes beside the exe.
+        data_dir = Path(data_dir) if data_dir is not None else AppPaths().get_data_dir()
         self.provider = provider or CachedProvider(
             YFinanceProvider(), data_dir / "cache.db"
         )

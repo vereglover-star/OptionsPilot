@@ -39,7 +39,7 @@ def _acquire_single_instance() -> socket.socket | None:
         return None
 
 
-def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI entry point
+def launch(config: AppConfig, runtime=None, data_dir=None) -> None:  # pragma: no cover - GUI entry point
     import uvicorn
     import webview
 
@@ -60,7 +60,7 @@ def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI e
         return
 
     port = _free_port()
-    app = create_app(config, run_loop=True, runtime=runtime)
+    app = create_app(config, run_loop=True, runtime=runtime, data_dir=data_dir)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning"
     ))

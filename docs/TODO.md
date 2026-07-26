@@ -5,6 +5,23 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.4.4 persistent storage & automatic data migration** — done
+      2026-07-23. `core/paths.py::AppPaths` (single source of truth, root at
+      `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py::initialize_storage`
+      (one-time lossless legacy import, backups, empty versioned framework);
+      bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior
+      change; +28 tests (520). Full design: `docs/STORAGE.md`. **Next infra:**
+      automatic updater (replace install dir only; back up before applying).
+
+- [x] **V0.4.3 AI Coach 2.0 (phase 1)** — done 2026-07-23. Per-trade 10-category
+      scorecard (`coach/categories.py`) + outcome snapshot; mentor dashboard
+      (`coach/analytics.py`: sub-scores, category trends, streaks, confidence-
+      scored pattern detection, improvement timeline, ≤5 auto-expiring action
+      items); `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades
+      only, additive, backward-compatible. +22 tests (492). Coach 2.1 ideas
+      (persist dashboard history, AI-trade coaching, overtrading detection) left
+      for a future phase.
+
 - [x] **V0.4.2 architecture audit + three refactors** — done 2026-07-23
       (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`): shared `core/sqlite.py` foundation
       (`connect` + `user_version` migrations) adopted by all five stores;

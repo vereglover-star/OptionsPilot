@@ -3,14 +3,30 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-23, after **V0.4.2 architecture audit + three
-refactors** (branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
-read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) found the codebase healthy,
-so only three low-risk behavior-preserving changes were made, each separately
-tested: a shared `core/sqlite.py` foundation (`connect` + `user_version`
-migrations) adopted by all five stores; `ui/server.py` import cleanup + public
-`orchestrator.WINDOW_DAYS`; executable layering-guard tests. No behavior change.
-470 tests (+16); `selftest` PASS.
+**Last updated:** 2026-07-23, after **V0.4.4 persistent storage & data
+migration** (branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
+core-infrastructure milestone: user data is now fully separated from the
+binaries. New `core/paths.py::AppPaths` is the single source of truth for every
+filesystem path (root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME`
+override); new `core/migration.py::initialize_storage` creates the layout and
+imports any legacy CWD-relative install once — losslessly (timestamps preserved,
+verified, never overwrites newer/deletes source), recorded in a marker — plus a
+backup helper and an empty versioned-migration framework. Bootstrap/Orchestrator/
+UIServer/selftest wired through it; `data_dir=` APIs unchanged → no behavior
+change. 520 tests (+28); end-to-end migration of the real 27-file legacy install
+verified lossless. Full design: `docs/STORAGE.md`.
+
+**Prior update:** 2026-07-23, after **V0.4.3 AI Coach 2.0 (phase 1)** — a
+per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot and a
+pure `build_dashboard` (`coach/analytics.py`: sub-scores, trends, streaks,
+confidence-scored patterns, improvement timeline, ≤5 action items), served on
+`GET /api/coach → dashboard` and rendered in the coach tab. Manual trades only;
+backward-compatible. 492-test suite (+22).
+
+**Prior update:** 2026-07-23, after **V0.4.2 architecture audit + three
+refactors** — a shared `core/sqlite.py` foundation adopted by all five stores;
+`ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`; executable
+layering-guard tests. Behavior-preserving. 470-test suite (+16).
 
 **Prior update:** 2026-07-23, after **V0.4.1 Experience Engine phase 3** — a
 centralized `build_snapshot`, advisory historical-similarity on tradeable
@@ -186,8 +202,47 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-23, V0.4.2 architecture audit + three refactors (branch `v3-ui`,
-uncommitted at time of writing).** Ran a full read-only architecture audit
+**2026-07-23, V0.4.4 persistent storage & data migration (branch `v3-ui`,
+uncommitted at time of writing).** After a full filesystem-usage audit,
+implemented the storage-separation milestone. New `optionspilot/core/paths.py`
+(`AppPaths` — single source of truth; platform root `%LOCALAPPDATA%\OptionsPilot`
+/ XDG / `Application Support`, `OPTIONSPILOT_HOME` override; typed `get_*`
+helpers; `ensure()`) and `optionspilot/core/migration.py` (`initialize_storage`
+— layout creation + one-time lossless legacy import with timestamp preservation,
+per-file verification, skip-if-newer, no source deletion; `create_backup`;
+empty `MIGRATIONS` versioned framework; `migration_version.json` marker). Wired
+`__main__._bootstrap` (builds AppPaths, migrates, logs to `paths.root`, threads
+`data_dir` through all commands), `Orchestrator`/`UIServer`/`create_app`/`serve`/
+`desktop.launch` defaults, and the UI backtest report path; removed the last
+CWD-relative `Path("data")` hardcodes. `data_dir=` APIs unchanged. Extended
+`selftest` with storage checks; added `tests/conftest.py` `OPTIONSPILOT_HOME`
+isolation. Tests +28 (`test_paths.py`, `test_migration.py`), 520 total green;
+`selftest` PASS; end-to-end migration of the real 27-file legacy `./data`+`./logs`
+verified byte-for-byte lossless with originals intact and a no-op second launch.
+Nothing committed (user hasn't asked). **Next:** the automatic updater (replace
+the install dir only, never the storage root; back up via `create_backup` first)
+— recommendations in the final report / `NEXT_SESSION.md`.
+
+**Before that: 2026-07-23, V0.4.3 AI Coach 2.0 phase 1 (branch `v3-ui`,
+uncommitted at time of writing).** Implemented Phase 1 of AI Coach 2.0 after a full inspection of the
+existing Coach/Journal/Experience wiring. New: `coach/categories.py` (10-category
+per-trade scorecard, derived from the review's existing findings/mistakes; pure)
+and `coach/analytics.py` (`build_dashboard`: sub-scores, category monthly trend,
+streaks, confidence-scored pattern detection, improvement timeline, ≤5
+recent-window action items; pure). `coach/coach.py`'s `CoachReview` gained
+`categories` + an outcome snapshot (pnl/return_pct/hold_minutes/best-effort
+`r_multiple`/entry_ts/symbol/direction), computed inside the existing `review()`.
+`GET /api/coach` returns a `dashboard` block (cached by review count in
+`UIServer._coach_dashboard`); the coach tab renders it (no new CSS). Manual
+trades only; the trading path and *when* a review runs are unchanged; everything
+is backward-compatible with pre-2.0 reviews. Tests +22 (492 total, green);
+`check_html_ids` + headless `browser_check` green. Nothing committed (user hasn't
+asked). **Next:** Coach 2.1 ideas in `NEXT_SESSION.md` (persist dashboard
+history, AI-trade coaching, overtrading detection) or V0.4 Phase 4
+(`learning_mode`). 
+
+**Before that: 2026-07-23, V0.4.2 architecture audit + three refactors (branch
+`v3-ui`, uncommitted at time of writing).** Ran a full read-only architecture audit
 (report: `docs/ARCHITECTURE-AUDIT-V0.4.2.md`) and implemented the three approved
 low-risk, behavior-preserving improvements, each as a separate change with its
 own regression tests: (1) new `core/sqlite.py` (`connect` + `run_migrations` on

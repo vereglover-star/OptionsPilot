@@ -49,7 +49,7 @@ optionspilot/
 │   ├── __main__.py                #   CLI: run/ui/serve/scan/status/journal/backtest/learn
 │   ├── orchestrator.py            #   the one event loop; composes every subsystem
 │   ├── config/                    #   settings.py (pydantic, startup) + runtime.py (live overlay)
-│   ├── core/                      #   domain models (dataclasses), logging setup, sqlite foundation
+│   ├── core/                      #   domain models (dataclasses), logging setup, sqlite foundation, storage (paths+migration)
 │   ├── data/                      #   MarketDataProvider ABC, yfinance adapter, caching, symbols
 │   ├── analysis/                  #   PURE FUNCTIONS: indicators, patterns, structure, SMC, options math
 │   ├── engine/                    #   MultiTimeframeAnalyzer → ConfluenceScorer → TradeGate → planner

@@ -764,9 +764,23 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
       </div>
     </div>
     <div class="cards" id="coach-cards"></div>
+    <div id="coach-dashboard" style="display:none">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Category scorecard</h2>
+          <div id="coach-categories"></div>
+        </div>
+        <div class="panel">
+          <h2>Your action plan</h2>
+          <div id="coach-actions"><div class="empty">—</div></div>
+          <h3 class="sub">Recent improvements</h3>
+          <div id="coach-timeline"><div class="empty">Not enough history yet.</div></div>
+        </div>
+      </div>
+    </div>
     <div class="grid2">
       <div class="panel">
-        <h2>Recurring mistakes — your personal coaching</h2>
+        <h2>Recurring patterns — your personal coaching</h2>
         <div id="coach-mistakes"><div class="empty">No reviewed trades yet.</div></div>
       </div>
       <div class="panel">
@@ -980,6 +994,12 @@ const fmt$ = v => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString(undefined,
                   {minimumFractionDigits:2, maximumFractionDigits:2});
 const cls = v => v > 0 ? "up" : v < 0 ? "down" : "";
 const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+// Coach 2.0 score/confidence colouring
+const scoreVar = s => (s === null || s === undefined) ? "var(--muted)"
+  : s >= 70 ? "var(--good)" : s >= 50 ? "var(--warn)" : "var(--bad)";
+const scoreCls = s => (s === null || s === undefined) ? "" : s >= 70 ? "up" : s < 50 ? "down" : "";
+const confBadge = c => { const col = c === "high" ? "var(--good)" : c === "medium" ? "var(--warn)" : "var(--muted)";
+  return `<span style="font-size:var(--fs-xs);padding:1px 6px;border-radius:6px;border:1px solid ${col};color:${col}">${esc(c)}</span>`; };
 // write innerHTML only when the markup actually changed — avoids DOM churn,
 // re-layout, and losing hover states on every websocket push
 const setHTML = (id, html) => {
@@ -3887,28 +3907,63 @@ async function loadCoach() {
   if (!_coachLoaded) { $("coach-reviews").innerHTML = skel(4); _coachLoaded = true; }
   const d = await (await fetch("/api/coach")).json();
   const p = d.profile;
-  // first-run explainer replaces the stat cards until a review exists
-  $("coach-intro").style.display = p.trades_reviewed === 0 ? "" : "none";
-  $("coach-cards").style.display = p.trades_reviewed === 0 ? "none" : "";
-  $("coach-cards").innerHTML = (p.trades_reviewed === 0 ? [
-    ["Trades reviewed", "0", ""],
-  ] : [
-    ["Trades reviewed", p.trades_reviewed, ""],
-    ["Avg process score", p.avg_score + "/100", ""],
-    ["Score trend", (p.score_trend >= 0 ? "+" : "") + p.score_trend,
-     cls(p.score_trend)],
-    ["Distinct mistakes", (p.recurring_mistakes || []).length, ""],
+  const dash = d.dashboard || { trades_reviewed: 0 };
+  const has = (dash.trades_reviewed || 0) > 0;
+  // first-run explainer replaces the dashboard until a review exists
+  $("coach-intro").style.display = has ? "none" : "";
+  $("coach-cards").style.display = has ? "" : "none";
+  $("coach-dashboard").style.display = has ? "" : "none";
+
+  const o = dash.overall || {}, sc = dash.scores || {}, stk = dash.streaks || {};
+  const num = v => (v === null || v === undefined) ? "—" : v;
+  const pct = v => (v === null || v === undefined) ? "—" : Math.round(v * 100) + "%";
+  const streak = stk.current > 0 ? stk.current + "W" : stk.current < 0 ? (-stk.current) + "L" : "—";
+  $("coach-cards").innerHTML = (!has ? [["Trades reviewed", "0", ""]] : [
+    ["Trades reviewed", dash.trades_reviewed, ""],
+    ["Avg process score", num(o.avg_score) + "/100", ""],
+    ["Win rate", pct(o.win_rate), ""],
+    ["Consistency", num(sc.consistency), scoreCls(sc.consistency)],
+    ["Risk", num(sc.risk), scoreCls(sc.risk)],
+    ["Execution", num(sc.execution), scoreCls(sc.execution)],
+    ["Discipline", num(sc.discipline), scoreCls(sc.discipline)],
+    ["Current streak", streak, cls(stk.current)],
   ]).map(([k, v, c]) =>
     `<div class="card"><div class="k">${k}</div><div class="v small ${c}">${v}</div></div>`).join("");
 
-  if (p.trades_reviewed > 0 && (p.recurring_mistakes || []).length) {
-    $("coach-mistakes").innerHTML = p.recurring_mistakes.map(m =>
-      `<div class="notif risk_limit"><div class="t">${esc(m.label)}
-        <span class="hint" style="display:inline">— ${m.count}× (${(m.rate*100).toFixed(0)}% of trades)</span></div>
-        <div class="b">${esc(m.coaching)}</div></div>`).join("");
-  } else if (p.trades_reviewed > 0) {
-    $("coach-mistakes").innerHTML = `<div class="empty">No recurring mistakes yet — keep it up.</div>`;
-  }
+  // category scorecard — score bar + grade + monthly trend
+  $("coach-categories").innerHTML = (dash.category_scores || []).map(c => {
+    const val = c.score === null ? "—" : c.score, col = scoreVar(c.score);
+    const w = c.score === null ? 0 : c.score;
+    const tr = c.trend ? ` <span class="${cls(c.trend)}" style="font-size:var(--fs-xs)">${c.trend > 0 ? "▲" : "▼"}${Math.abs(c.trend).toFixed(0)}</span>` : "";
+    return `<div style="margin:0 0 9px">
+      <div style="display:flex;justify-content:space-between;font-size:var(--fs-sm)">
+        <span>${esc(c.name)}</span>
+        <span><b style="color:${col}">${val}</b> <span style="color:var(--muted)">${esc(c.grade)}</span>${tr}</span></div>
+      <div style="height:6px;background:var(--grid);border-radius:4px;overflow:hidden;margin-top:3px">
+        <div style="height:100%;width:${w}%;background:${col}"></div></div></div>`;
+  }).join("") || `<div class="empty">—</div>`;
+
+  // action plan (max 5, each with a confidence badge)
+  $("coach-actions").innerHTML = (dash.action_items || []).length
+    ? dash.action_items.map(a => `<div class="notif risk_limit"><div class="t">${esc(a.text)} ${confBadge(a.confidence)}</div>
+        <div class="b">${esc(a.rationale)}</div></div>`).join("")
+    : `<div class="empty">No action items — process looks clean. Keep going.</div>`;
+
+  // improvement timeline
+  $("coach-timeline").innerHTML = (dash.recent_improvements || []).length
+    ? "<ul style='margin-left:18px;line-height:1.7'>" +
+      dash.recent_improvements.map(t => `<li>${esc(t)}</li>`).join("") + "</ul>"
+    : `<div class="empty">Not enough history yet.</div>`;
+
+  // recurring patterns with confidence + developing/recurring language
+  const pats = dash.patterns || [];
+  $("coach-mistakes").innerHTML = pats.length
+    ? pats.map(m => `<div class="notif risk_limit"><div class="t">${esc(m.label)} ${confBadge(m.confidence)}
+        <span class="hint" style="display:inline">— ${m.count}× (${(m.rate * 100).toFixed(0)}%), ${esc(m.status)}</span></div>
+        <div class="b">${esc(m.coaching)}</div></div>`).join("")
+    : (has ? `<div class="empty">No recurring patterns — keep it up.</div>`
+           : `<div class="empty">No reviewed trades yet.</div>`);
+
   $("coach-strengths").innerHTML = (p.top_strengths || []).length
     ? p.top_strengths.map(s =>
         `<div class="notif trade_closed"><div class="b">${esc(s.strength)}
@@ -3941,6 +3996,11 @@ function reviewDetail(r) {
     "BEFORE THE TRADE", ...(r.before || []).map(fmt), "",
     "DURING THE TRADE", ...(r.during || []).map(fmt), "",
     "AFTER THE TRADE", ...(r.after || []), "",
+    (r.categories || []).filter(c => c.score !== null).length
+      ? "CATEGORIES: " + r.categories.filter(c => c.score !== null)
+          .map(c => `${c.name} ${c.score}`).join(", ") : "",
+    r.r_multiple !== null && r.r_multiple !== undefined ? "R MULTIPLE: " + r.r_multiple : "",
+    "",
     r.mistake_labels?.length ? "MISTAKES: " + r.mistake_labels.join("; ") : "MISTAKES: none",
     r.strengths?.length ? "STRENGTHS: " + r.strengths.join("; ") : "",
     "", ...(r.pro_notes || []).map(n => "PRO: " + n),

@@ -157,6 +157,17 @@ class CoachReview:
     improvements: list[str] = field(default_factory=list)
     pro_notes: list[str] = field(default_factory=list)
     ev_note: str = ""
+    # AI Coach 2.0: per-trade category scorecard (list of CategoryScore dicts)
+    # and a small outcome snapshot the analytics layer aggregates without having
+    # to join back to the journal. All optional → old persisted reviews load fine.
+    categories: list[dict] = field(default_factory=list)
+    pnl: float = 0.0
+    return_pct: float = 0.0
+    hold_minutes: float = 0.0
+    r_multiple: float | None = None     # best-effort; None when not derivable
+    entry_ts: str = ""                  # ISO, for time-series analytics
+    symbol: str = ""
+    direction: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -171,6 +182,11 @@ class CoachReview:
                                if m in MISTAKES],
             "strengths": self.strengths, "improvements": self.improvements,
             "pro_notes": self.pro_notes, "ev_note": self.ev_note,
+            "categories": self.categories,
+            "pnl": self.pnl, "return_pct": self.return_pct,
+            "hold_minutes": self.hold_minutes, "r_multiple": self.r_multiple,
+            "entry_ts": self.entry_ts, "symbol": self.symbol,
+            "direction": self.direction,
         }
 
 
@@ -217,6 +233,15 @@ class TradeCoach:
         improvements = [MISTAKES[m][2] for m in mistakes if m in MISTAKES]
         pro_notes = [MISTAKES[m][1] for m in mistakes if m in MISTAKES]
 
+        # Category scorecard, derived from the checks/mistakes already gathered.
+        # Lazy import: categories.py imports Finding/MISTAKES from this module.
+        from optionspilot.coach.categories import score_categories
+        categories = [
+            c.to_dict() for c in score_categories(
+                before + during, mistakes, verdict=verdict, had_context=bool(entry))
+        ]
+
+        outlay = trade.entry_price * 100 * trade.quantity
         review = CoachReview(
             trade_id=trade.id, score=score, verdict=verdict,
             setup_quality=quality,
@@ -225,9 +250,33 @@ class TradeCoach:
             mistakes=mistakes, strengths=strengths,
             improvements=improvements, pro_notes=pro_notes,
             ev_note=self._ev_note(entry),
+            categories=categories,
+            pnl=round(trade.pnl, 2),
+            return_pct=round(trade.pnl / outlay * 100, 2) if outlay else 0.0,
+            hold_minutes=round(trade.hold_minutes, 2),
+            r_multiple=self._r_multiple(trade, entry, orders),
+            entry_ts=trade.entry_ts.isoformat(),
+            symbol=trade.symbol, direction=trade.direction.value,
         )
         self._persist(review)
         return review
+
+    def _r_multiple(self, trade, entry, orders) -> float | None:
+        """Best-effort realized R multiple: P/L divided by the planned premium
+        risk. Planned risk is estimated from the protective stop distance on the
+        underlying converted to premium via the entry delta (|Δspot| × |delta| ×
+        100 × qty). Returns None whenever any input is missing — never invented."""
+        stops = [o for o in orders
+                 if o.get("kind") in ("stop_loss", "trailing_stop")
+                 and o.get("stop_level")]
+        spot = (entry or {}).get("spot")
+        delta = ((entry or {}).get("contract") or {}).get("delta")
+        if not stops or not spot or not delta:
+            return None
+        risk = abs(spot - stops[0]["stop_level"]) * abs(delta) * 100 * trade.quantity
+        if risk <= 0:
+            return None
+        return round(trade.pnl / risk, 2)
 
     # ── before the trade ─────────────────────────────────────────────────────
 

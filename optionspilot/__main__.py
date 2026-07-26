@@ -21,38 +21,45 @@ from pathlib import Path
 from optionspilot import __version__
 from optionspilot.config import load_config
 from optionspilot.core.logging_setup import setup_logging
+from optionspilot.core.migration import initialize_storage
+from optionspilot.core.paths import AppPaths
 
 
 def _bootstrap(args):
     from optionspilot.config.runtime import RuntimeSettings
 
+    # Storage lives under a stable per-user root (%LOCALAPPDATA%\OptionsPilot),
+    # created and migrated once — independent of where the exe is installed.
+    paths = AppPaths()
+    initialize_storage(paths)
+
     cfg_path = Path(args.config)
     cfg = load_config(cfg_path if cfg_path.exists() else None)
-    setup_logging(cfg.logging)
+    setup_logging(cfg.logging, base_dir=paths.root)
     # In-app choices (watchlist, trading mode, custom tuning) overlay the yaml;
     # the baseline snapshot lets mode switches restore yaml values exactly.
-    runtime = RuntimeSettings(Path("data") / "settings.json", baseline=cfg)
+    runtime = RuntimeSettings(paths.get_settings_file(), baseline=cfg)
     runtime.apply(cfg)
-    return cfg, runtime
+    return cfg, runtime, paths
 
 
 def cmd_run(args) -> int:
     from optionspilot.orchestrator import Orchestrator
 
-    cfg, runtime = _bootstrap(args)
+    cfg, runtime, paths = _bootstrap(args)
     print(f"OptionsPilot {__version__}  -  PAPER TRADING (no real money)")
     print(f"watchlist: {cfg.data.watchlist} | min confidence: "
           f"{cfg.engine.min_confidence}% | scan every {cfg.engine.scan_interval_seconds}s")
     print("Ctrl+C to stop.\n")
-    Orchestrator(cfg).run_forever()
+    Orchestrator(cfg, data_dir=paths.get_data_dir()).run_forever()
     return 0
 
 
 def cmd_scan(args) -> int:
     from optionspilot.orchestrator import Orchestrator
 
-    cfg, runtime = _bootstrap(args)
-    orch = Orchestrator(cfg)
+    cfg, runtime, paths = _bootstrap(args)
+    orch = Orchestrator(cfg, data_dir=paths.get_data_dir())
     summary = orch.run_cycle()
     print(json.dumps(summary, indent=2, default=str))
     if not orch.market_open(datetime.now(timezone.utc)):
@@ -65,8 +72,8 @@ def cmd_status(args) -> int:
     from optionspilot.journal import TradeJournal
     from optionspilot.risk import RiskManager
 
-    cfg, runtime = _bootstrap(args)
-    broker = PaperBroker(cfg.broker, Path("data") / "paper.db",
+    cfg, runtime, paths = _bootstrap(args)
+    broker = PaperBroker(cfg.broker, paths.get_paper_db(),
                          cfg.risk.starting_balance)
     acct = broker.get_account()
     print(f"cash      {acct.cash:>12,.2f}")
@@ -77,7 +84,7 @@ def cmd_status(args) -> int:
     for p in positions:
         print(f"  {p.contract.symbol} x{p.quantity} @ {p.avg_price:.2f} "
               f"({p.direction.value}) stop {p.stop_current} target {p.target}")
-    stats = TradeJournal(Path("data") / "journal.db").stats()
+    stats = TradeJournal(paths.get_journal_db()).stats()
     print(f"\njournal: {stats}")
     return 0
 
@@ -85,8 +92,8 @@ def cmd_status(args) -> int:
 def cmd_journal(args) -> int:
     from optionspilot.journal import TradeJournal
 
-    _bootstrap(args)[0]
-    journal = TradeJournal(Path("data") / "journal.db")
+    _, _, paths = _bootstrap(args)
+    journal = TradeJournal(paths.get_journal_db())
     trades = journal.all()[-args.last:]
     for t in trades:
         print(f"{t.entry_ts:%Y-%m-%d %H:%M} {t.symbol:5s} {t.direction.value:5s} "
@@ -102,7 +109,7 @@ def cmd_backtest(args) -> int:
     from optionspilot.data import YFinanceProvider
     from optionspilot.journal import TradeJournal
 
-    cfg, runtime = _bootstrap(args)
+    cfg, runtime, paths = _bootstrap(args)
     if args.min_confidence is not None:
         cfg = cfg.model_copy(deep=True)
         cfg.engine.min_confidence = args.min_confidence
@@ -118,10 +125,10 @@ def cmd_backtest(args) -> int:
         candles[tf] = provider.get_candles(
             args.symbol, tf, end - timedelta(days=days), end)
         print(f"  {tf}: {len(candles[tf])} bars")
-    journal = TradeJournal(Path("data") / f"backtest_{args.symbol.lower()}.db")
+    journal = TradeJournal(paths.get_backtest_journal_db(args.symbol))
     report = Backtester(cfg).run(args.symbol.upper(), candles, journal=journal)
-    j = report.save_json(Path("data") / "reports" / f"{args.symbol.lower()}.json")
-    h = report.save_html(Path("data") / "reports" / f"{args.symbol.lower()}.html")
+    j = report.save_json(paths.get_reports_dir() / f"{args.symbol.lower()}.json")
+    h = report.save_html(paths.get_reports_dir() / f"{args.symbol.lower()}.html")
     print(f"\ntrades {report.n_trades} | net {report.net_profit:+.2f} "
           f"({report.net_profit_pct:+.2f}%) | win rate {report.win_rate:.0%} | "
           f"PF {report.profit_factor} | maxDD {report.max_drawdown_pct}%")
@@ -132,18 +139,19 @@ def cmd_backtest(args) -> int:
 def cmd_ui(args) -> int:
     from optionspilot.ui.desktop import launch
 
-    cfg, runtime = _bootstrap(args)
+    cfg, runtime, paths = _bootstrap(args)
     print("OptionsPilot desktop - PAPER TRADING (no real money). Close the "
           "window to stop; all state persists.")
-    launch(cfg, runtime)
+    launch(cfg, runtime, data_dir=paths.get_data_dir())
     return 0
 
 
 def cmd_serve(args) -> int:
     from optionspilot.ui.server import serve
 
-    cfg, runtime = _bootstrap(args)
-    serve(cfg, port=args.port, run_loop=not args.no_loop, runtime=runtime)
+    cfg, runtime, paths = _bootstrap(args)
+    serve(cfg, port=args.port, run_loop=not args.no_loop, runtime=runtime,
+          data_dir=paths.get_data_dir())
     return 0
 
 
@@ -151,13 +159,13 @@ def cmd_learn(args) -> int:
     from optionspilot.journal import TradeJournal
     from optionspilot.learning import LearningEngine, WeightStore
 
-    _bootstrap(args)[0]
-    journal = TradeJournal(Path("data") / "journal.db")
+    _, _, paths = _bootstrap(args)
+    journal = TradeJournal(paths.get_journal_db())
     engine = LearningEngine(journal, min_sample=args.min_sample)
     weights, rationale = engine.recommend_weights(
-        WeightStore(Path("data") / "learning" / "weights.json").current() or None
+        WeightStore(paths.get_weights_file()).current() or None
     )
-    version = WeightStore(Path("data") / "learning" / "weights.json").save(
+    version = WeightStore(paths.get_weights_file()).save(
         weights, rationale)
     print(f"weights v{version}:")
     for line in rationale:
@@ -169,18 +177,59 @@ def cmd_learn(args) -> int:
     return 0
 
 
+def _probe_writable(path: Path) -> bool:
+    """True if a file can be created and removed under `path`."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".selftest_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def cmd_selftest(args) -> int:
-    # Modules loaded via importlib (the deferred yfinance import) are invisible
-    # to PyInstaller's static analysis, so a packaged exe can be missing them
-    # while building cleanly — the failure then only appears at runtime, on the
-    # first data request. This command forces those imports up front, offline,
-    # so scripts/build_exe.ps1 can gate a build on the bundle actually working.
+    # Two independent gates, both run offline so scripts/build_exe.ps1 can gate a
+    # build on the packaged bundle actually working:
+    #   1. Storage — the per-user layout exists, is writable, and the migration
+    #      marker is valid (so upgrades preserve data).
+    #   2. Deferred imports — yfinance is loaded via importlib and is invisible to
+    #      PyInstaller's static analysis, so a bundle can build cleanly yet fail on
+    #      the first data request; force it here.
+    from optionspilot.core.migration import _load_marker, initialize_storage
+    from optionspilot.core.paths import AppPaths
     from optionspilot.data.yfinance_provider import _yf
+
+    ok = True
+    paths = AppPaths()
+    initialize_storage(paths)
+    print(f"storage root: {paths.root}")
+    checks: list[tuple[str, Path]] = [
+        ("data", paths.get_data_dir()), ("logs", paths.get_logs_dir()),
+        ("coach", paths.get_coach_dir()), ("state", paths.get_state_dir()),
+        ("backups", paths.get_backups_dir()), ("exports", paths.get_exports_dir()),
+        ("migrations", paths.get_migrations_dir()),
+    ]
+    for name, d in checks:
+        good = d.is_dir() and _probe_writable(d)
+        ok = ok and good
+        print(f"  [{'OK' if good else 'FAIL'}] {name:<10} exists + writable  ({d})")
+
+    marker = _load_marker(paths)
+    marker_ok = bool(marker) and isinstance(marker.get("schema_version"), int)
+    ok = ok and marker_ok
+    version = marker.get("schema_version") if marker else "?"
+    print(f"  [{'OK' if marker_ok else 'FAIL'}] {'migration':<10} marker valid (schema v{version})")
 
     try:
         yf = _yf()
     except Exception as exc:
         print(f"SELFTEST FAIL: yfinance unavailable: {exc}")
+        return 1
+
+    if not ok:
+        print("SELFTEST FAIL: storage checks failed")
         return 1
     print(f"SELFTEST PASS (yfinance {getattr(yf, '__version__', 'unknown')})")
     return 0

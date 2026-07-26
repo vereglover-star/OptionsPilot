@@ -5,33 +5,51 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-23, V0.4.2 architecture audit + three refactors.
-Full 470-test `pytest` suite green (+16), `selftest` PASS, doc checks green.
-`verify.ps1`'s browser/chart checks were unaffected (no frontend change) — the
-last full `verify.ps1` run was 2026-07-22 (V3.3.1). See `PROJECT_STATE.md`.
+**Last verified:** 2026-07-23, V0.4.4 persistent storage & data migration. Full
+520-test `pytest` suite green (+28), `selftest` PASS (incl. new storage checks),
+end-to-end migration of the real 27-file legacy install verified lossless, doc
+checks green. See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.4.2` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.4.1`
-at the V0.4.2 architecture-hardening milestone (the footer reads it from
+`0.4.4` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.4.3`
+at the V0.4.4 persistent-storage milestone (the footer reads it from
 `/api/status`). No public release process yet; the packaged artifact is a
 Windows desktop exe built on demand via `scripts/build_exe.ps1`, not
 versioned/released independently of the git history.
 
 ## Current phase
 
-**V0.4.2 architecture audit + three refactors, on branch `v3-ui` — awaiting
-user review.** A read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) found the
-codebase in good health, so only three low-risk, behavior-preserving
-improvements were made, each separately tested: (1) a shared SQLite foundation
-(`core/sqlite.py` — `connect` + `PRAGMA user_version` migrations) adopted by all
-five stores, giving the journal/paper/orders databases the versioned
-schema-evolution the experience store already had; (2) `ui/server.py` import
-cleanup + promoting the private `orchestrator._WINDOW_DAYS` to public
-`WINDOW_DAYS`; (3) executable layering-guard tests (`test_architecture.py`). No
-user-visible behavior changed. 470 tests (+16); `selftest` PASS.
+**V0.4.4 persistent storage & automatic data migration, on branch `v3-ui` —
+awaiting user review.** Core-infrastructure milestone: user data is now fully
+separated from the binaries, so replacing the exe never loses data. New
+`core/paths.py::AppPaths` is the single source of truth for every filesystem
+path, rooting all storage at `%LOCALAPPDATA%\OptionsPilot` (XDG/`Application
+Support` elsewhere; `OPTIONSPILOT_HOME` override) instead of beside the exe. New
+`core/migration.py::initialize_storage` runs once at startup: creates the layout
+(`data/ logs/ backups/ exports/ migrations/`) and imports any legacy
+CWD-relative install once — a lossless copy (timestamps preserved, each file
+verified, never overwrites newer, never deletes the source), recorded in a
+`migration_version.json` marker. Includes a backup helper and an (empty)
+versioned-migration framework for future schema changes. Existing `data_dir=`
+APIs unchanged → no behavior change. 520-test suite (+28); end-to-end migration
+of the real legacy install verified lossless. Full design in `docs/STORAGE.md`.
+
+**Before that: V0.4.3 AI Coach 2.0 (phase 1).** Turned the Coach into a mentor,
+additively (manual trades only): a per-trade 10-category scorecard
+(`coach/categories.py`) + outcome snapshot, and a `build_dashboard`
+(`coach/analytics.py`) with sub-scores, category trends, streaks, confidence-
+scored pattern detection, an improvement timeline, and ≤5 auto-expiring action
+items, served on `GET /api/coach → dashboard` and rendered in the coach tab.
+492-test suite (+22); backward-compatible.
+
+**Before that: V0.4.2 architecture audit + three refactors.** A read-only audit
+(`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements:
+a shared `core/sqlite.py` foundation (`connect` + `PRAGMA user_version`
+migrations) adopted by all five stores; `ui/server.py` import cleanup + public
+`orchestrator.WINDOW_DAYS`; executable layering-guard tests. 470-test suite (+16).
 
 **Before that: V0.4.1 Experience Engine integration (phase 3).** A centralized
 `build_snapshot` captures the full deterministic decision context at AI entry
@@ -169,6 +187,8 @@ V2-6 (journal/improvement dashboard) are not started.
 | V0.4.0 (phases 1–2) — AI Experience Engine | New `optionspilot/experience/` subsystem: rich, expandable, 100k-scalable `ExperienceStore` (`data/experience.db`, indexed columns + JSON payload + `user_version` migrations) recording a `TradeRecord` superset alongside the journal; deterministic `SimilarityEngine` (weighted distance → win rate / return / failure mode / **advisory** calibrated confidence). Calibration advisory-only (deterministic scorer unchanged); exploration deferred to a future orthogonal `learning_mode` axis. Backend-only; best-effort recording never touches the trading path | 0.4.0, 424-test suite green (+32) |
 | V0.4.1 (phase 3) — Experience Engine integration | Centralized `build_snapshot` captures the full AI decision context at entry (feature-symmetric with coached manual trades); advisory historical-similarity explanation on every tradeable signal; Experience API (`recent`/`similar_trades`/`statistics`/strategy·regime·session stats/failure·success patterns) over `GET /api/experience[/similar]`; storage schema v2 (indexed `market_regime` + SQL aggregates). Advisory only — nothing touches gate/risk/execution | 0.4.1, 454-test suite green (+30) |
 | V0.4.2 — architecture audit + refactors | Read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements: shared `core/sqlite.py` foundation (`connect` + `user_version` migrations) adopted by all five stores; `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`; executable layering-guard `test_architecture.py`. No behavior change | 0.4.2, 470-test suite green (+16) |
+| V0.4.3 — AI Coach 2.0 (phase 1) | Per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot on each review; mentor dashboard (`coach/analytics.py`): sub-scores, category trends, streaks, pattern detection w/ confidence, improvement timeline, ≤5 auto-expiring action items; `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades only, additive, backward-compatible | 0.4.3, 492-test suite green (+22) |
+| V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
 
 ## Features complete
 
@@ -242,7 +262,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**470 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
+**520 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

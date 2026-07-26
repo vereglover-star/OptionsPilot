@@ -522,3 +522,43 @@ class TestWebSocket:
             # nothing mutates in this test, so the next frame is a heartbeat
             second = ws.receive_json()
             assert second.get("heartbeat") is True and "account" not in second
+
+
+class TestCoachAPI:
+    def test_empty_coach_dashboard(self, client):
+        r = client.get("/api/coach").json()
+        assert r["dashboard"] == {"trades_reviewed": 0}
+        assert r["profile"] == {"trades_reviewed": 0}
+        assert r["reviews"] == []
+
+    def test_coach_dashboard_after_review(self, client):
+        from tests.test_coach import ctx, stop_order
+        from tests.test_journal import make_trade
+        trade = make_trade("api1", 120.0, strategy="manual")
+        client.orch.coach.review(
+            trade, ctx(quality="good", spot=100.0, delta=0.45),
+            {"spot": 101.5}, orders=[stop_order(level=98.0)],
+            equity_at_entry=25_000.0,
+        )
+        r = client.get("/api/coach").json()
+        assert set(r) >= {"dashboard", "profile", "reviews"}
+        d = r["dashboard"]
+        assert d["trades_reviewed"] == 1
+        assert len(d["category_scores"]) == 10
+        assert {"scores", "streaks", "action_items", "overall"} <= set(d)
+        # the review now carries the category scorecard + outcome snapshot
+        assert r["reviews"][0]["categories"]
+        assert r["reviews"][0]["symbol"] == "SPY"
+
+    def test_dashboard_is_cached_by_review_count(self, client):
+        from tests.test_coach import ctx, stop_order
+        from tests.test_journal import make_trade
+        client.orch.coach.review(
+            make_trade("c1", 50.0, strategy="manual"), ctx(),
+            None, orders=[stop_order()], equity_at_entry=25_000.0)
+        client.get("/api/coach")
+        cached = client.server._coach_cache
+        assert cached is not None and cached[0] == 1
+        # second call with no new review reuses the cached object
+        client.get("/api/coach")
+        assert client.server._coach_cache is cached

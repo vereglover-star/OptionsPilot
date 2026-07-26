@@ -4,6 +4,115 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-23 — V0.4.4: persistent storage & automatic data migration
+
+*Version 0.4.3 → 0.4.4. 492 → 520 tests (+28). A core-infrastructure milestone:
+user data is now completely separated from application binaries, so a future
+version can replace the executable without ever losing paper-trading history,
+coach reviews, journal entries, settings, watchlists, learned weights, or logs.
+No user-visible behavior changes; existing installs are migrated automatically,
+once, with nothing deleted. Full design in `docs/STORAGE.md`.*
+
+**Storage layer (`core/paths.py::AppPaths`, new).** The single source of truth
+for every filesystem path. The storage **root** moved out of the
+current-working-directory (it used to land beside the exe) to a stable per-user
+location: `%LOCALAPPDATA%\OptionsPilot` on Windows (XDG / `Application Support`
+elsewhere), overridable with `OPTIONSPILOT_HOME`. `AppPaths` exposes typed
+helpers (`get_data_dir`, `get_journal_db`, `get_coach_dir`, `get_settings_file`,
+…) and `ensure()`; no module constructs the root itself. Layout under the root:
+`data/ logs/ backups/ exports/ migrations/`, with the existing `data/` subtree
+(paper.db, journal.db, orders.db, experience.db, cache.db, settings.json,
+coach/, state/, learning/, reports/) preserved unchanged.
+
+**Automatic migration (`core/migration.py`, new).** `initialize_storage(paths)`
+runs once at startup: it creates the layout and, on first run, imports a legacy
+CWD/exe-relative `data/`+`logs/` install into the new root — a **lossless copy**
+that preserves timestamps (`copy2`), verifies every file by size, **never
+overwrites a newer file**, and **never deletes the source**. Completion is
+recorded in `migrations/migration_version.json`. The import is idempotent and
+self-healing: a partial copy completes on the next launch, and a missing or
+corrupted marker cannot cause data loss (the copy never clobbers newer data).
+Verified end-to-end against the real 27-file legacy install: all files copied
+byte-for-byte, originals intact, second launch a no-op.
+
+**Backups + versioned framework.** `create_backup()` writes a timestamped
+snapshot of `data/` into `backups/` and runs automatically before any versioned
+migration. The `Migration(version, description, apply)` registry (`MIGRATIONS`)
+is the groundwork for future schema migrations — intentionally **empty** in this
+release (framework only; no future migration implemented).
+
+**Wiring.** `__main__._bootstrap` builds `AppPaths`, runs `initialize_storage`,
+points logging at `paths.root`, and threads `data_dir=paths.get_data_dir()`
+through every command; `Orchestrator`/`UIServer`/`create_app`/`serve`/`desktop
+.launch` default to the per-user root when no path is given. Replaced the last
+CWD-relative `Path("data")` hardcodes (CLI commands + the UI backtest report
+path) with `AppPaths`/`data_dir`-derived paths. Existing `data_dir=` APIs are
+unchanged, so all prior code and tests keep working.
+
+**Selftest.** `python -m optionspilot selftest` now also verifies the storage
+layout — every directory exists and is writable, and the migration marker is
+valid — in addition to the yfinance bundle check.
+
+**Tests:** +28. `tests/test_paths.py` (path algebra, platform roots, env
+override, `ensure`) and `tests/test_migration.py` (fresh install, upgrade
+import, timestamp preservation, idempotency, many launches, partial migration,
+never-overwrite-newer, corrupted marker, existing-AppData skip, backups,
+versioned framework, store read/write). A new autouse fixture in
+`tests/conftest.py` isolates `OPTIONSPILOT_HOME` to a temp dir so the suite never
+touches a developer's real AppData.
+
+## [Uncommitted] 2026-07-23 — V0.4.3: AI Coach 2.0 (phase 1)
+
+*Version 0.4.2 → 0.4.3. 470 → 492 tests (+22). Transforms the Coach from a page
+that displays a review into an intelligent, offline, deterministic trading
+mentor — **additively**. Manual (Human Mode) trades only; the trading path, risk
+manager, and the timing of when a review runs are all untouched, and every change
+is backward-compatible with reviews persisted before 2.0.*
+
+**Per-trade category scorecard (`coach/categories.py`, new).** Every manual
+`CoachReview` now carries a fixed set of **10 categories** — Entry Quality, Exit
+Quality, Risk Management, Position Size, Emotional Discipline, Rule Following,
+Patience, Timing, Trend Alignment, Reward/Risk Ratio — each with a 0–100 score, a
+**data-referenced** explanation (it quotes the actual `Finding` details: "RSI at
+entry: 78", "premium outlay 7.2% of the account", …), and one concrete
+suggestion. Scores are derived **entirely from signals the review already
+gathered** (the before/during `Finding`s + the 12-tag mistake taxonomy), so the
+scorecard adds no new data capture and cannot change what the review observes.
+`context_only` categories report `None` ("not enough data") when no near-entry
+snapshot was captured, rather than a misleading perfect score. `CoachReview` also
+gained a small outcome snapshot — pnl, return_pct, hold_minutes, a best-effort
+`r_multiple` (planned premium risk estimated from stop distance × entry delta;
+`None` when not derivable — never invented), entry_ts, symbol, direction.
+
+**Mentor dashboard (`coach/analytics.py`, new — pure `build_dashboard(reviews)`).**
+Aggregates all reviews into: headline sub-scores (consistency / risk / execution
+/ discipline), the category scorecard averaged with **month-over-month trend**,
+win/loss **streaks**, **pattern detection with a confidence level and language**
+(a one-off is low-confidence "may be developing"; a frequent, consistent pattern
+is "appears to be a recurring habit" — confidence scales with sample size and
+frequency), a **month-over-month improvement timeline** ("Risk Management
+improved 14 points this month"), and a **≤5 ranked action plan**. Patterns and
+actions are computed over a **recent window** (last 25 reviews), so a habit the
+user has stopped drops off the plan automatically as newer clean trades push it
+out. Strengths/weaknesses fall out of the category grades.
+
+**API + UI.** `GET /api/coach` now also returns `dashboard`, cached by review
+count (recomputed only when a new review is written — reviews are write-once per
+trade), mirroring the existing journal-cache pattern; `profile` and `reviews`
+are unchanged for backward compatibility. The coach tab renders the sub-score
+cards, the category scorecard (score bars + grades + trend arrows), the action
+plan, the improvement timeline, and confidence-tagged recurring patterns —
+reusing the existing card/panel styles with no new CSS. Verified via
+`check_html_ids` and the headless `browser_check` (9 tabs, zero console errors).
+
+**Architecture note.** Kept inside `coach/` with two focused new modules
+(`categories.py`, `analytics.py`) rather than the originally-suggested parallel
+`analytics/ review/ services/` tree, to match this codebase's one-concept-per-
+module convention. **Tests:** +22 (`test_coach_categories.py`,
+`test_coach_analytics.py`, `TestCoachAPI`), covering category scoring + missing
+context, confidence/developing-vs-recurring language, streaks, monthly trend,
+action-plan capping + auto-expiry, headline scores, and backward compatibility.
+
 ## [Uncommitted] 2026-07-23 — V0.4.2: architecture audit + three approved refactors
 
 *Version 0.4.1 → 0.4.2. 454 → 470 tests (+16). An architecture-hardening sprint:

@@ -5,16 +5,90 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-23, end of V0.4.2 architecture audit + three refactors.
+**Last updated:** 2026-07-23, end of V0.4.4 persistent storage & data migration.
 
-## What was completed most recently? (V0.4.2 — architecture audit + three refactors)
+## What was completed most recently? (V0.4.4 — persistent storage & migration)
+
+A core-infrastructure milestone: **user data is now fully separated from the
+binaries**, so a future version can replace the executable without losing paper
+history, coach reviews, journal, settings, watchlists, weights, or logs. No
+user-visible behavior changed; existing installs migrate automatically, once,
+losslessly. 492 → **520 tests** (+28). Full design: `docs/STORAGE.md`.
+
+1. **`core/paths.py::AppPaths`** — the single source of truth for every
+   filesystem path. Storage root moved from the CWD (beside the exe) to a stable
+   per-user location: `%LOCALAPPDATA%\OptionsPilot` (XDG / `Application Support`
+   elsewhere), overridable via `OPTIONSPILOT_HOME`. Typed helpers
+   (`get_data_dir`, `get_journal_db`, `get_coach_dir`, `get_settings_file`, …)
+   + `ensure()`. No module constructs the root itself.
+2. **`core/migration.py::initialize_storage`** — runs once at startup: creates
+   the layout (`data/ logs/ backups/ exports/ migrations/`) and, on first run,
+   imports a legacy CWD/exe-relative `data/`+`logs/` install — a **lossless
+   copy** (timestamps preserved, each file verified, never overwrites newer,
+   never deletes source), recorded in `migrations/migration_version.json`.
+   Idempotent + self-healing (partial copies complete; a corrupt marker can't
+   lose data). Plus `create_backup()` and an **empty** versioned-migration
+   framework (`MIGRATIONS`) for future schema changes.
+3. **Wiring**: `__main__._bootstrap` builds `AppPaths` + migrates + points
+   logging at `paths.root`; `Orchestrator`/`UIServer`/`create_app`/`serve`/
+   `desktop.launch` default to the per-user root; the last CWD-relative
+   `Path("data")` hardcodes are gone. `data_dir=` APIs unchanged → nothing broke.
+4. **selftest** now verifies dirs exist + writable + marker valid;
+   `tests/conftest.py` isolates `OPTIONSPILOT_HOME` so tests never touch real
+   AppData. +28 in `test_paths.py` / `test_migration.py`.
+
+**Recommendations before the automatic updater** (see the final report / below):
+the storage split is the prerequisite; the updater should only ever replace the
+install directory, never write into the storage root, and can lean on
+`create_backup()` before applying anything.
+
+## What was completed before that? (V0.4.3 — AI Coach 2.0, phase 1)
+
+Turned the Coach from an information page into a **mentor**, *additively* and
+manual-trades-only. No trading-path change, no change to when/whether a review
+runs, and fully backward-compatible with pre-2.0 persisted reviews. A
+**492-test suite** (+22). `check_html_ids` + headless `browser_check` green.
+
+1. **Per-trade category scorecard** (`coach/categories.py`): every manual
+   `CoachReview` now carries 10 categories (Entry/Exit/Risk/Size/Emotional
+   Discipline/Rule Following/Patience/Timing/Trend/Reward-Risk), each with a
+   0–100 score, a **data-referenced** explanation, and one suggestion — derived
+   purely from the before/during `Finding`s and mistake tags the review already
+   computes. `context_only` categories report `None` ("not enough data") when no
+   near-entry snapshot was captured, rather than a misleading perfect score.
+   `CoachReview` also gained a small outcome snapshot (pnl / return_pct /
+   hold_minutes / best-effort `r_multiple` / entry_ts / symbol / direction).
+2. **Mentor dashboard** (`coach/analytics.py`, pure `build_dashboard(reviews)`):
+   headline sub-scores (consistency / risk / execution / discipline), the
+   category scorecard averaged with **month-over-month trend**, win/loss streaks,
+   **pattern detection with confidence** (a one-off is "low / may be developing";
+   frequent + consistent is "high / recurring habit"), an improvement timeline
+   ("Risk Management improved 14 points this month"), and **≤5 ranked action
+   items** computed over a recent window so they auto-expire as habits improve.
+3. **API + UI**: `GET /api/coach` now also returns `dashboard` (cached by review
+   count, recomputed only when a new review lands). The coach tab renders the
+   sub-score cards, category scorecard (score bars + grades + trend), action
+   plan, improvement timeline, and confidence-tagged recurring patterns —
+   reusing existing card/panel styles, no new CSS.
+
+Files: **new** `coach/categories.py`, `coach/analytics.py`,
+`tests/test_coach_categories.py`, `tests/test_coach_analytics.py`; **modified**
+`coach/coach.py`, `coach/__init__.py`, `ui/server.py`, `ui/static/index.html`,
+`tests/test_ui_server.py`.
+
+**Optional Coach 2.1 ideas (NOT implemented):** persist the dashboard to disk for
+history beyond current reviews; extend coaching to AI-mode trades; overtrading
+detection from entry-time density; per-category weighting of the headline score;
+a shareable monthly report.
+
+## What was completed before that? (V0.4.2 — architecture audit + three refactors)
 
 A read-only architecture audit (full report: `docs/ARCHITECTURE-AUDIT-V0.4.2.md`)
 concluded the codebase is in good health — clean *verified* layering, no SQL
 outside the persistence modules, thin route handlers, zero real debt markers — so
 only **three** low-risk, behavior-preserving improvements were implemented, each
 a separate change with its own regression tests. **No user-visible behavior
-changed.** Version 0.4.1 → 0.4.2. 454 → **470 tests** (+16).
+changed.** Version 0.4.1 → 0.4.2, a **470-test suite** (+16).
 
 1. **Shared SQLite foundation** (`core/sqlite.py`): `connect()` + versioned
    `run_migrations()` (`PRAGMA user_version`), adopted by **all five** stores in

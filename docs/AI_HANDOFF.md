@@ -87,9 +87,13 @@ Layered, each layer only depends on layers below it:
 ```
 config/       → layered settings (yaml + env + runtime-mutable overlay)
 core/         → domain models (Candle, OptionContract, Signal, TradePlan,
-                Position, Order, TradeRecord), logging setup, and the shared
-                SQLite foundation (core/sqlite.py: connect + PRAGMA user_version
-                migrations, used by every store — V0.4.2)
+                Position, Order, TradeRecord), logging setup, the shared SQLite
+                foundation (core/sqlite.py: connect + PRAGMA user_version
+                migrations, V0.4.2), and the storage layer (core/paths.py
+                AppPaths — the single source of truth for every filesystem path,
+                rooted at %LOCALAPPDATA%\OptionsPilot; core/migration.py —
+                one-time legacy import + backups + versioned-migration framework,
+                V0.4.4)
 data/         → market data provider interface + yfinance implementation,
                 candle cache, symbol directory (12k tickers), preset lists
 analysis/     → PURE FUNCTIONS ONLY, no I/O: indicators, candlestick
@@ -118,15 +122,21 @@ experience/   → the AI's long-term memory (V0.4.0–0.4.1): a rich, expandable
                 only — never touches the gate/risk/execution. See
                 docs/ROADMAP-V0.4-EXPERIENCE.md
 backtest/     → event-driven replay through the SAME engine/risk/broker
-coach/        → TradeCoach (deterministic post-trade review) + CoachProfile
-                (aggregated strengths/weaknesses) — NEW in V2-3
+coach/        → TradeCoach (deterministic post-trade review, manual trades) +
+                CoachProfile (aggregated strengths/weaknesses). AI Coach 2.0
+                (V0.4.3) adds a per-trade 10-category scorecard (categories.py)
+                and a mentor dashboard (analytics.py: category trends, streaks,
+                pattern detection with confidence, improvement timeline, ≤5
+                ranked action items) served on GET /api/coach → `dashboard`
 notify/       → desktop toast / email notifications
 orchestrator.py → composes everything into one scan cycle; the only class
                    the UI and CLI actually drive
 ui/           → FastAPI app (server.py), pywebview shell (desktop.py),
                    static/index.html (the entire frontend)
 __main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / learn / selftest
-                (selftest verifies lazily-imported deps are importable — the
+                (_bootstrap builds AppPaths + runs initialize_storage; selftest
+                verifies the storage layout is writable + the migration marker is
+                valid AND that lazily-imported deps are importable — the
                 packaged-bundle gate run by scripts/build_exe.ps1 after every build)
 ```
 
@@ -339,6 +349,20 @@ cycle-loop thread against API request threads.
 
 ## Database / storage approach
 
+**Storage root (V0.4.4):** all user data lives under a stable per-user root —
+`%LOCALAPPDATA%\OptionsPilot` on Windows (XDG/`Application Support` elsewhere),
+overridable via `OPTIONSPILOT_HOME` — **not** beside the executable, so
+replacing the exe never touches user data. `core/paths.py::AppPaths` is the
+single source of truth for every path (`get_data_dir`, `get_journal_db`,
+`get_coach_dir`, `get_settings_file`, …); no module constructs the root itself.
+At startup `core/migration.py::initialize_storage` creates the layout and, on
+first run, imports a legacy CWD/exe-relative `data/`+`logs/` install once
+(lossless copy: preserves timestamps, verifies each file, never overwrites a
+newer file, never deletes the source), recording completion in
+`migrations/migration_version.json`. See `docs/STORAGE.md` for the full design.
+The layout under the root is `data/ logs/ backups/ exports/ migrations/`; paths
+below are shown relative to `data/`.
+
 Everything is **SQLite + JSON files**, no external database, no ORM. Every
 SQLite store opens through the shared `core/sqlite.py` foundation (`connect` +
 `run_migrations` on `PRAGMA user_version`), so all five databases evolve their
@@ -404,7 +428,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (470 tests as of this writing, all passing)
+# Tests (520 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -463,7 +487,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (470 tests cover this
+   exercises the FastAPI layer via `TestClient` (520 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

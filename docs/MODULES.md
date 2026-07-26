@@ -11,6 +11,8 @@ Quick API map for developers. Details live in each module's docstring.
 | `models.Order/Fill/Position/TradeRecord` | Execution + journal records |
 | `logging_setup.setup_logging` | Rotating per-subsystem logs (`logs/engine.log`, …) |
 | `sqlite.connect` / `sqlite.run_migrations` | Shared SQLite foundation (V0.4.2): `check_same_thread=False` + dir creation + optional WAL; ordered `PRAGMA user_version` migrations (refuses a newer schema). Used by every store (cache/journal/orders/paper/experience) so all databases evolve schema the same versioned way |
+| `paths.AppPaths` | Storage single source of truth (V0.4.4). Root at `%LOCALAPPDATA%\OptionsPilot` (XDG/`Application Support` elsewhere; `OPTIONSPILOT_HOME` override). Typed `get_data_dir`/`get_journal_db`/`get_coach_dir`/`get_settings_file`/… + `ensure()`. No module constructs the root itself |
+| `migration.initialize_storage` | Startup storage init (V0.4.4): creates the layout and imports a legacy CWD/exe-relative install **once**, losslessly (`copy2` timestamps, per-file verify, skip-if-newer, never deletes source); writes `migrations/migration_version.json`. Also `create_backup()` + an empty `MIGRATIONS` versioned framework. See `docs/STORAGE.md` |
 
 ## Config (`optionspilot/config/`)
 `load_config(yaml_path, environ)` → `AppConfig`. Layered defaults ← YAML ← env
@@ -143,6 +145,15 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   frequency), top strengths, `score_trend` (late-half avg − early-half avg),
   win rate by setup quality, top-3 `recommended_exercises`. Rebuilt fresh
   from all persisted reviews every call.
+- **AI Coach 2.0 (V0.4.3):** `score_categories(findings, mistakes, verdict,
+  had_context)` (`categories.py`) → 10 `CategoryScore`s (score/grade/explanation/
+  suggestion) from the review's own findings+mistakes; `CoachReview` now carries
+  `categories` + an outcome snapshot (pnl/return_pct/hold_minutes/r_multiple/
+  entry_ts). `build_dashboard(reviews)` (`analytics.py`) → mentor dashboard:
+  sub-scores (consistency/risk/execution/discipline), per-category avg+monthly
+  trend, streaks, pattern detection with confidence ("developing" vs "recurring
+  habit"), improvement timeline, and ≤5 recent-window action items. Both are pure
+  functions; served on `GET /api/coach → dashboard` (cached by review count).
 - Only reviews `strategy="manual"` trades — AI trades are tuned by
   `learning/` instead; the two feedback loops are deliberately separate.
 

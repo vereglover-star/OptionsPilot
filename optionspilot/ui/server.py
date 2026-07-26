@@ -31,11 +31,12 @@ from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
 from optionspilot.backtest import Backtester
 from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
-from optionspilot.coach import CoachProfile
+from optionspilot.coach import CoachProfile, build_dashboard
 from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
+from optionspilot.core.paths import AppPaths
 from optionspilot.data import sessions
 from optionspilot.data import symbols as symdir
 from optionspilot.data.base import validate_candles
@@ -77,10 +78,13 @@ class UIServer:
 
     def __init__(self, config: AppConfig, orchestrator: Orchestrator | None = None,
                  runtime: RuntimeSettings | None = None,
-                 data_dir: str | Path = "data"):
+                 data_dir: str | Path | None = None):
         self.cfg = config
-        self.orch = orchestrator or Orchestrator(config)
-        data_dir = Path(data_dir)
+        # Default to the per-user storage root (AppPaths) so the UI's own state
+        # (settings, symbol metadata, backtest reports) lives with all other
+        # user data, never beside the executable.
+        data_dir = Path(data_dir) if data_dir is not None else AppPaths().get_data_dir()
+        self.orch = orchestrator or Orchestrator(config, data_dir=data_dir)
         # When constructed outside the CLI bootstrap, own a store (no overlay:
         # the caller's config is taken as-is; bootstrap applies overlays).
         self.runtime = runtime or RuntimeSettings(
@@ -100,7 +104,9 @@ class UIServer:
         self._cycle_lock = threading.Lock()
         self.scan_state: dict = {"running": False, "done": 0, "total": 0}
         self._journal_cache: tuple[int, list] | None = None
+        self._coach_cache: tuple[int, dict] | None = None
         self._meta_path = data_dir / "state" / "symbol_meta.json"
+        self._reports_dir = data_dir / "reports"
         self._symbol_meta: dict[str, dict] = self._load_meta()
         self._kick_meta_refresh(self.cfg.data.watchlist)
 
@@ -180,6 +186,14 @@ class UIServer:
             log.exception("manual scan failed: %s", exc)
 
     # ── payloads ─────────────────────────────────────────────────────────────
+
+    def _coach_dashboard(self, reviews: list[dict]) -> dict:
+        """Cached Coach 2.0 dashboard. Recomputed only when the review count
+        changes — reviews are write-once per trade, so count is a valid key."""
+        key = len(reviews)
+        if self._coach_cache is None or self._coach_cache[0] != key:
+            self._coach_cache = (key, build_dashboard(reviews))
+        return self._coach_cache[1]
 
     def status_payload(self) -> dict:
         with self.lock:
@@ -653,8 +667,8 @@ class UIServer:
                 candles[tf] = self.orch.provider.get_candles(
                     symbol, tf, end - timedelta(days=windows[tf.minutes]), end)
             report = Backtester(cfg).run(symbol, candles)
-            report.save_json(Path("data") / "reports" / f"{symbol.lower()}.json")
-            report.save_html(Path("data") / "reports" / f"{symbol.lower()}.html")
+            report.save_json(self._reports_dir / f"{symbol.lower()}.json")
+            report.save_html(self._reports_dir / f"{symbol.lower()}.html")
             with self._bt_lock:
                 self.backtest_job = {"state": "done", "symbol": symbol,
                                      "report": report.to_dict()}
@@ -668,7 +682,7 @@ class UIServer:
 def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                run_loop: bool = False,
                runtime: RuntimeSettings | None = None,
-               data_dir: str | Path = "data") -> FastAPI:
+               data_dir: str | Path | None = None) -> FastAPI:
     server = UIServer(config, orchestrator, runtime, data_dir)
     app = FastAPI(title="OptionsPilot", version=__version__)
     app.state.server = server
@@ -878,12 +892,17 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.get("/api/coach")
     def coach_view():
-
         with server.lock:
             reviews = server.orch.coach.load_all()
+        # The dashboard is a pure function of the reviews; recompute only when
+        # their count changes (a new trade was reviewed), mirroring the
+        # journal-cache pattern. Reviews are write-once per trade, so count is a
+        # sufficient cache key.
+        dashboard = server._coach_dashboard(reviews)
         reviews.sort(key=lambda r: r.get("trade_id", ""), reverse=True)
         return {
             "profile": CoachProfile(reviews).build(),
+            "dashboard": dashboard,
             "reviews": reviews[:50],
         }
 
@@ -979,9 +998,10 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
 def serve(config: AppConfig, host: str = "127.0.0.1", port: int = 8787,
           run_loop: bool = True,
-          runtime: RuntimeSettings | None = None) -> None:  # pragma: no cover - blocking server
+          runtime: RuntimeSettings | None = None,
+          data_dir: str | Path | None = None) -> None:  # pragma: no cover - blocking server
     import uvicorn
 
-    app = create_app(config, run_loop=run_loop, runtime=runtime)
+    app = create_app(config, run_loop=run_loop, runtime=runtime, data_dir=data_dir)
     print(f"OptionsPilot dashboard: http://{host}:{port}  (paper trading only)")
     uvicorn.run(app, host=host, port=port, log_level="warning")
