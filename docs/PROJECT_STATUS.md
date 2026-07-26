@@ -5,37 +5,43 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-23, V0.4.4 persistent storage & data migration. Full
-520-test `pytest` suite green (+28), `selftest` PASS (incl. new storage checks),
-end-to-end migration of the real 27-file legacy install verified lossless, doc
-checks green. See `PROJECT_STATE.md`.
+**Last verified:** 2026-07-23, V0.4.5 Professional Release Pipeline 1.0. Full
+527-test `pytest` suite green (+7), `selftest` PASS, CI/Release workflow YAML
+validated, release packaging produced a clean versioned zip locally, doc checks
+green. See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.4.4` (`pyproject.toml`) — pre-1.0, actively developed; bumped from `0.4.3`
-at the V0.4.4 persistent-storage milestone (the footer reads it from
-`/api/status`). No public release process yet; the packaged artifact is a
-Windows desktop exe built on demand via `scripts/build_exe.ps1`, not
-versioned/released independently of the git history.
+`0.4.5` — single source of truth: `optionspilot/__init__.py::__version__`
+(pyproject derives it dynamically). Pre-1.0, actively developed; bumped from
+`0.4.4` at the V0.4.5 release-pipeline milestone (the footer reads it from
+`/api/status`). Releases are now automated via GitHub Actions on a `v*` tag
+(`docs/RELEASE.md`); the packaged artifact is `OptionsPilot-vX.Y.Z.zip`.
 
 ## Current phase
 
-**V0.4.4 persistent storage & automatic data migration, on branch `v3-ui` —
-awaiting user review.** Core-infrastructure milestone: user data is now fully
-separated from the binaries, so replacing the exe never loses data. New
-`core/paths.py::AppPaths` is the single source of truth for every filesystem
-path, rooting all storage at `%LOCALAPPDATA%\OptionsPilot` (XDG/`Application
-Support` elsewhere; `OPTIONSPILOT_HOME` override) instead of beside the exe. New
-`core/migration.py::initialize_storage` runs once at startup: creates the layout
-(`data/ logs/ backups/ exports/ migrations/`) and imports any legacy
-CWD-relative install once — a lossless copy (timestamps preserved, each file
-verified, never overwrites newer, never deletes the source), recorded in a
-`migration_version.json` marker. Includes a backup helper and an (empty)
-versioned-migration framework for future schema changes. Existing `data_dir=`
-APIs unchanged → no behavior change. 520-test suite (+28); end-to-end migration
-of the real legacy install verified lossless. Full design in `docs/STORAGE.md`.
+**V0.4.5 Professional Release Pipeline 1.0, on branch `v3-ui` — awaiting user
+review.** Release-automation milestone; no application behavior changed. Added
+GitHub Actions `ci.yml` (push/PR: install, full `pytest`, `selftest`,
+`check_html_ids`, `check_docs`; pip-cached, fail-fast; reusable via
+`workflow_call`) and `release.yml` (on `v*` tags: reuse CI → verify tag matches
+`__version__` → build exe → package `OptionsPilot-vX.Y.Z.zip` → create GitHub
+Release with CHANGELOG notes). Made `__version__` the **single source of truth**
+(pyproject `dynamic`/`attr`); `bump_version.py` edits one file; `check_docs.py`
+enforces it. New `scripts/package_release.ps1` (clean versioned zip: app +
+LICENSE/README/CHANGELOG, excludes user data/source) and `scripts/release_notes
+.py`. Added a placeholder `LICENSE` (flagged) and an unwired Inno Setup installer
+template (`installer/OptionsPilot.iss`) with documented paths/shortcuts/AppData/
+uninstall. +7 tests (release tooling); packaging verified locally (54 MB zip).
+Full design in `docs/RELEASE.md`.
+
+**Before that: V0.4.4 persistent storage & automatic data migration.** User data
+fully separated from the binaries: new `core/paths.py::AppPaths` (single source
+of truth for paths, root `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py`
+(one-time lossless legacy import, backups, versioned framework). 520-test suite
+(+28).
 
 **Before that: V0.4.3 AI Coach 2.0 (phase 1).** Turned the Coach into a mentor,
 additively (manual trades only): a per-trade 10-category scorecard
@@ -189,6 +195,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V0.4.2 — architecture audit + refactors | Read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements: shared `core/sqlite.py` foundation (`connect` + `user_version` migrations) adopted by all five stores; `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`; executable layering-guard `test_architecture.py`. No behavior change | 0.4.2, 470-test suite green (+16) |
 | V0.4.3 — AI Coach 2.0 (phase 1) | Per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot on each review; mentor dashboard (`coach/analytics.py`): sub-scores, category trends, streaks, pattern detection w/ confidence, improvement timeline, ≤5 auto-expiring action items; `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades only, additive, backward-compatible | 0.4.3, 492-test suite green (+22) |
 | V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
+| V0.4.5 — Professional Release Pipeline 1.0 | GitHub Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) + `release.yml` (tag `v*`: reuse CI → tag/version guard → build → package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source version (`__version__` via pyproject `dynamic`/`attr`). `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`; unwired Inno Setup installer template. No behavior change | 0.4.5, 527-test suite green (+7) |
 
 ## Features complete
 
@@ -262,7 +269,7 @@ Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` f
 
 ## Test count
 
-**520 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
+**527 tests, 100% passing** (`.\scripts\test.ps1`, ~16s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and

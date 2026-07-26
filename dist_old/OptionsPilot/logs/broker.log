@@ -1,0 +1,4 @@
+2026-07-26T00:17:48.918Z INFO     optionspilot.broker | paper account created with 25000.00 cash
+2026-07-26T01:00:58.329Z INFO     optionspilot.broker | paper account restored: cash 25000.00, realized 0.00
+2026-07-26T01:19:09.683Z INFO     optionspilot.broker | paper account restored: cash 25000.00, realized 0.00
+2026-07-26T01:19:32.848Z INFO     optionspilot.broker | paper account created with 25000.00 cash

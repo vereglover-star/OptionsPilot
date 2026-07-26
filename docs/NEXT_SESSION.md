@@ -5,15 +5,43 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-23, end of V0.4.4 persistent storage & data migration.
+**Last updated:** 2026-07-23, end of V0.4.5 Professional Release Pipeline 1.0.
 
-## What was completed most recently? (V0.4.4 — persistent storage & migration)
+## What was completed most recently? (V0.4.5 — Professional Release Pipeline 1.0)
+
+A release-automation milestone: a version tag now becomes a downloadable GitHub
+Release with **zero manual steps**. **No application behavior changed** — only
+how releases are built, tested, packaged, and published. 520 → **527 tests**
+(+7). Full design: `docs/RELEASE.md`.
+
+1. **GitHub Actions** (`.github/workflows/`): `ci.yml` (push/PR + reusable via
+   `workflow_call`) installs (pip-cached), runs `pytest` + `selftest` +
+   `check_html_ids` + `check_docs`, fails fast; `release.yml` (on `v*` tags)
+   reuses CI, verifies the tag matches `__version__`, builds the exe, packages
+   the zip, and creates the GitHub Release with CHANGELOG notes.
+2. **Single-source version**: `optionspilot/__init__.py::__version__` is the only
+   copy; `pyproject.toml` derives it (`dynamic`/`attr`). `bump_version.py` edits
+   one file; `check_docs.py` + the release tag-guard enforce it. +7 tests
+   (`test_release_tooling.py`).
+3. **Packaging**: `scripts/package_release.ps1` → clean `OptionsPilot-vX.Y.Z.zip`
+   (app + LICENSE/README/CHANGELOG; excludes user data/source); `release_notes.py`
+   extracts the CHANGELOG section. Verified locally (54 MB zip, correct contents).
+4. **Groundwork**: placeholder `LICENSE` (flagged — replace before public
+   release) and an **unwired** Inno Setup template (`installer/OptionsPilot.iss`)
+   with documented paths/shortcuts/AppData/uninstall.
+
+**To actually cut a release:** `python scripts/bump_version.py X.Y.Z`, finalize
+the CHANGELOG entry, commit, `git tag vX.Y.Z && git push origin main --tags` —
+Actions does the rest. **Before the first public release:** replace the
+placeholder `LICENSE` with a real license choice.
+
+## What was completed before that? (V0.4.4 — persistent storage & migration)
 
 A core-infrastructure milestone: **user data is now fully separated from the
 binaries**, so a future version can replace the executable without losing paper
 history, coach reviews, journal, settings, watchlists, weights, or logs. No
 user-visible behavior changed; existing installs migrate automatically, once,
-losslessly. 492 → **520 tests** (+28). Full design: `docs/STORAGE.md`.
+losslessly. A **520-test suite** (+28). Full design: `docs/STORAGE.md`.
 
 1. **`core/paths.py::AppPaths`** — the single source of truth for every
    filesystem path. Storage root moved from the CWD (beside the exe) to a stable
@@ -568,6 +596,16 @@ order, which is correct behavior — settings search, a real 25-day backtest
 run, the accessibility overlay).
 
 ## What should be worked on next?
+
+**Release Pipeline 1.1 (installer + updater).** The release automation is done;
+the natural next infra step is the Windows installer, then the auto-updater.
+Groundwork is in place: `installer/OptionsPilot.iss` (Inno Setup, unwired) and
+`docs/RELEASE.md` "Installer preparation" (paths/shortcuts/AppData/uninstall).
+To wire it: add a `Compile installer` step to `release.yml`
+(`ISCC installer\OptionsPilot.iss /DMyAppVersion=<ver>`) and upload the setup exe
+as a second Release asset. Then the updater (replace the install dir only; never
+the storage root; `create_backup` before applying). **Before any public
+release:** replace the placeholder `LICENSE` with a real license choice.
 
 **Optional architecture follow-ups (from the V0.4.2 audit, `docs/ARCHITECTURE-
 AUDIT-V0.4.2.md` §11).** None urgent: Finding 2 (extract a `ManualTradeReconciler`

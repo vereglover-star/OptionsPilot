@@ -1,10 +1,17 @@
 # RELEASE_CHECKLIST.md — the exact process for shipping a release
 
-There is no formal release process yet (no GitHub Releases have been cut;
-the version is `0.3.1`, bumped from `0.1.0` at V3.2 and patched at V3.2.1). This document is
-the process for when that changes, built around `scripts/release.ps1`,
-which automates everything on this list except the explicitly-marked
-manual steps.
+> **As of V0.4.5, releases are automated by GitHub Actions.** The authoritative
+> guide is **`docs/RELEASE.md`** (CI/CD, single-source versioning, artifacts,
+> installer prep). The short version: `python scripts/bump_version.py X.Y.Z`,
+> finalize the CHANGELOG, commit, then `git tag vX.Y.Z && git push origin main
+> --tags` — `.github/workflows/release.yml` builds, packages
+> `OptionsPilot-vX.Y.Z.zip`, and creates the GitHub Release. This checklist
+> remains the **local dry-run** (`scripts/release.ps1`) and the human-approval
+> reference below.
+
+This document is built around `scripts/release.ps1`, which runs the same
+readiness gates locally and prints a PASS/FAIL report except the
+explicitly-marked manual steps.
 
 ## The one-command version
 

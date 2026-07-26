@@ -3,18 +3,22 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-23, after **V0.4.4 persistent storage & data
-migration** (branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
-core-infrastructure milestone: user data is now fully separated from the
-binaries. New `core/paths.py::AppPaths` is the single source of truth for every
-filesystem path (root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME`
-override); new `core/migration.py::initialize_storage` creates the layout and
-imports any legacy CWD-relative install once — losslessly (timestamps preserved,
-verified, never overwrites newer/deletes source), recorded in a marker — plus a
-backup helper and an empty versioned-migration framework. Bootstrap/Orchestrator/
-UIServer/selftest wired through it; `data_dir=` APIs unchanged → no behavior
-change. 520 tests (+28); end-to-end migration of the real 27-file legacy install
-verified lossless. Full design: `docs/STORAGE.md`.
+**Last updated:** 2026-07-23, after **V0.4.5 Professional Release Pipeline 1.0**
+(branch `v3-ui`, uncommitted — see "Exact stopping point" below). A
+release-automation milestone with **no application behavior change**: GitHub
+Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) and
+`release.yml` (on `v*` tags: reuse CI → verify tag == `__version__` → build →
+package `OptionsPilot-vX.Y.Z.zip` → GitHub Release with CHANGELOG notes). Made
+`__version__` the single source of truth (pyproject `dynamic`/`attr`); added
+`scripts/package_release.ps1` + `release_notes.py`, a placeholder `LICENSE`, and
+an unwired Inno Setup installer template. 527 tests (+7); packaging verified
+locally. Full design: `docs/RELEASE.md`.
+
+**Prior update:** 2026-07-23, after **V0.4.4 persistent storage & data
+migration** — user data fully separated from binaries via `core/paths.py::
+AppPaths` (root `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py`
+(one-time lossless legacy import, backups, versioned framework). 520-test suite
+(+28). Full design: `docs/STORAGE.md`.
 
 **Prior update:** 2026-07-23, after **V0.4.3 AI Coach 2.0 (phase 1)** — a
 per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot and a
@@ -202,8 +206,33 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-23, V0.4.4 persistent storage & data migration (branch `v3-ui`,
-uncommitted at time of writing).** After a full filesystem-usage audit,
+**2026-07-23, V0.4.5 Professional Release Pipeline 1.0 (branch `v3-ui`,
+uncommitted at time of writing).** After auditing the existing build/release
+setup (`scripts/build_exe.ps1`, `build.ps1`, `release.ps1`, `bump_version.py`,
+`OptionsPilot.spec`), implemented release automation with no app behavior change.
+New `.github/workflows/ci.yml` (push/PR + `workflow_call`: install pip-cached →
+`pytest` → `selftest` → `check_html_ids` → `check_docs`) and `release.yml` (on
+`v*` tags: `uses: ci.yml` → tag/`__version__` guard → `scripts/build.ps1` →
+`scripts/package_release.ps1` → `gh release create`). Made `__version__` the
+single source of truth (`pyproject.toml` `dynamic = ["version"]` +
+`[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`);
+`scripts/bump_version.py` now edits one file and `scripts/check_docs.py` enforces
+the invariant. New `scripts/package_release.ps1` (clean `OptionsPilot-vX.Y.Z.zip`:
+app + LICENSE/README/CHANGELOG, excludes `data/`/`logs/`/source) and
+`scripts/release_notes.py` (CHANGELOG excerpt). Added a placeholder `LICENSE`
+(flagged) and an **unwired** `installer/OptionsPilot.iss` Inno Setup template with
+paths/shortcuts/AppData/uninstall documented in `docs/RELEASE.md`. Bumped
+0.4.4 → 0.4.5. Verified locally: YAML parses, `release_notes.py` extracts the
+right section, `package_release.ps1` produced a correct 54 MB zip (top level
+`OptionsPilot/ LICENSE README.md CHANGELOG.md`, no `data/`/`logs/`/source),
+`check_docs` green. +7 tests (`test_release_tooling.py`), 527 total green.
+Nothing committed (user hasn't asked). **Next infra:** wire the Inno Setup
+installer into `release.yml` (compile + upload), then the auto-updater (replace
+the install dir only; back up via `create_backup` first); and replace the
+placeholder `LICENSE` before any public release.
+
+**Before that: 2026-07-23, V0.4.4 persistent storage & data migration (branch
+`v3-ui`, uncommitted at time of writing).** After a full filesystem-usage audit,
 implemented the storage-separation milestone. New `optionspilot/core/paths.py`
 (`AppPaths` — single source of truth; platform root `%LOCALAPPDATA%\OptionsPilot`
 / XDG / `Application Support`, `OPTIONSPILOT_HOME` override; typed `get_*`

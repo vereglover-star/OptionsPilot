@@ -5,6 +5,14 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.4.5 Professional Release Pipeline 1.0** — done 2026-07-23. GitHub
+      Actions `ci.yml` (push/PR, reusable) + `release.yml` (tag `v*`: build +
+      package + GitHub Release); single-source `__version__` (pyproject dynamic);
+      `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`;
+      unwired Inno Setup installer template. No behavior change; +7 tests (527).
+      Full design: `docs/RELEASE.md`. **Next:** wire the installer into
+      `release.yml`; replace the placeholder `LICENSE` before a public release.
+
 - [x] **V0.4.4 persistent storage & automatic data migration** — done
       2026-07-23. `core/paths.py::AppPaths` (single source of truth, root at
       `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py::initialize_storage`

@@ -428,7 +428,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (520 tests as of this writing, all passing)
+# Tests (527 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -440,6 +440,16 @@ SQLite handles) and backs up/restores `dist\OptionsPilot\data\` around the
 PyInstaller `--clean` wipe. The exe has a single-instance guard
 (`ui/desktop.py`) — a second launch shows a friendly "already running"
 window instead of corrupting the shared account database.
+
+**Release pipeline (V0.4.5).** Releases are automated by GitHub Actions:
+`.github/workflows/ci.yml` (push/PR: pytest + selftest + doc/id checks, reusable)
+and `.github/workflows/release.yml` (on a `v*` tag: reuse CI → verify tag ==
+`__version__` → `scripts/build.ps1` → `scripts/package_release.ps1` →
+`OptionsPilot-vX.Y.Z.zip` → GitHub Release). The version has a **single source of
+truth** — `optionspilot/__init__.py::__version__`; `pyproject.toml` derives it
+via `[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`, so
+`scripts/bump_version.py` edits one line. Full guide: `docs/RELEASE.md`. A Windows
+installer is prepared but not built (`installer/OptionsPilot.iss`, unwired).
 
 **Distribution (V0.3.5):** a release zip downloaded from GitHub and extracted
 with Explorer stamps every file with the Mark-of-the-Web (`Zone.Identifier`
@@ -487,7 +497,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (520 tests cover this
+   exercises the FastAPI layer via `TestClient` (527 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

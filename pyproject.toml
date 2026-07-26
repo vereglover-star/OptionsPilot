@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "optionspilot"
-version = "0.4.4"
+# Single source of truth: the version lives ONLY in optionspilot/__init__.py
+# (__version__). setuptools reads it from there; scripts/bump_version.py edits
+# that one file; the app UI, packaging, and GitHub Release all derive from it.
+dynamic = ["version"]
 description = "AI-powered options paper-trading system: analysis, decision engine, risk management, backtesting, learning."
 requires-python = ">=3.12"
 dependencies = [
@@ -21,6 +24,9 @@ ui = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "pywebview>=5.0"]
 notify = ["windows-toasts>=1.1"]
 build = ["pyinstaller>=6.0"]
 browser = ["playwright>=1.40"]
+
+[tool.setuptools.dynamic]
+version = {attr = "optionspilot.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["optionspilot*"]

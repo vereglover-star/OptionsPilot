@@ -1,12 +1,15 @@
-"""Sync the project version across the two files that currently must agree
-by hand: pyproject.toml and optionspilot/__init__.py.
+"""Set the project version at its single source of truth.
 
-    python scripts/bump_version.py 0.2.0
+    python scripts/bump_version.py 0.5.0
 
-Normally invoked via scripts/release.ps1 -Version X.Y.Z. Refuses anything
-that isn't a plain X.Y.Z (no pre-release suffixes) - if this project ever
-needs those, extend the regex deliberately rather than loosening it by
-accident.
+The version lives ONLY in optionspilot/__init__.py (__version__). pyproject.toml
+derives it dynamically (`[tool.setuptools.dynamic] version = {attr = ...}`), the
+app UI reads `optionspilot.__version__`, and packaging + the GitHub Release tag
+derive from the same place — so this script edits exactly one line in one file.
+
+Normally invoked via scripts/release.ps1 -Version X.Y.Z. Refuses anything that
+isn't a plain X.Y.Z (no pre-release suffixes) - if this project ever needs those,
+extend the regex deliberately rather than loosening it by accident.
 """
 import re
 import sys
@@ -22,24 +25,16 @@ def main() -> int:
         return 1
     new = sys.argv[1]
 
-    pyproject = ROOT / "pyproject.toml"
     init = ROOT / "optionspilot" / "__init__.py"
-
-    p_text = pyproject.read_text(encoding="utf-8")
-    p_new, n1 = re.subn(r'(?m)^version\s*=\s*"[^"]+"', f'version = "{new}"', p_text)
-    if n1 != 1:
-        print("FAIL: could not find a single `version = \"...\"` line in pyproject.toml")
-        return 1
-
     i_text = init.read_text(encoding="utf-8")
-    i_new, n2 = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{new}"', i_text)
-    if n2 != 1:
+    i_new, n = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{new}"', i_text)
+    if n != 1:
         print("FAIL: could not find __version__ in optionspilot/__init__.py")
         return 1
 
-    pyproject.write_text(p_new, encoding="utf-8")
     init.write_text(i_new, encoding="utf-8")
-    print(f"OK: version set to {new} in pyproject.toml and optionspilot/__init__.py")
+    print(f"OK: version set to {new} in optionspilot/__init__.py "
+          f"(pyproject.toml derives it dynamically)")
     return 0
 
 

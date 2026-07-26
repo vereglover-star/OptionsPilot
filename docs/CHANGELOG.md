@@ -4,6 +4,56 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-23 — V0.4.5: Professional Release Pipeline 1.0
+
+*Version 0.4.4 → 0.4.5. 520 → 527 tests (+7). A release-automation milestone —
+**no application behavior changed**; only how releases are built, tested,
+packaged, and published. Turns a version tag into a downloadable GitHub Release
+with zero manual steps, and lays clean groundwork for a Windows installer +
+auto-updater. Full design in `docs/RELEASE.md`.*
+
+**GitHub Actions.** New `.github/workflows/ci.yml` — runs on every branch push
+and PR (and is reusable via `workflow_call`): installs the project (pip-cached on
+`pyproject.toml`), runs the full `pytest` suite, the storage/bundle `selftest`,
+`check_html_ids`, and `check_docs`; fails fast (`concurrency.cancel-in-progress`);
+Windows runner (the target platform). New `.github/workflows/release.yml` — runs
+on `v*` tags: **reuses the CI test job** (a tag never ships on a red suite), then
+verifies the tag matches `optionspilot.__version__`, builds the exe
+(`scripts/build.ps1` → PyInstaller + packaged-selftest gate), packages the zip,
+and creates a **GitHub Release** with the zip attached and notes drawn from the
+CHANGELOG (via the automatic `GITHUB_TOKEN`, no secrets required).
+
+**Single-source versioning.** The version now lives in exactly one place —
+`optionspilot/__init__.py::__version__`. `pyproject.toml` derives it dynamically
+(`dynamic = ["version"]` + `[tool.setuptools.dynamic] version = {attr =
+"optionspilot.__version__"}`), so there is no second copy to drift.
+`scripts/bump_version.py` edits that one line; `scripts/check_docs.py` now fails
+if `pyproject.toml` ever hardcodes a version or drops the dynamic wiring; and the
+release workflow fails fast if the pushed tag disagrees with `__version__`.
+
+**Artifacts.** `scripts/package_release.ps1` produces a clean, versioned
+`dist/OptionsPilot-vX.Y.Z.zip` containing the app bundle plus `LICENSE`,
+`README.md`, and `CHANGELOG.md` — and explicitly **excludes** source, tests,
+build caches, and any local user state (`data/`, `logs/`) so a release never
+ships a developer's paper account. Verified locally against a real build (54 MB
+zip; correct top-level entries; no `data/`/`logs/`/source). `scripts/release_notes
+.py` extracts the CHANGELOG section for a version as the Release body.
+
+**Groundwork.** Added a placeholder `LICENSE` (a non-granting "all rights
+reserved" default, clearly flagged to be replaced with a real license choice
+before a public release — the packager bundles whatever it contains). Added an
+**unwired** Inno Setup installer template (`installer/OptionsPilot.iss`) plus
+documented install paths / shortcuts / AppData usage / uninstall behavior in
+`docs/RELEASE.md` — leaning on the V0.4.4 storage split so an installer/updater
+only ever touches program files, never user data. Nothing builds the installer
+yet (per scope).
+
+**Tests:** +7 (`tests/test_release_tooling.py`) — the single-source-version
+invariant (pyproject dynamic, metadata resolves to `__version__`, `check_docs`
+agrees) and the release-notes extractor. The PowerShell build/packaging scripts
+and YAML workflows were verified by hand (YAML parses; packaging produced a
+correct zip; `release_notes.py` extracts the right section).
+
 ## [Uncommitted] 2026-07-23 — V0.4.4: persistent storage & automatic data migration
 
 *Version 0.4.3 → 0.4.4. 492 → 520 tests (+28). A core-infrastructure milestone:

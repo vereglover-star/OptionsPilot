@@ -1,0 +1,53 @@
+name: CI
+
+# Runs on every branch push and pull request. Also exposed as a reusable
+# workflow (workflow_call) so the Release workflow can gate a tag build on the
+# exact same test job — one definition, no drift.
+on:
+  push:
+    branches: ["**"]        # tag pushes (v*) are handled by release.yml, not here
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+# A newer push to the same ref cancels the in-flight run (fail fast, save minutes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test & selftest (Windows)
+    runs-on: windows-latest
+    env:
+      # Keep the app's storage root off the runner's real profile. Ephemeral
+      # anyway, but this makes the selftest's storage init self-contained.
+      OPTIONSPILOT_HOME: ${{ runner.temp }}\OptionsPilot
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"          # project requires >=3.12; matrix can be added later
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install project (dev + ui extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,ui]"
+
+      - name: Run test suite
+        run: pytest
+
+      - name: Selftest (storage layout + lazy-import bundle gate)
+        run: python -m optionspilot selftest
+
+      - name: HTML id references resolve
+        run: python scripts/check_html_ids.py
+
+      - name: Docs consistency (single-source version, test counts, cross-refs)
+        run: python scripts/check_docs.py
