@@ -4,6 +4,13 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-26 — V0.5.1: updater smoke-test release
+
+*Version 0.5.0 → 0.5.1. A deliberately tiny, cosmetic change to exercise the
+V0.5.0 auto-updater end to end: Help ▸ About's toast now reads "Hello from
+v0.5.1!" instead of the version/paper-trading blurb. No other behavior
+changed.*
+
 ## [Uncommitted] 2026-07-26 — V0.5.0: Auto-Updater 1.0
 
 *Version 0.4.6 → 0.5.0. 546 → 651 tests (+105). Makes the installed app

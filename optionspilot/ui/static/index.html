@@ -4388,8 +4388,7 @@ const Updater = (() => {
       if (!menu.contains(e.target) && e.target !== btn) closeMenu(); });
     $("help-check-update").onclick = () => { closeMenu(); checkNow(true); };
     $("help-about").onclick = () => { closeMenu();
-      toast("OptionsPilot v" + (snap ? snap.current_version : "?")
-            + " — paper-trading only."); };
+      toast("Hello from v" + (snap ? snap.current_version : "?") + "!"); };
     document.addEventListener("keydown", e => {
       if (e.key === "Escape" && isOpen()) close(); });
   }
