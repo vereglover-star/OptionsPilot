@@ -37,3 +37,8 @@ optionspilot = ["ui/static/*", "data_assets/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Put the project root on sys.path so the `tests` package (and the app under
+# test) import the same way everywhere, independent of how the editable
+# install exposes paths. Without this, `from tests.conftest import ...`
+# resolves locally but fails on a clean CI install.
+pythonpath = ["."]
