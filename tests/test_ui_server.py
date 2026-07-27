@@ -1,4 +1,4 @@
-﻿from datetime import timedelta
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +9,7 @@ from optionspilot.ui.server import create_app
 from tests.test_notify import CollectingNotifier
 from tests.test_orchestrator import CFG, NOW, FakeProvider, bullish_candles
 from optionspilot.core.models import Timeframe
+from optionspilot.data.adapter import ProviderUnavailable
 
 
 @pytest.fixture
@@ -102,6 +103,36 @@ class TestScanAPI:
         assert s["pnl"]["week"] == pytest.approx(t["pnl"], abs=0.01)
 
 
+class TestExperienceAPI:
+    def test_experience_stats_empty(self, client):
+        r = client.get("/api/experience").json()
+        assert r["statistics"]["overview"]["total"] == 0
+        assert r["recent"] == []
+
+    def test_experience_similar_is_advisory(self, client):
+        r = client.get("/api/experience/similar", params={"symbol": "SPY"}).json()
+        assert r["symbol"] == "SPY"
+        assert "historical" in r and "similar_trades" in r
+        # advisory: evaluating a setup opens no position and changes no state
+        assert client.orch.broker.get_positions() == []
+
+    def test_round_trip_records_ai_experience_with_snapshot(self, client):
+        client.post("/api/scan", json={"wait": True})
+        position = client.orch.broker.get_positions()[0]
+        client.provider.spot = position.stop_current - 1.0
+        client.post("/api/scan", json={"wait": True})
+        recs = client.orch.experience.store.all()
+        assert len(recs) == 1
+        r = recs[0]
+        assert r.managed_by == "ai"
+        assert r.operating_mode == "ai"
+        # the AI entry snapshot gave this experience rich, symmetric features
+        assert r.rsi is not None
+        assert r.market_regime is not None
+        view = client.get("/api/experience").json()
+        assert view["statistics"]["overview"]["total"] == 1
+
+
 class TestCandlesAPI:
     def test_candles_shape_and_indicators(self, client):
         d = client.get("/api/candles?symbol=spy&tf=5m").json()
@@ -118,13 +149,153 @@ class TestCandlesAPI:
         assert d["indicators"]["bb_upper"][0] is None      # warm-up NaN -> null
         assert d["indicators"]["rsi"][-1] is not None
 
+    def test_candles_respects_requested_range(self, client):
+        calls = []
+        frame = client.provider._candles[Timeframe.M5]
+
+        def get_candles(symbol, timeframe, start, end):
+            calls.append((start, end))
+            return frame[(frame.index >= start) & (frame.index < end)]
+
+        client.provider.get_candles = get_candles
+        start = frame.index[-6].to_pydatetime()
+        end = (frame.index[-1] + timedelta(minutes=5)).to_pydatetime()
+        d = client.get("/api/candles", params={
+            "symbol": "SPY",
+            "tf": "5m",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        }).json()
+        assert calls and calls[0] == (start, end)
+        assert d["candles"]
+        assert d["candles"][-1]["time"] < int(end.timestamp())
+
+    def test_extended_hours_tags_sessions_and_flags_payload(self, client):
+        # ext=1 must tag each bar with its session and set extended_hours;
+        # the default (RTH-only) must do neither. Session labels come from the
+        # bar's US/Eastern clock time, independent of the provider.
+        import pandas as pd
+        idx = pd.DatetimeIndex([
+            pd.Timestamp("2026-07-17 08:00", tz="America/New_York"),   # pre
+            pd.Timestamp("2026-07-17 10:00", tz="America/New_York"),   # rth
+            pd.Timestamp("2026-07-17 17:00", tz="America/New_York"),   # post
+        ]).tz_convert("UTC")
+        frame = pd.DataFrame(
+            {"open": [1.0, 1.1, 1.2], "high": [1.2, 1.3, 1.4],
+             "low": [0.9, 1.0, 1.1], "close": [1.1, 1.2, 1.3],
+             "volume": [10, 20, 30]}, index=idx)
+        seen = {}
+
+        def get_candles(symbol, timeframe, start, end, *, extended_hours=False):
+            seen["ext"] = extended_hours
+            return frame
+
+        client.provider.get_candles = get_candles
+        # RTH-only (default): no session field, extended_hours False, flag not
+        # forwarded as True
+        d0 = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d0["extended_hours"] is False
+        assert "session" not in d0["candles"][0]
+        # extended hours: session tags present, flag set, provider told ext=True
+        d1 = client.get("/api/candles?symbol=SPY&tf=5m&ext=1").json()
+        assert d1["extended_hours"] is True
+        assert seen["ext"] is True
+        assert [b["session"] for b in d1["candles"]] == ["pre", "rth", "post"]
+
+    def test_extended_hours_forced_off_on_daily(self, client):
+        # daily bars are RTH aggregates upstream; ext must be a no-op there so
+        # the cache key and session tagging stay honest — even if the client
+        # asks for ext=1, the provider is called WITHOUT it and no session
+        # tags are emitted.
+        import pandas as pd
+        idx = pd.date_range("2026-06-01", periods=5, freq="D", tz="UTC")
+        frame = pd.DataFrame(
+            {"open": 1.0, "high": 1.2, "low": 0.9, "close": 1.1, "volume": 10},
+            index=idx)
+        seen = {}
+
+        def get_candles(symbol, timeframe, start, end, *, extended_hours=False):
+            seen["ext"] = extended_hours
+            return frame
+
+        client.provider.get_candles = get_candles
+        d = client.get("/api/candles?symbol=SPY&tf=1d&ext=1").json()
+        assert d["extended_hours"] is False
+        assert seen["ext"] is False
+        assert "session" not in d["candles"][0]
+
     def test_unknown_symbol_is_clean_error(self, client):
         r = client.get("/api/candles?symbol=ZZZZ&tf=5m")
         # fake provider raises KeyError for unknown timeframes only; unknown
         # symbol returns the same frames — force an error via bad timeframe
-        r = client.get("/api/candles?symbol=SPY&tf=3m")
+        r = client.get("/api/candles?symbol=SPY&tf=7m")
         assert r.status_code == 502
         assert "unavailable" in r.json()["error"]
+
+    def test_malformed_provider_bars_never_500_the_endpoint(self, client):
+        # A provider that skips validate_candles (or a future regression in
+        # it) must not be able to 500 the chart: NaN volume serializes as 0,
+        # non-finite OHLC bars are excluded from the payload. Starlette uses
+        # allow_nan=False, so one rogue float otherwise kills the response
+        # during serialization — after the endpoint's try/except.
+        import numpy as np
+        df = client.provider._candles[Timeframe.M5]
+        df.iloc[-1, df.columns.get_loc("volume")] = np.nan
+        df.iloc[-2, df.columns.get_loc("high")] = np.inf
+        n = len(df)
+        r = client.get("/api/candles?symbol=SPY&tf=5m")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["candles"][-1]["volume"] == 0          # NaN volume -> 0
+        assert len(d["candles"]) == n - 1               # inf bar excluded
+        for bar in d["candles"]:
+            for k in ("open", "high", "low", "close"):
+                assert bar[k] == bar[k]                 # no NaN leaked
+
+    def test_candles_endpoint_honors_start_end_for_history_paging(self, client):
+        # Infinite scroll-back depends on /api/candles forwarding an older
+        # [start, end] window to the provider. If the endpoint ever drops
+        # these params again, the frontend re-fetches the same recent window,
+        # the prepend merge finds nothing older, and scrolling "runs out".
+        from datetime import datetime, timezone
+
+        seen = {}
+        orig = client.provider.get_candles
+
+        def spy(symbol, tf, start, end):
+            seen["start"], seen["end"] = start, end
+            return orig(symbol, tf, start, end)
+
+        client.provider.get_candles = spy
+        r = client.get("/api/candles?symbol=SPY&tf=5m"
+                       "&start=2025-01-01T00:00:00Z&end=2025-02-01T00:00:00Z")
+        assert r.status_code == 200
+        assert seen["start"] == datetime(2025, 1, 1, tzinfo=timezone.utc)
+        assert seen["end"] == datetime(2025, 2, 1, tzinfo=timezone.utc)
+
+    def test_candles_payload_reports_market_open(self, client):
+        # The stale-banner suppression (a closed-market cached payload is not
+        # "live data unavailable" — it is simply the last session) depends on
+        # every candles payload reporting whether the market is open. NOW is
+        # frozen to Friday 11:00 ET, inside the regular-hours window.
+        d = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["market_open"] is True
+
+    def test_stale_display_payload_still_reports_market_state(self, client):
+        # When the live fetch fails and the display provider serves disk-cached
+        # bars (stale=True), the payload must still carry market_open so the
+        # frontend can tell a real "you're behind live prices" warning (market
+        # open) from a non-event (market closed, showing the last session).
+        frame = client.provider._candles[Timeframe.M5]
+
+        def stale_ok(symbol, tf, start, end):
+            return frame, True
+
+        client.provider.get_candles_stale_ok = stale_ok
+        d = client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["stale"] is True
+        assert d["as_of"] is not None
+        assert d["market_open"] is True          # rides alongside the stale flag
 
     def test_chart_lib_is_served(self, client):
         r = client.get("/static/lightweight-charts.js")
@@ -339,3 +510,334 @@ class TestWebSocket:
         with client.websocket_connect("/ws") as ws:
             msg = ws.receive_json()
             assert msg["paper"] is True and "account" in msg
+
+    def test_ws_sends_full_payload_then_heartbeats_when_idle(self, client):
+        # The client relies on this contract: every NEW connection gets a full
+        # payload first (so a reconnect after a drop catches up automatically —
+        # the digest starts empty), then tiny heartbeats while nothing changes
+        # (which the frontend skips re-rendering on). If a change ever makes the
+        # first frame a heartbeat, reconnecting clients would render stale data.
+        with client.websocket_connect("/ws") as ws:
+            first = ws.receive_json()
+            assert "account" in first and not first.get("heartbeat")
+            # nothing mutates in this test, so the next frame is a heartbeat
+            second = ws.receive_json()
+            assert second.get("heartbeat") is True and "account" not in second
+
+
+class TestCoachAPI:
+    def test_empty_coach_dashboard(self, client):
+        r = client.get("/api/coach").json()
+        assert r["dashboard"] == {"trades_reviewed": 0}
+        assert r["profile"] == {"trades_reviewed": 0}
+        assert r["reviews"] == []
+
+    def test_coach_dashboard_after_review(self, client):
+        from tests.test_coach import ctx, stop_order
+        from tests.test_journal import make_trade
+        trade = make_trade("api1", 120.0, strategy="manual")
+        client.orch.coach.review(
+            trade, ctx(quality="good", spot=100.0, delta=0.45),
+            {"spot": 101.5}, orders=[stop_order(level=98.0)],
+            equity_at_entry=25_000.0,
+        )
+        r = client.get("/api/coach").json()
+        assert set(r) >= {"dashboard", "profile", "reviews"}
+        d = r["dashboard"]
+        assert d["trades_reviewed"] == 1
+        assert len(d["category_scores"]) == 10
+        assert {"scores", "streaks", "action_items", "overall"} <= set(d)
+        # the review now carries the category scorecard + outcome snapshot
+        assert r["reviews"][0]["categories"]
+        assert r["reviews"][0]["symbol"] == "SPY"
+
+    def test_dashboard_is_cached_by_review_count(self, client):
+        from tests.test_coach import ctx, stop_order
+        from tests.test_journal import make_trade
+        client.orch.coach.review(
+            make_trade("c1", 50.0, strategy="manual"), ctx(),
+            None, orders=[stop_order()], equity_at_entry=25_000.0)
+        client.get("/api/coach")
+        cached = client.server._coach_cache
+        assert cached is not None and cached[0] == 1
+        # second call with no new review reuses the cached object
+        client.get("/api/coach")
+        assert client.server._coach_cache is cached
+
+
+class TestMarketDataStateAPI:
+    """`/api/candles` must tell the frontend WHICH no-data condition it hit.
+
+    One empty `candles` array used to mean four different things — the window
+    predates every provider, the window is a holiday, the feed is down, or the
+    symbol is bogus — and the frontend had to guess. Guessing is what made a
+    scroll into old intraday history retry the same impossible request forever.
+    These tests drive the real `CachedProvider` + `MarketDataService` stack with
+    scripted adapters so each condition is asserted end to end.
+    """
+
+    @pytest.fixture
+    def md_client(self, tmp_path, monkeypatch, request):
+        """A client whose provider is the real market-data stack."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        script = getattr(request, "param", None)
+        if script is None:
+            script = [frame(80, Timeframe.M5, end=NOW)]
+        adapter = ScriptedAdapter("scripted", script, capabilities=UNLIMITED)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        quotes = FakeProvider(bullish_candles(), 100.0, NOW.date())
+        provider = CachedProvider(quotes, service=service)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(cfg, provider=provider,
+                            notifier=NotificationCenter(cfg.notify,
+                                                        [CollectingNotifier()]),
+                            data_dir=tmp_path)
+        app = create_app(cfg, orchestrator=orch, run_loop=False,
+                         data_dir=tmp_path)
+        with TestClient(app) as c:
+            c.adapter = adapter
+            c.service = service
+            yield c
+
+    def test_a_live_payload_names_its_provider_and_quality(self, md_client):
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["outcome"] == "live"
+        assert d["provider"] == "scripted"
+        assert d["quality"] == 100.0
+        assert d["stale"] is False and d["exhausted"] is False
+        assert d["trace_id"] is not None
+        assert len(d["candles"]) == 80
+
+    def test_an_exhausted_window_is_flagged_not_reported_as_an_error(self, tmp_path,
+                                                                    monkeypatch):
+        """The fix for 'scrolling back retries forever'. The frontend reads
+        `exhausted` as a FACT and stops asking, and `earliest_available` is
+        what it shows the user."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.capabilities import YAHOO_CAPABILITIES
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        adapter = ScriptedAdapter("yahoo", [frame(10, Timeframe.M5, end=NOW)],
+                                  capabilities=YAHOO_CAPABILITIES)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(
+            cfg,
+            provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                                 NOW.date()), service=service),
+            notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+            data_dir=tmp_path)
+        with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                                   data_dir=tmp_path)) as c:
+            start = (NOW - timedelta(days=200)).isoformat()
+            end = (NOW - timedelta(days=120)).isoformat()
+            d = c.get("/api/candles", params={"symbol": "SPY", "tf": "5m",
+                                              "start": start, "end": end}).json()
+        assert d["candles"] == []
+        assert d["outcome"] == "exhausted" and d["exhausted"] is True
+        assert d["earliest_available"] is not None
+        assert "only goes back to" in d["message"]
+        assert adapter.calls == [], "an impossible window must cost no request"
+
+    @pytest.mark.parametrize("md_client", [[None]], indirect=True)
+    def test_a_genuinely_empty_window_is_not_an_error(self, md_client):
+        """A holiday. The chart must not raise a red error overlay for it."""
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["candles"] == []
+        assert d["outcome"] == "empty" and d["exhausted"] is False
+
+    @pytest.mark.parametrize("md_client", [[ProviderUnavailable("feed down")]],
+                             indirect=True)
+    def test_a_dead_feed_reports_failed_with_the_reason(self, md_client):
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["candles"] == []
+        assert d["outcome"] == "failed"
+        assert "feed down" in d["message"]
+
+    def test_a_repeat_request_reports_the_memo_tier(self, md_client):
+        md_client.get("/api/candles?symbol=SPY&tf=5m")
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert d["outcome"] == "memo"
+        assert len(md_client.adapter.calls) == 1
+
+    def test_the_payload_stays_backward_compatible(self, md_client):
+        """Existing consumers read `candles`/`indicators`/`stale`/`market_open`;
+        the new fields are additive."""
+        d = md_client.get("/api/candles?symbol=SPY&tf=5m").json()
+        assert set(d) >= {"symbol", "timeframe", "candles", "indicators",
+                          "stale", "market_open", "extended_hours"}
+
+
+class TestMarketDataDiagnosticsAPI:
+    def test_diagnostics_report_providers_cache_and_traces(self, tmp_path,
+                                                           monkeypatch):
+        """The design goal: a chart complaint should be answerable from one
+        JSON response, without reproducing it."""
+        from optionspilot.data.cached import CachedProvider
+        from optionspilot.data.registry import ProviderRegistry
+        from optionspilot.data.service import MarketDataService
+        from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+        monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+        monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+        adapter = ScriptedAdapter("scripted", [frame(30, Timeframe.M5, end=NOW)],
+                                  capabilities=UNLIMITED)
+        service = MarketDataService(ProviderRegistry([adapter]),
+                                    cache_db=tmp_path / "cache.db",
+                                    clock=lambda: NOW)
+        cfg = CFG.model_copy(deep=True)
+        orch = Orchestrator(
+            cfg,
+            provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                                 NOW.date()), service=service),
+            notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+            data_dir=tmp_path)
+        with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                                   data_dir=tmp_path)) as c:
+            c.get("/api/candles?symbol=SPY&tf=5m")
+            d = c.get("/api/diagnostics/marketdata").json()
+
+        assert d["available"] is True
+        assert [p["name"] for p in d["providers"]] == ["scripted"]
+        assert d["cache"]["bars"] == 30
+        assert d["requests"]["total_requests"] == 1
+        assert d["requests"]["success_rate"] == 1.0
+        trace = d["traces"][0]
+        assert trace["symbol"] == "SPY" and trace["outcome"] == "live"
+        assert trace["attempts"][0]["provider"] == "scripted"
+        assert trace["validation"]["usable"] is True
+
+    def test_diagnostics_degrade_gracefully_on_a_plain_provider(self, client):
+        """Any injected `MarketDataProvider` must still be safe to ask."""
+        d = client.get("/api/diagnostics/marketdata").json()
+        assert d["available"] is False and "reason" in d
+
+
+# ── V0.5.3: the diagnostics dashboard's API surface ──────────────────────────
+
+@pytest.fixture
+def diag_client(tmp_path, monkeypatch):
+    """A client whose provider is the real market-data stack over a scripted
+    adapter, so the diagnostics/export/replay endpoints run end to end offline."""
+    from optionspilot.data.cached import CachedProvider
+    from optionspilot.data.registry import ProviderRegistry
+    from optionspilot.data.service import MarketDataService
+    from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+    monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+    monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+    adapter = ScriptedAdapter("scripted", [frame(30, Timeframe.M5, end=NOW)],
+                              capabilities=UNLIMITED)
+    service = MarketDataService(ProviderRegistry([adapter]),
+                                cache_db=tmp_path / "cache.db",
+                                clock=lambda: NOW)
+    cfg = CFG.model_copy(deep=True)
+    orch = Orchestrator(
+        cfg,
+        provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                             NOW.date()), service=service),
+        notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+        data_dir=tmp_path)
+    with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                               data_dir=tmp_path)) as c:
+        yield c
+
+
+class TestDiagnosticsDashboardPayload:
+    def test_it_carries_everything_the_dashboard_renders(self, diag_client):
+        """The page computes nothing — anything it shows must be in here, or a
+        screenshot and an export would disagree."""
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        d = diag_client.get("/api/diagnostics/marketdata").json()
+
+        assert set(d) >= {"providers", "ranking", "cache", "requests", "memo",
+                          "config", "traces", "available", "version"}
+        provider = d["providers"][0]
+        for key in ("rank", "state", "success_rate", "avg_latency_ms",
+                    "p95_latency_ms", "timeouts", "validation_failures",
+                    "rate_limits", "breaker_trips", "requests_today",
+                    "data_quality_score", "last_success_at", "intervals"):
+            assert key in provider, key
+        assert d["ranking"][0]["position"] == 1
+        assert d["cache"]["hit_rate"] is not None
+        assert d["traces"][0]["chain"]
+
+    def test_the_trace_count_is_bounded(self, diag_client):
+        """A request for a million traces must not try to serve a million."""
+        assert len(diag_client.get(
+            "/api/diagnostics/marketdata?traces=100000").json()["traces"]) <= 200
+
+
+class TestDiagnosticsExport:
+    def test_the_text_export_is_a_readable_report(self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        r = diag_client.get("/api/diagnostics/marketdata/export?format=text")
+        assert r.status_code == 200
+        assert "PROVIDERS" in r.text and "scripted" in r.text
+        assert "attachment" in r.headers["content-disposition"]
+        assert ".txt" in r.headers["content-disposition"]
+
+    def test_the_json_export_is_the_same_data(self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        live = diag_client.get("/api/diagnostics/marketdata").json()
+        exported = diag_client.get(
+            "/api/diagnostics/marketdata/export?format=json").json()
+        assert [p["name"] for p in exported["providers"]] == \
+            [p["name"] for p in live["providers"]]
+
+    def test_the_json_export_downloads_as_a_dated_file(self, diag_client):
+        r = diag_client.get("/api/diagnostics/marketdata/export?format=json")
+        disposition = r.headers["content-disposition"]
+        assert "attachment" in disposition and ".json" in disposition
+        assert "optionspilot-diagnostics-" in disposition
+
+    def test_an_export_works_before_any_request_has_been_made(self, diag_client):
+        """The first thing a user does after a bad launch is export."""
+        assert diag_client.get(
+            "/api/diagnostics/marketdata/export?format=text").status_code == 200
+
+
+class TestDiagnosticsReplay:
+    def test_replaying_a_recorded_trace_returns_every_provider_answer(
+            self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        trace_id = diag_client.get(
+            "/api/diagnostics/marketdata").json()["traces"][0]["id"]
+
+        r = diag_client.post("/api/diagnostics/marketdata/replay",
+                             json={"trace_id": trace_id})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["symbol"] == "SPY"
+        assert body["answers"][0]["provider"] == "scripted"
+        assert body["service"]["outcome"] in ("live", "cache", "memo")
+
+    def test_a_missing_trace_id_is_a_400(self, diag_client):
+        assert diag_client.post("/api/diagnostics/marketdata/replay",
+                                json={}).status_code == 400
+
+    def test_an_unknown_trace_is_a_404_that_explains_itself(self, diag_client):
+        r = diag_client.post("/api/diagnostics/marketdata/replay",
+                             json={"trace_id": 999999})
+        assert r.status_code == 404
+        assert "ring" in r.json()["error"]
+
+    def test_replay_is_refused_on_a_provider_that_cannot_support_it(self, client):
+        r = client.post("/api/diagnostics/marketdata/replay",
+                        json={"trace_id": 1})
+        assert r.status_code == 404
+        assert "does not support replay" in r.json()["error"]

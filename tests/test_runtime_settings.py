@@ -12,6 +12,39 @@ def make(tmp_path, **cfg_overrides):
     return cfg, rt
 
 
+class TestUpdatePrefs:
+    def test_defaults(self, tmp_path):
+        _, rt = make(tmp_path)
+        p = rt.update_prefs()
+        assert p["auto_check"] is True
+        assert p["frequency"] == "daily"
+        assert p["channel"] == "stable"
+        assert p["skip_version"] is None and p["last_checked"] is None
+
+    def test_set_and_persist(self, tmp_path):
+        _, rt = make(tmp_path)
+        rt.set_update_prefs(frequency="weekly", channel="beta",
+                            last_checked="2026-07-25T00:00:00+00:00")
+        # a fresh instance reads the persisted values
+        _, rt2 = make(tmp_path)
+        p = rt2.update_prefs()
+        assert p["frequency"] == "weekly" and p["channel"] == "beta"
+        assert p["last_checked"] == "2026-07-25T00:00:00+00:00"
+
+    def test_unknown_keys_ignored(self, tmp_path):
+        _, rt = make(tmp_path)
+        rt.set_update_prefs(frequency="launch", bogus="value")
+        p = rt.update_prefs()
+        assert p["frequency"] == "launch" and "bogus" not in p
+
+    def test_partial_update_preserves_others(self, tmp_path):
+        _, rt = make(tmp_path)
+        rt.set_update_prefs(channel="beta")
+        rt.set_update_prefs(auto_check=False)
+        p = rt.update_prefs()
+        assert p["channel"] == "beta" and p["auto_check"] is False
+
+
 class TestWatchlist:
     def test_set_and_persist(self, tmp_path):
         cfg, rt = make(tmp_path)

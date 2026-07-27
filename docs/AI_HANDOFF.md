@@ -87,7 +87,13 @@ Layered, each layer only depends on layers below it:
 ```
 config/       → layered settings (yaml + env + runtime-mutable overlay)
 core/         → domain models (Candle, OptionContract, Signal, TradePlan,
-                Position, Order, TradeRecord), logging setup
+                Position, Order, TradeRecord), logging setup, the shared SQLite
+                foundation (core/sqlite.py: connect + PRAGMA user_version
+                migrations, V0.4.2), and the storage layer (core/paths.py
+                AppPaths — the single source of truth for every filesystem path,
+                rooted at %LOCALAPPDATA%\OptionsPilot; core/migration.py —
+                one-time legacy import + backups + versioned-migration framework,
+                V0.4.4)
 data/         → market data provider interface + yfinance implementation,
                 candle cache, symbol directory (12k tickers), preset lists
 analysis/     → PURE FUNCTIONS ONLY, no I/O: indicators, candlestick
@@ -105,15 +111,33 @@ broker/       → PaperBroker (simulator), OrderManager (manual orders),
                 (live-broker stubs)
 journal/      → SQLite trade record store
 learning/     → performance slicing + bounded, auditable weight tuning
+experience/   → the AI's long-term memory (V0.4.0–0.4.1): a rich, expandable,
+                100k-scalable superset of every completed trade
+                (data/experience.db) recorded ALONGSIDE the journal; a
+                deterministic Similarity Engine (find comparable historical
+                trades → win rate / return / failure mode / ADVISORY calibrated
+                confidence); a centralized build_snapshot capturing the full AI
+                decision context at entry (feature-symmetric with manual trades);
+                and the Experience API (recent / similar / statistics). Advisory
+                only — never touches the gate/risk/execution. See
+                docs/ROADMAP-V0.4-EXPERIENCE.md
 backtest/     → event-driven replay through the SAME engine/risk/broker
-coach/        → TradeCoach (deterministic post-trade review) + CoachProfile
-                (aggregated strengths/weaknesses) — NEW in V2-3
+coach/        → TradeCoach (deterministic post-trade review, manual trades) +
+                CoachProfile (aggregated strengths/weaknesses). AI Coach 2.0
+                (V0.4.3) adds a per-trade 10-category scorecard (categories.py)
+                and a mentor dashboard (analytics.py: category trends, streaks,
+                pattern detection with confidence, improvement timeline, ≤5
+                ranked action items) served on GET /api/coach → `dashboard`
 notify/       → desktop toast / email notifications
 orchestrator.py → composes everything into one scan cycle; the only class
                    the UI and CLI actually drive
 ui/           → FastAPI app (server.py), pywebview shell (desktop.py),
                    static/index.html (the entire frontend)
-__main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / learn
+__main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / learn / selftest
+                (_bootstrap builds AppPaths + runs initialize_storage; selftest
+                verifies the storage layout is writable + the migration marker is
+                valid AND that lazily-imported deps are importable — the
+                packaged-bundle gate run by scripts/build_exe.ps1 after every build)
 ```
 
 ### The one-cycle data flow (`Orchestrator.run_cycle`)
@@ -293,17 +317,41 @@ Two config layers, by design:
 directly in `config.yaml` (`engine: operating_mode: human`) — documented
 with an inline comment there since 2026-07-16, matching `trading_mode`.
 
+**`market_data:` (V0.5.3)** is a startup-only `config.yaml` section owning every
+operational knob of the data subsystem: per provider `enabled` / `priority` /
+`timeout` / `max_attempts` / `retry_backoff` / `min_request_interval` /
+`breaker_threshold` / `breaker_base_cooldown` / `breaker_max_cooldown` /
+`min_quality_score`, plus `dynamic_ranking`, `memo_max_entries`,
+`structured_logging`, `capability_discovery`, `capability_refresh_days` and a
+`cache:` block (`enabled`, `retention_days`, `warn_bytes`). Full reference:
+`docs/MARKET_DATA.md` §16.
+
+There is a **layering subtlety worth knowing before you touch it**: `data/` may
+import only `core/`, and `config/` may not import `data/` (both enforced by
+`tests/test_architecture.py`). So the runtime shape is frozen dataclasses in
+`data/config.py`, the validated YAML face is
+`config/settings.py::MarketDataConfigSection`, and the translation
+(`MarketDataConfig.from_mapping(cfg.market_data.model_dump())`) happens in
+`orchestrator.py` — the composition root that already imports both. Keys map
+1:1 and two tests assert the key sets are identical, so adding a field to one
+and forgetting the other fails the suite rather than silently dropping it.
+An unknown key raises at startup; an unknown *provider* is accepted, so a
+config can pin a future provider's settings before its adapter ships.
+
 ## APIs and endpoints (FastAPI, `optionspilot/ui/server.py`)
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Serves `static/index.html` |
+| GET | `/api/diagnostics/marketdata?traces=N` | Everything needed to diagnose a chart complaint without reproducing it (V0.5.2): per-provider health (availability, failure rate, latency, rolling data-quality score, circuit-breaker and rate-limit state), cache stats (bars/symbols/bytes/schema version/rebuilds/bars-by-provider), aggregate request outcomes, and the last N request traces — each naming every provider tried, why each was skipped or failed, which tier answered, and what validation found. Returns `{"available": false}` rather than erroring when the injected provider predates this architecture. **V0.5.3** adds, per provider: `rank` and `state` (closed/open/half_open), `p95_latency_ms`, `success_rate`, `requests_today`, `timeouts`, `validation_failures`, `rate_limits`, `breaker_trips`, `last_success_at`, `intervals`, and the `config` in force; plus top-level `ranking` (ordered, with positions), `memo` (entries/max), `config`, `version`, and richer `cache` metrics (hit rate, stale reads, evictions, average age, `provider_requests_saved`, span held). Each trace also carries `chain` — every provider tried and its verdict, the same string the structured log line uses. This is the payload **Help ▸ Diagnostics** renders |
+| GET | `/api/diagnostics/marketdata/export?format=json\|text&traces=N` | The same payload as a dated download (`Content-Disposition: attachment`). `format=text` renders `data/report.py`'s human-readable report — built to be safe to paste into a public issue tracker (no stack traces, no filesystem paths, no credentials) |
+| POST | `/api/diagnostics/marketdata/replay` | `{"trace_id": N}` — re-run a recorded request through the live ladder AND poll every provider directly, returning each one's bars, latency, quality and disagreement against the first that answered. POST because it is not free: one upstream request per provider, deliberately bypassing the memo and cache so it measures the real chain. 400 without a `trace_id`, 404 for a trace no longer in the ring or a provider that cannot support replay |
 | GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes, scan progress) — also pushed over `/ws` |
 | POST | `/api/scan` | Run one cycle: non-blocking by default (background thread; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous |
 | GET | `/api/journal` | Trade history + stats |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
-| GET | `/api/candles` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock) |
+| GET | `/api/candles?symbol=&tf=&start=&end=` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock). `tf` is any of the 13 timeframes (1m/2m/3m/5m/10m/15m/30m/1h/2h/4h/1d/1w/1mo). Optional ISO `start`/`end` request an arbitrary window — the UI uses this to prepend history as the user pans left (V3.1-3). Since V3-0 the payload also carries `stale`/`as_of`: when the live fetch fails, disk-cached bars of any age are served flagged stale (display-only fallback — the engine's strict `get_candles` path is unchanged). Since V3.1 RC2 it also carries `market_open` (bool, from `Orchestrator.market_open`): the Charts tab suppresses the "Live data unavailable — showing cached bars" banner when the market is closed (the cached bars ARE the last session, so the banner would be a false alarm) and shows it only when a stale payload arrives during market hours. Bars are sanitized by `validate_candles` (NaN/inf/≤0 dropped, non-finite volume zeroed) so a glitched provider bar can't 500 the endpoint (V3.1-1). Since V3.2, `?ext=1` requests Extended Hours (intraday only): the payload carries `extended_hours` (bool) and each bar a `session` tag (`pre`/`rth`/`post`) from `optionspilot/data/sessions.py`; ext frames are cache-keyed separately and bypass the disk store, and the flag is display-only — the engine/trading path never sets it, so paper execution stays RTH-only . **Since V0.5.2** it also carries the market-data outcome so the frontend never has to infer one from an empty array: `outcome` (`live`/`memo`/`cache`/`stale`/`empty`/`exhausted`/`failed`), `provider`, `quality` (0-100 validation score), `exhausted` (bool — the window predates what ANY provider serves; the chart shows "start of available history" and stops requesting), `earliest_available` (ISO), `message` (a human reason) and `trace_id` (look it up in `/api/diagnostics/marketdata`). Fields are additive; existing consumers are unaffected |
 | GET | `/static/lightweight-charts.js` | Vendored chart library (Apache-2.0, offline — the frontend's ONE bundled asset) |
 | GET | `/api/chain` | Option chain for a symbol/expiration (Greeks, liquidity) — manual trading ticket data |
 | GET/POST | `/api/orders`, `/api/orders/cancel` | Working manual orders: place/list/cancel |
@@ -312,6 +360,8 @@ with an inline comment there since 2026-07-16, matching `trading_mode`.
 | POST | `/api/mode` | Switch trading_mode (conservative/high_risk/custom) |
 | POST | `/api/operating_mode` | Switch AI Mode ↔ Human Mode |
 | GET | `/api/coach` | Coach reviews + aggregated profile |
+| GET | `/api/experience` | Experience Engine statistics (overview + by strategy/regime/session + failure modes/success patterns) + recent experiences (V0.4.1) |
+| GET | `/api/experience/similar?symbol=&k=` | Advisory historical-similarity for a symbol's CURRENT setup: the calibrated-confidence explanation + the Similar Trade Viewer rows. Evaluates the symbol deterministically; opens no position and changes no state (V0.4.1) |
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
@@ -323,11 +373,34 @@ cycle-loop thread against API request threads.
 
 ## Database / storage approach
 
-Everything is **SQLite + JSON files**, no external database, no ORM:
+**Storage root (V0.4.4):** all user data lives under a stable per-user root —
+`%LOCALAPPDATA%\OptionsPilot` on Windows (XDG/`Application Support` elsewhere),
+overridable via `OPTIONSPILOT_HOME` — **not** beside the executable, so
+replacing the exe never touches user data. `core/paths.py::AppPaths` is the
+single source of truth for every path (`get_data_dir`, `get_journal_db`,
+`get_coach_dir`, `get_settings_file`, …); no module constructs the root itself.
+At startup `core/migration.py::initialize_storage` creates the layout and, on
+first run, imports a legacy CWD/exe-relative `data/`+`logs/` install once
+(lossless copy: preserves timestamps, verifies each file, never overwrites a
+newer file, never deletes the source), recording completion in
+`migrations/migration_version.json`. See `docs/STORAGE.md` for the full design.
+The layout under the root is `data/ logs/ backups/ exports/ migrations/`; paths
+below are shown relative to `data/`.
+
+Everything is **SQLite + JSON files**, no external database, no ORM. Every
+SQLite store opens through the shared `core/sqlite.py` foundation (`connect` +
+`run_migrations` on `PRAGMA user_version`), so all five databases evolve their
+schema the same versioned way (V0.4.2 — migration 1 of each store is its current
+schema, so existing on-disk databases open unchanged):
 - `data/paper.db` — account, positions, fills (PaperBroker)
 - `data/cache.db` — candle cache (CachedProvider write-through; safe to delete)
 - `data/orders.db` — working + historical manual orders
 - `data/journal.db` — trade records
+- `data/experience.db` — the Experience Engine store (V0.4.0; schema v2 in
+  V0.4.1): a rich superset of every completed trade, indexed columns (incl.
+  `market_regime`, `return_pct`, `hold_minutes`) + JSON payload, `PRAGMA
+  user_version` migrations; written alongside `journal.db`, safe to delete
+  (regenerated only for new trades — it is not the system of record)
 - `data/settings.json` — runtime-mutable settings (watchlist, modes)
 - `data/state/open_trades.json` — AI trade context (restart-safe journaling)
 - `data/state/manual_trades.json` — manual trade context (V2-3)
@@ -379,7 +452,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (345 tests as of this writing, all passing)
+# Tests (1052 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -391,6 +464,54 @@ SQLite handles) and backs up/restores `dist\OptionsPilot\data\` around the
 PyInstaller `--clean` wipe. The exe has a single-instance guard
 (`ui/desktop.py`) — a second launch shows a friendly "already running"
 window instead of corrupting the shared account database.
+
+**Release pipeline (V0.4.5).** Releases are automated by GitHub Actions:
+`.github/workflows/ci.yml` (push/PR: pytest + selftest + doc/id checks, reusable)
+and `.github/workflows/release.yml` (on a `v*` tag: reuse CI → verify tag ==
+`__version__` → `scripts/build.ps1` → `scripts/package_release.ps1` →
+`OptionsPilot-vX.Y.Z.zip` → GitHub Release). The version has a **single source of
+truth** — `optionspilot/__init__.py::__version__`; `pyproject.toml` derives it
+via `[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`, so
+`scripts/bump_version.py` edits one line. Full guide: `docs/RELEASE.md`.
+
+**Windows installer (V0.4.6).** A `v*` tag also builds and publishes
+`OptionsPilot-Setup-vX.Y.Z.exe` (Inno Setup, `installer/OptionsPilot.iss`,
+compiled by `scripts/build_installer.ps1`) **alongside** the portable zip. It
+installs to `C:\Program Files\OptionsPilot` (admin), registers with Programs and
+Features, upgrades in place (stable `AppId`), and prompts before removing user
+data on uninstall (default No). User data stays in `%LOCALAPPDATA%\OptionsPilot`,
+untouched by upgrades/reinstalls. Code signing is still TODO (SmartScreen warns).
+Full guide: `docs/INSTALLER.md`.
+
+**Auto-updater (V0.5.0).** `optionspilot/update/` is a self-contained subpackage
+(depends only on `core` + stdlib; no new runtime dep — networking is `urllib`)
+that checks GitHub Releases, downloads the installer to `%TEMP%\OptionsPilotUpdater`,
+validates it, backs up data (`create_backup(paths, "pre-update")`), and launches
+the installer silently (`/VERYSILENT …`) then restarts. Layers: `version`
+(SemVer ordering), `transport` (the only networking, retries/backoff/proxy),
+`github_api`, `checker`, `downloader`, `validation` (size/hash/Authenticode-ready),
+`installer`, `ui` (presentation), `service` (`UpdateService` facade + state
+machine). Exposed over `/api/update/{status,check,download,progress,cancel,apply,
+skip,settings}`; `UIServer` owns an `UpdateService(__version__, runtime)` and
+kicks a background launch-time check **gated on `run_loop`** (so the test suite
+never hits the network). Preferences (auto_check/frequency/channel/skip_version/
+last_checked) live in `RuntimeSettings` under the `updates` key of settings.json.
+Frontend: Settings ▸ Software updates panel, Help ▸ Check for Updates…, and the
+update dialog in `index.html`. The updater is verified fully offline via fakes
+(`tests/update_helpers.py`); a real Inno upgrade must be QA'd manually. Full
+guide: `docs/AUTO_UPDATER.md`.
+
+**Distribution (V0.3.5):** a release zip downloaded from GitHub and extracted
+with Explorer stamps every file with the Mark-of-the-Web (`Zone.Identifier`
+ADS), and .NET Framework refuses to load MOTW-flagged managed assemblies —
+pywebview's WinForms backend then dies inside pythonnet with "Failed to
+resolve Python.Runtime.Loader.Initialize" before the window opens.
+`optionspilot_app.py::unblock_bundle()` strips the stream from the install
+folder at startup (frozen Windows builds only, before webview can `import
+clr`), so a downloaded release self-heals on first launch. Guarded by
+`TestUnblockBundle` in `tests/test_packaging.py`. OS-provided prerequisites
+remain .NET Framework 4.7.2+ and the WebView2 Runtime (both ship with
+Windows 10/11 by default).
 
 ## Assumptions made during development
 
@@ -426,7 +547,7 @@ window instead of corrupting the shared account database.
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (345 tests cover this
+   exercises the FastAPI layer via `TestClient` (1052 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

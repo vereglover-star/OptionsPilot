@@ -94,8 +94,8 @@ Follow the style established in `git log` exactly:
 
 <Prose paragraphs explaining WHAT was built and WHY, organized by
 sub-feature if the commit spans more than one. Name the key new
-files/classes. Mention the test count at the end of the body, e.g.
-"345 tests.">
+files/classes. Mention the current test count at the end of the body —
+run the suite to get it, don't guess or copy an old number.>
 ```
 
 - One commit per coherent unit of work (a phase, or a clearly-scoped

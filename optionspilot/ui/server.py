@@ -22,19 +22,55 @@ from zoneinfo import ZoneInfo
 import json
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from optionspilot import __version__
+from optionspilot.analysis import indicators as ind
+from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
+from optionspilot.backtest import Backtester
+from optionspilot.broker.base import BrokerError
+from optionspilot.broker.orders import OrderKind, TIF
+from optionspilot.coach import CoachProfile, build_dashboard
 from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
-from optionspilot.core.models import utcnow
+from optionspilot.core.models import OptionRight, Timeframe, utcnow
+from optionspilot.core.paths import AppPaths
+from optionspilot.data import replay as mdreplay
+from optionspilot.data import report as mdreport
+from optionspilot.data import sessions
 from optionspilot.data import symbols as symdir
+from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
-from optionspilot.orchestrator import Orchestrator
+from optionspilot.engine.scorer import DEFAULT_WEIGHTS
+from optionspilot.integrations import parse_alert
+from optionspilot.learning import LearningEngine, WeightStore
+from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
+from optionspilot.update.models import UpdateError
+from optionspilot.update.service import UpdateService
 
 log = get_logger("ui")
+
+
+def _experience_dict(rec) -> dict:
+    """Flatten an ExperienceRecord to the fields the Experience/Recent view
+    needs (a stable, JSON-friendly subset — the full record stays in the store)."""
+    return {
+        "trade_id": rec.trade_id,
+        "date": rec.entry_ts.date().isoformat(),
+        "symbol": rec.symbol,
+        "timeframe": rec.timeframe,
+        "direction": rec.direction,
+        "managed_by": rec.managed_by,
+        "outcome": "win" if rec.is_win else "loss",
+        "pnl": rec.pnl,
+        "return_pct": rec.return_pct,
+        "confidence": rec.confidence_entry,
+        "setup_quality": rec.setup_quality,
+        "market_regime": rec.market_regime,
+        "exit_reason": rec.exit_reason,
+    }
 
 ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
@@ -46,10 +82,13 @@ class UIServer:
 
     def __init__(self, config: AppConfig, orchestrator: Orchestrator | None = None,
                  runtime: RuntimeSettings | None = None,
-                 data_dir: str | Path = "data"):
+                 data_dir: str | Path | None = None):
         self.cfg = config
-        self.orch = orchestrator or Orchestrator(config)
-        data_dir = Path(data_dir)
+        # Default to the per-user storage root (AppPaths) so the UI's own state
+        # (settings, symbol metadata, backtest reports) lives with all other
+        # user data, never beside the executable.
+        data_dir = Path(data_dir) if data_dir is not None else AppPaths().get_data_dir()
+        self.orch = orchestrator or Orchestrator(config, data_dir=data_dir)
         # When constructed outside the CLI bootstrap, own a store (no overlay:
         # the caller's config is taken as-is; bootstrap applies overlays).
         self.runtime = runtime or RuntimeSettings(
@@ -69,9 +108,16 @@ class UIServer:
         self._cycle_lock = threading.Lock()
         self.scan_state: dict = {"running": False, "done": 0, "total": 0}
         self._journal_cache: tuple[int, list] | None = None
+        self._coach_cache: tuple[int, dict] | None = None
         self._meta_path = data_dir / "state" / "symbol_meta.json"
+        self._reports_dir = data_dir / "reports"
         self._symbol_meta: dict[str, dict] = self._load_meta()
         self._kick_meta_refresh(self.cfg.data.watchlist)
+        # Self-updater: reads GitHub Releases, downloads to a temp dir, and (on
+        # explicit user action) launches the installer. Preferences persist via
+        # RuntimeSettings. Constructing it touches no network — a launch-time
+        # check is kicked separately (see create_app), only for the real app.
+        self.updater = UpdateService(__version__, self.runtime)
 
     # ── cycle loop ───────────────────────────────────────────────────────────
 
@@ -150,6 +196,14 @@ class UIServer:
 
     # ── payloads ─────────────────────────────────────────────────────────────
 
+    def _coach_dashboard(self, reviews: list[dict]) -> dict:
+        """Cached Coach 2.0 dashboard. Recomputed only when the review count
+        changes — reviews are write-once per trade, so count is a valid key."""
+        key = len(reviews)
+        if self._coach_cache is None or self._coach_cache[0] != key:
+            self._coach_cache = (key, build_dashboard(reviews))
+        return self._coach_cache[1]
+
     def status_payload(self) -> dict:
         with self.lock:
             orch = self.orch
@@ -222,35 +276,94 @@ class UIServer:
 
     # ── chart workspace data ─────────────────────────────────────────────────
 
-    def candles_payload(self, symbol: str, timeframe: str) -> dict:
+    def candles_payload(
+        self,
+        symbol: str,
+        timeframe: str,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        extended_hours: bool = False,
+    ) -> dict:
         """OHLCV + indicator series for the Charts tab, computed by the SAME
         analysis library the engine trades with (guaranteed visual parity).
         Provider-only — no orchestrator state, so no lock is taken and chart
         loads never contend with a running scan."""
-        from optionspilot.analysis import indicators as ind
-        from optionspilot.core.models import Timeframe
-        from optionspilot.orchestrator import _WINDOW_DAYS
-
         symbol = symbol.upper()
         tf = Timeframe.from_string(timeframe)
-        end = utcnow()
-        df = self.orch.provider.get_candles(
-            symbol, tf, end - timedelta(days=_WINDOW_DAYS[tf]), end)
+        end = end or utcnow()
+        start = start or (end - timedelta(days=WINDOW_DAYS[tf]))
+        if end < start:
+            start, end = end, start
+        # display surface: prefer clearly-flagged stale bars over a blank
+        # chart when the live fetch fails (feature-detected so tests that
+        # inject bare fake providers keep working)
+        # Extended hours only exists for intraday intervals; daily+ bars are RTH
+        # aggregates so the flag is forced off there (keeps the cache key and the
+        # session tagging honest).
+        ext = extended_hours and tf.minutes < Timeframe.D1.minutes
+        # `get_history` returns the full result — which tier answered, which
+        # provider, whether the window is older than anything can serve, the
+        # validation report and the diagnostics trace id — so the frontend can
+        # be EXPLICIT about its state instead of inferring one from an empty
+        # array. Feature-detected so tests injecting a bare fake provider (and
+        # any legacy adapter) keep working on the older two-method contract.
+        get_history = getattr(self.orch.provider, "get_history", None)
+        meta: dict = {}
+        if get_history is not None:
+            result = (get_history(symbol, tf, start, end, extended_hours=True)
+                      if ext else get_history(symbol, tf, start, end))
+            df, stale = result.frame, result.stale
+            meta = result.as_meta()
+        else:
+            stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
+            # Only thread the kwarg when actually requesting extended hours, so
+            # plain 4-arg providers are unaffected.
+            if stale_ok is not None:
+                df, stale = (stale_ok(symbol, tf, start, end, extended_hours=True)
+                             if ext else stale_ok(symbol, tf, start, end))
+            else:
+                df = (self.orch.provider.get_candles(symbol, tf, start, end,
+                                                     extended_hours=True)
+                      if ext else self.orch.provider.get_candles(symbol, tf, start, end))
+                stale = False
+        # One sanitization choke point for everything derived below: candles
+        # AND indicator series. Providers validate their own output, but this
+        # endpoint must stay robust to any that don't — a single non-finite
+        # bar otherwise poisons computed indicators (inf VWAP from one inf
+        # high) and 500s the response during JSON serialization.
+        df = validate_candles(df, context=f"/api/candles {symbol} {timeframe}")
+        # Whether the US market is open right now decides how the frontend reads
+        # a stale (disk-fallback) payload: while the market is CLOSED the newest
+        # cached bar already IS the freshest bar the market ever produced, so a
+        # "live data unavailable" banner would be a category error — the chart
+        # is simply showing the last session. Only an OPEN-market stale payload
+        # means the display has genuinely fallen behind live prices.
+        market_open = self.orch.market_open(utcnow())
         if df.empty:
+            # An empty payload is NOT one condition. `meta["outcome"]` says
+            # which of them it is — `exhausted` (the window predates every
+            # provider: the true start of history, and the frontend must stop
+            # asking), `empty` (a holiday or pre-listing window: legitimate),
+            # or `failed` (nothing could answer: the only case that deserves an
+            # error state). Conflating the three is what made a scroll into old
+            # intraday history retry forever.
             return {"symbol": symbol, "timeframe": timeframe, "candles": [],
-                    "indicators": {}}
+                    "indicators": {}, "stale": False, "market_open": market_open,
+                    **meta}
 
+        import math
         icfg = self.cfg.indicators
         close = df["close"]
         series: dict[str, list] = {}
 
         def col(name: str, s) -> None:
-            series[name] = [None if v != v else round(float(v), 4) for v in s]
+            series[name] = [round(float(v), 4) if math.isfinite(v) else None
+                            for v in s]
 
         if icfg.ema:
             for period in icfg.ema_periods[:3]:
                 col(f"ema{period}", ind.ema(close, period))
-        if icfg.vwap and tf is not Timeframe.D1:
+        if icfg.vwap and tf.minutes < Timeframe.D1.minutes:
             col("vwap", ind.vwap(df))
         if icfg.bollinger:
             bb = ind.bollinger(close)
@@ -266,19 +379,80 @@ class UIServer:
             col("macd_hist", m["macd_hist"])
 
         times = [int(ts.timestamp()) for ts in df.index]
-        candles = [
-            {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
-             "low": round(r.low, 4), "close": round(r.close, 4),
-             "volume": int(r.volume)}
-            for t, r in zip(times, df.itertuples(index=False))
-        ]
+        # Per-bar session labels only when extended hours are shown (in RTH-only
+        # mode every bar is regular, so the field is omitted to keep the payload
+        # lean; the frontend defaults a missing session to "rth").
+        sess = sessions.labels(df.index) if ext else None
+        # validate_candles() above already dropped non-finite bars; these
+        # guards are the last line of defense — one rogue float would 500 the
+        # whole endpoint during JSON serialization (allow_nan=False).
+        candles = []
+        for i, (t, r) in enumerate(zip(times, df.itertuples(index=False))):
+            if not all(math.isfinite(v) for v in (r.open, r.high, r.low, r.close)):
+                continue
+            bar = {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
+                   "low": round(r.low, 4), "close": round(r.close, 4),
+                   "volume": int(r.volume) if math.isfinite(r.volume) else 0}
+            if sess is not None:
+                bar["session"] = sess[i]
+            candles.append(bar)
+        log.debug("candles %s %s: %d bars%s%s", symbol, timeframe, len(candles),
+                  " (stale)" if stale else "", " ext" if ext else "")
         return {"symbol": symbol, "timeframe": timeframe,
-                "candles": candles, "indicators": series}
+                "candles": candles, "indicators": series, "stale": stale,
+                "as_of": times[-1] if stale else None,
+                "market_open": market_open, "extended_hours": ext, **meta}
+
+    def marketdata_diagnostics(self, traces: int = 25) -> dict:
+        """Provider health + cache stats + recent request traces.
+
+        Provider-only, like `candles_payload` — no orchestrator state, so no
+        lock is taken and asking for diagnostics can never contend with (or be
+        blocked by) a running scan. Returns `{"available": False}` rather than
+        erroring when the injected provider predates this architecture, so the
+        endpoint is safe to call against any build."""
+        health = getattr(self.orch.provider, "health", None)
+        diagnostics = getattr(self.orch.provider, "diagnostics", None)
+        if health is None or diagnostics is None:
+            return {"available": False,
+                    "reason": "this provider does not expose diagnostics"}
+        payload = health()
+        payload["available"] = True
+        payload["traces"] = diagnostics.recent(max(0, min(traces, 200)))
+        payload["version"] = __version__
+        return payload
+
+    def marketdata_report(self, traces: int = 25) -> str:
+        """The same diagnostics rendered as plain text for a bug report.
+
+        Rendering happens in `data/report.py` over the *same* payload the JSON
+        export and the dashboard use, so the three can never disagree about a
+        number."""
+        return mdreport.render(self.marketdata_diagnostics(traces),
+                               traces=traces,
+                               title=f"OptionsPilot v{__version__} — market "
+                                     f"data diagnostics")
+
+    def marketdata_replay(self, trace_id: int) -> dict:
+        """Re-run a recorded request and poll every provider directly.
+
+        This spends real upstream requests, so it is a POST triggered by an
+        explicit click on the diagnostics page — never anything the chart or a
+        background timer can reach.
+        """
+        service = getattr(self.orch.provider, "service", None)
+        diagnostics = getattr(self.orch.provider, "diagnostics", None)
+        if service is None or diagnostics is None:
+            return {"error": "this provider does not support replay"}
+        trace = diagnostics.find(trace_id)
+        if trace is None:
+            return {"error": f"no trace {trace_id} in the ring "
+                             f"(it holds the most recent requests only)"}
+        return mdreplay.replay(service, trace).as_dict()
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
     def chain_payload(self, symbol: str, expiration: str = "") -> dict:
-        from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
 
         symbol = symbol.upper()
         with self.lock:
@@ -306,9 +480,6 @@ class UIServer:
                     "expirations": expirations, "chain": rows}
 
     def place_order(self, payload: dict) -> dict:
-        from optionspilot.broker.base import BrokerError
-        from optionspilot.broker.orders import OrderKind, TIF
-        from optionspilot.core.models import OptionRight
 
         kind = OrderKind(str(payload.get("kind", "market")))
         tif = TIF(str(payload.get("tif", "day")))
@@ -562,8 +733,6 @@ class UIServer:
     def _run_backtest(self, symbol: str, days: int,
                       min_confidence: float | None) -> None:
         try:
-            from optionspilot.backtest import Backtester
-            from optionspilot.core.models import Timeframe
 
             cfg = self.cfg.model_copy(deep=True)
             if min_confidence is not None:
@@ -576,8 +745,8 @@ class UIServer:
                 candles[tf] = self.orch.provider.get_candles(
                     symbol, tf, end - timedelta(days=windows[tf.minutes]), end)
             report = Backtester(cfg).run(symbol, candles)
-            report.save_json(Path("data") / "reports" / f"{symbol.lower()}.json")
-            report.save_html(Path("data") / "reports" / f"{symbol.lower()}.html")
+            report.save_json(self._reports_dir / f"{symbol.lower()}.json")
+            report.save_html(self._reports_dir / f"{symbol.lower()}.html")
             with self._bt_lock:
                 self.backtest_job = {"state": "done", "symbol": symbol,
                                      "report": report.to_dict()}
@@ -591,12 +760,21 @@ class UIServer:
 def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                run_loop: bool = False,
                runtime: RuntimeSettings | None = None,
-               data_dir: str | Path = "data") -> FastAPI:
+               data_dir: str | Path | None = None) -> FastAPI:
     server = UIServer(config, orchestrator, runtime, data_dir)
     app = FastAPI(title="OptionsPilot", version=__version__)
     app.state.server = server
     if run_loop:
         server.start_loop()
+        # Quietly check for updates in the background on launch (respecting the
+        # user's auto-check + frequency preferences). Gated on run_loop so the
+        # test suite — which builds the app with run_loop=False — never touches
+        # the network. Failures are swallowed inside the service; startup is
+        # never blocked or slowed by this call.
+        try:
+            server.updater.maybe_check_on_launch()
+        except Exception:  # noqa: BLE001 - a failed update check must never break launch
+            log.debug("launch-time update check could not start", exc_info=True)
 
     @app.get("/")
     def index():
@@ -618,13 +796,71 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                             media_type="image/x-icon")
 
     @app.get("/api/candles")
-    def candles_view(symbol: str, tf: str = "5m"):
+    def candles_view(
+        symbol: str,
+        tf: str = "5m",
+        start: datetime | None = None,
+        end: datetime | None = None,
+        ext: bool = False,
+    ):
         try:
-            return server.candles_payload(symbol, tf)
+            return server.candles_payload(symbol, tf, start=start, end=end,
+                                          extended_hours=ext)
         except Exception as exc:  # noqa: BLE001 — surface as a clean 502
             log.error("candles fetch failed: %s", exc)
             return JSONResponse({"error": f"candles unavailable: {exc}"},
                                 status_code=502)
+
+    @app.get("/api/diagnostics/marketdata")
+    def marketdata_diagnostics(traces: int = 25):
+        """Everything needed to diagnose a chart complaint without reproducing
+        it: per-provider health and circuit-breaker state, cache size and
+        schema, aggregate request outcomes, and the most recent request traces
+        (which providers were tried, why each was skipped or failed, which tier
+        answered, and what validation found)."""
+        return server.marketdata_diagnostics(traces)
+
+    @app.get("/api/diagnostics/marketdata/export")
+    def marketdata_export(format: str = "json", traces: int = 50):
+        """The diagnostics payload as a downloadable attachment.
+
+        `format=text` renders the human-readable report a user can paste into
+        an issue; `format=json` is the same data verbatim for tooling. Both are
+        served as attachments with a dated filename so a bug report arrives
+        with something identifiable rather than `download (3)`.
+        """
+        stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+        if format == "text":
+            return PlainTextResponse(
+                server.marketdata_report(traces),
+                headers={"Content-Disposition": "attachment; filename="
+                         f"optionspilot-diagnostics-{stamp}.txt"})
+        return JSONResponse(
+            server.marketdata_diagnostics(traces),
+            headers={"Content-Disposition": "attachment; filename="
+                     f"optionspilot-diagnostics-{stamp}.json"})
+
+    @app.post("/api/diagnostics/marketdata/replay")
+    def marketdata_replay(payload: dict | None = None):
+        """Re-run one recorded request and compare every provider's answer.
+
+        POST because it is not free: it spends one upstream request per
+        provider, deliberately bypassing the memo and the cache so it measures
+        the real chain rather than the answer being investigated.
+        """
+        trace_id = int((payload or {}).get("trace_id", 0))
+        if trace_id <= 0:
+            return JSONResponse({"error": "trace_id is required"},
+                                status_code=400)
+        try:
+            result = server.marketdata_replay(trace_id)
+        except Exception as exc:  # noqa: BLE001 — a diagnostic must not 500
+            log.error("marketdata replay failed: %s", exc)
+            return JSONResponse({"error": f"replay failed: {exc}"},
+                                status_code=502)
+        if "error" in result:
+            return JSONResponse(result, status_code=404)
+        return result
 
     @app.get("/api/status")
     def status():
@@ -660,8 +896,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.get("/api/learning")
     def learning():
-        from optionspilot.engine.scorer import DEFAULT_WEIGHTS
-        from optionspilot.learning import LearningEngine, WeightStore
 
         with server.lock:
             engine = LearningEngine(server.orch.journal)
@@ -708,7 +942,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/api/orders")
     def orders_place(payload: dict):
-        from optionspilot.broker.base import BrokerError
 
         try:
             return server.place_order(payload)
@@ -717,7 +950,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/api/orders/cancel")
     def orders_cancel(payload: dict):
-        from optionspilot.broker.base import BrokerError
 
         try:
             with server.lock:
@@ -798,15 +1030,42 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.get("/api/coach")
     def coach_view():
-        from optionspilot.coach import CoachProfile
-
         with server.lock:
             reviews = server.orch.coach.load_all()
+        # The dashboard is a pure function of the reviews; recompute only when
+        # their count changes (a new trade was reviewed), mirroring the
+        # journal-cache pattern. Reviews are write-once per trade, so count is a
+        # sufficient cache key.
+        dashboard = server._coach_dashboard(reviews)
         reviews.sort(key=lambda r: r.get("trade_id", ""), reverse=True)
         return {
             "profile": CoachProfile(reviews).build(),
+            "dashboard": dashboard,
             "reviews": reviews[:50],
         }
+
+    @app.get("/api/experience")
+    def experience_view():
+        """Experience Engine statistics + recent trades (advisory memory)."""
+        with server.lock:
+            exp = server.orch.experience
+            return {
+                "statistics": exp.statistics(),
+                "recent": [_experience_dict(r) for r in exp.recent(30)],
+            }
+
+    @app.get("/api/experience/similar")
+    def experience_similar(symbol: str, k: int = 20):
+        """Similar historical trades for a symbol's current setup (advisory —
+        never places or changes a trade)."""
+        with server.lock:
+            try:
+                return server.orch.experience_for_symbol(
+                    symbol.upper(), k=max(1, min(int(k), 100)))
+            except Exception as exc:  # noqa: BLE001
+                log.error("experience/similar failed for %s: %s", symbol, exc)
+                return JSONResponse(
+                    {"error": f"could not evaluate {symbol}"}, status_code=502)
 
     @app.post("/api/risk/reset_halt")
     def reset_halt():
@@ -829,7 +1088,6 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
     @app.post("/webhook/tradingview")
     def tradingview(payload: dict):
-        from optionspilot.integrations import parse_alert
 
         icfg = config.integrations
         if not icfg.tradingview_webhook:
@@ -849,6 +1107,59 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             summary = server.orch.scan_single(alert.symbol)
         return {"source": "tradingview", "symbol": alert.symbol,
                 "note": alert.note, **summary}
+
+    # ── auto-updater ─────────────────────────────────────────────────────────
+    @app.get("/api/update/status")
+    def update_status():
+        """Current updater state (version, availability, prefs, progress).
+
+        Pure read of in-memory state — never triggers a network call, so the
+        Settings panel and the dialog can poll it freely.
+        """
+        return server.updater.snapshot()
+
+    @app.post("/api/update/check")
+    def update_check():
+        """Manual 'Check for Updates' — runs a synchronous check and returns the
+        fresh snapshot. Never raises; a network failure comes back as
+        ``error`` in the snapshot with ``update_available=False``."""
+        server.updater.check_now()
+        return server.updater.snapshot()
+
+    @app.post("/api/update/download")
+    def update_download():
+        started = server.updater.start_download()
+        if not started:
+            return JSONResponse(
+                {"error": "no update is available to download"}, status_code=409)
+        return server.updater.snapshot()
+
+    @app.get("/api/update/progress")
+    def update_progress():
+        return server.updater.snapshot()["progress"]
+
+    @app.post("/api/update/cancel")
+    def update_cancel():
+        server.updater.cancel_download()
+        return {"cancelled": True}
+
+    @app.post("/api/update/apply")
+    def update_apply():
+        result = server.updater.apply_update()
+        if not result.get("ok"):
+            return JSONResponse(result, status_code=422)
+        return result
+
+    @app.post("/api/update/skip")
+    def update_skip():
+        return server.updater.skip_current()
+
+    @app.post("/api/update/settings")
+    def update_settings(payload: dict):
+        try:
+            return server.updater.set_preferences(**(payload or {}))
+        except UpdateError as exc:
+            return JSONResponse({"error": exc.message}, status_code=422)
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
@@ -878,9 +1189,10 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
 def serve(config: AppConfig, host: str = "127.0.0.1", port: int = 8787,
           run_loop: bool = True,
-          runtime: RuntimeSettings | None = None) -> None:  # pragma: no cover - blocking server
+          runtime: RuntimeSettings | None = None,
+          data_dir: str | Path | None = None) -> None:  # pragma: no cover - blocking server
     import uvicorn
 
-    app = create_app(config, run_loop=run_loop, runtime=runtime)
+    app = create_app(config, run_loop=run_loop, runtime=runtime, data_dir=data_dir)
     print(f"OptionsPilot dashboard: http://{host}:{port}  (paper trading only)")
     uvicorn.run(app, host=host, port=port, log_level="warning")

@@ -5,22 +5,185 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-17 (`.\scripts\verify.ps1` — full test suite,
-HTML id references, doc consistency, `pip check`, and a headless-browser
-smoke check, all green; see `PROJECT_STATE.md` for detail).
+**Last verified:** 2026-07-26, V0.5.3 Market Data Production Readiness. Full
+**1052-test** `pytest` suite green (+172), HTML-id + doc checks green,
+`scripts/marketdata_stress.py` **65/65** offline, and `scripts/chart_check.py`
+**52/52** in a real headless browser (three new checks drive the Help ▸
+Diagnostics dashboard and a live replay). `browser_check.py` and `pip check`
+green. The 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not**
+been run. The ISCC compile + real install/upgrade runs and a live end-to-end
+update remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
 ---
 
 ## Current version
 
-`0.1.0` (`pyproject.toml`) — pre-1.0, actively developed. No public release
-process yet; the packaged artifact is a Windows desktop exe built on demand
-via `scripts/build_exe.ps1`, not versioned/released independently of the
-git history.
+`0.5.0` — single source of truth: `optionspilot/__init__.py::__version__`
+(pyproject derives it dynamically). Pre-1.0, actively developed; bumped from
+`0.4.6` at the V0.5.0 Auto-Updater milestone (the footer reads it from
+`/api/status`). A `v*` tag publishes both `OptionsPilot-Setup-vX.Y.Z.exe`
+(installer) and `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions, and the
+installed app now updates itself from GitHub Releases.
 
 ## Current phase
 
-**V2 rewrite, post-V2-4.** The original 8-phase v1 roadmap (foundation
+**V0.5.3 Market Data Production Readiness, on branch `v3-ui` — awaiting user
+review.** V0.5.2 built the market-data subsystem; V0.5.3 makes it *operable*.
+Provider health has one owner (`data/health.py`), the provider chain is ordered
+by **measured health** rather than a hard-coded constant (a cold system keeps
+the documented order exactly), and there is a **Help ▸ Diagnostics** dashboard
+with JSON/text export and per-request replay. Every operational knob — enabled,
+priority, timeout, retries, breaker thresholds, quality floor, cache retention,
+ranking on/off — moved into `config.yaml`'s `market_data:` section, so adding or
+retuning a provider needs no code change. The consolidation surfaced and fixed
+two real accounting bugs: a provider serving consistently-unusable bars was
+recorded as *succeeding* and never tripped its breaker, and a demoted success
+could never build a failure streak past 1. **No new provider, no version bump,
+no trading-behavior change.** Design: `docs/MARKET_DATA.md` §13–22.
+
+**Before that: V0.5.2 Market Data & Chart Reliability.** Chart history was
+replaced rather than patched: a capability-driven,
+multi-provider architecture (Yahoo chart JSON → yfinance → Stooq) with typed
+provider failures, circuit breakers, semantic validation, durable self-healing
+storage, and one diagnostics trace per request. The four conditions that used to
+arrive as one empty array — `exhausted` / `empty` / `stale` / `failed` — are now
+distinguished end to end, which is what lets the chart say "start of available
+history" instead of retrying an impossible window forever. No trading behavior
+changed. Design: `docs/MARKET_DATA.md`; manual QA: `docs/QA_MARKET_DATA.md`.
+
+**Before that: V0.5.0 Auto-Updater 1.0.** Adds an
+in-app self-updater (`optionspilot/update/`): a background launch-time check of
+GitHub Releases, a professional update dialog (version diff, release notes,
+size/ETA, Update Now / Remind Me Later / Skip), streamed installer download with
+progress + cancel, pre-update backup, silent install, and restart. Settings ▸
+Software updates (auto-check/frequency/beta) and Help ▸ Check for Updates…. No
+trading behavior changed; user data is never touched by an update. The prior
+milestone remains: `installer/OptionsPilot.iss` (Inno Setup) —
+installs to `C:\Program Files\OptionsPilot` (admin, changeable dir), stable
+`AppId` for **in-place upgrades**, Start Menu folder (app + Uninstall), optional
+desktop shortcut (default checked), app icon everywhere, Programs-and-Features
+registration (publisher/URLs/copyright/version), and an **uninstall-time** prompt
+to also delete `%LOCALAPPDATA%\OptionsPilot` (default **No**). Because user data
+lives in that separate root, upgrades/reinstalls never touch journal, coach,
+settings, trades, watchlists, or backups. New `scripts/build_installer.ps1`
+compiles it (stamping the single-source version); `release.yml` now installs Inno
+Setup, builds the installer, and uploads it **alongside** the zip (zip retained).
++19 in `test_installer.py` (static config + pipeline guards). Full design in
+`docs/INSTALLER.md`.
+
+**Before that: V0.4.5 Professional Release Pipeline 1.0.** GitHub Actions `ci.yml`
+(push/PR: tests + selftest + checks, reusable) + `release.yml` (tag `v*`: build →
+package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source `__version__`
+(pyproject `dynamic`/`attr`); `scripts/package_release.ps1` + `release_notes.py`.
+527-test suite (+7).
+
+**Before that: V0.4.4 persistent storage & automatic data migration.** User data
+fully separated from the binaries: new `core/paths.py::AppPaths` (single source
+of truth for paths, root `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py`
+(one-time lossless legacy import, backups, versioned framework). 520-test suite
+(+28).
+
+**Before that: V0.4.3 AI Coach 2.0 (phase 1).** Turned the Coach into a mentor,
+additively (manual trades only): a per-trade 10-category scorecard
+(`coach/categories.py`) + outcome snapshot, and a `build_dashboard`
+(`coach/analytics.py`) with sub-scores, category trends, streaks, confidence-
+scored pattern detection, an improvement timeline, and ≤5 auto-expiring action
+items, served on `GET /api/coach → dashboard` and rendered in the coach tab.
+492-test suite (+22); backward-compatible.
+
+**Before that: V0.4.2 architecture audit + three refactors.** A read-only audit
+(`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements:
+a shared `core/sqlite.py` foundation (`connect` + `PRAGMA user_version`
+migrations) adopted by all five stores; `ui/server.py` import cleanup + public
+`orchestrator.WINDOW_DAYS`; executable layering-guard tests. 470-test suite (+16).
+
+**Before that: V0.4.1 Experience Engine integration (phase 3).** A centralized
+`build_snapshot` captures the full deterministic decision context at AI entry
+(feature-symmetric with coached manual trades), every *tradeable* AI signal
+carries an advisory historical-similarity explanation, and a clean Experience
+API (`/api/experience`, `/api/experience/similar`) exposes recent trades,
+similar-trade lookup, and strategy/regime/session statistics. Storage schema v2
+(indexed `market_regime` + SQL aggregates). Advisory only; nothing touches the
+gate/risk/execution. 454-test suite (+30 at the time). Full design in
+`docs/ROADMAP-V0.4-EXPERIENCE.md`.
+
+**Before that: V0.4.0 Experience Engine (phases 1–2).** The
+`optionspilot/experience/` subsystem — a rich, 100k-scalable `ExperienceStore`
+(`data/experience.db`) recorded alongside the journal, plus the deterministic
+Similarity Engine. The V0.3.5 distribution fix below also remains part of this
+unmerged `v3-ui` branch.
+
+**Before that: V0.3.5 distribution fix, on branch `v3-ui`.**
+The packaged exe crashed after zip → GitHub → download → extract with
+`RuntimeError: Failed to resolve Python.Runtime.Loader.Initialize` (pywebview →
+pythonnet → clr_loader). Root cause reproduced end-to-end: Explorer extraction
+of a browser-downloaded zip leaves the Mark-of-the-Web (`Zone.Identifier` ADS)
+on every file, and .NET Framework refuses to load MOTW-flagged managed
+assemblies (HRESULT 0x80131515) — `Python.Runtime.dll` is the first casualty,
+before any OptionsPilot code runs. Local builds carry no flag, which is why the
+dev-side exe always worked. Fix: `optionspilot_app.py::unblock_bundle()` strips
+the stream from the app's own files at startup (frozen Windows builds only,
+before webview loads clr) — the programmatic equivalent of Explorer's
+"Unblock". +3 tests (`TestUnblockBundle`); verified by MOTW-flagging a full
+release copy outside the repo and launching to a working desktop window.
+
+**Before that: V3.3.1 chart reliability investigation.** A pure root-cause investigation (no new features) of the
+intermittent "switch symbols enough times → a chart loads blank and stays blank
+until restart." Instrumented the lifecycle, reproduced under load + fault
+injection, and traced each cause to a concrete mechanism: **no timeout on the
+chart fetch** (a backend throttle backlog — yfinance serializes fetches through
+one 0.15s lock, measured 10–15s latency under load — left the first-paint
+spinner up forever); **superseded fetches never aborted** (a rapid switch burst
+piled requests onto that throttle and starved the wanted symbol); **no backend
+request timeout** (a hung Yahoo connection blocked the in-flight slot); a hung
+history fetch left `historyLoading` stuck; malformed data threw an uncaught
+"Value is null" from the library's own paint frame; and an unbounded backend
+`_mem` cache. Fixes: bounded `AbortController` fetches (timeout → recoverable
+error + abort-on-switch), backend `REQUEST_TIMEOUT`, `chEnsureMonotonic`
+sanitizer + guarded rAF loop, and a bounded `MEM_CACHE_MAX`. Built on **V3.3
+chart stabilization & market validation, on branch `v3-ui` — awaiting
+user approval/merge.** A correctness sprint verified against LIVE market data
+(reproduced during regular trading hours), not just tests. Made the chart match
+a professional platform as closely as the free provider allows: adaptive live
+refresh cadence, America/New_York time display, a candle countdown timer,
+drawing creation previews, an overlay that tracks vertical (price-axis) moves,
+and — the key root cause — a periodic refresh that no longer discards paged-in
+history or moves the viewport (it merges the fresh recent window onto the
+retained older bars). Two behaviours were identified as **yfinance provider
+limitations, not app bugs** and documented: no streaming feed, and a forming
+bar that arrives as a flat `volume=0` placeholder until it completes. Candle
+data matches yfinance bar-for-bar (SPY/AAPL/NVDA). Built on **V3.2.2 viewport
+ownership unification + Auto Follow, on branch `v3-ui` —
+awaiting user approval/merge and market-hours validation.** Every bug
+reported after V3.2.1 (random recentering, history intermittently failing,
+losing viewport while scrolling) turned out to be another symptom of the
+same conflict: the viewport had no single owner. This sprint audited every
+`timeScale()` mutation, routed all of them through one `chMoveViewport`
+controller, and found two real root causes — a history-arming race (fixed by
+arming directly off the range-change subscription) and a deeper one:
+lightweight-charts' `subscribeVisibleLogicalRangeChange` fires on a LATER
+animation frame, not synchronously, so the old "reset the guard flag right
+after the call" pattern closed its window before that callback ever arrived.
+Also added an Auto Follow toggle (OFF by default, TradingView-style
+"go to realtime" when ON), discovering along the way that `scrollToRealTime()`
+itself runs a multi-frame animation that defeated a fixed-frame guard —
+replaced with a single non-animated equivalent. Built on V3.2.1, which fixed
+three release-blocker symptoms the user reproduced in the real app that
+V3.2's (internal-state) tests missed: drawings still vanished across
+timeframes (`chX` returned null for off-bar timestamps — now interpolates
+the pixel between bracketing integer bars); timeframe switches lost the
+user's place (now preserve the focal date, clamped to the closest candle);
+and the viewport snapped on refresh while panned past newest (now preserves
+the logical range). Built on V3.2, which finished the chart subsystem: a
+timeframe-independent drawing engine
+(visibility policy, `createdTf`, `source`, `meta`; one `chAddDrawing` API for
+user/AI/replay), a TradingView-style **Ray** tool, and **Extended Hours**
+(pre/after-market candles via yfinance `prepost`, session tags + shading,
+persisted toggle — display-only, trading path stays RTH-only). Preceded by
+RC1–RC3 (chart stabilization: toolbar, stale-banner
+flapping, tf-switch tiny-zoom, viewport ownership). Further back:
+**V2 rewrite,
+post-V2-4.** The original 8-phase v1 roadmap (foundation
 through hardening) is complete and stable. V2 layers a professional desktop
 trading-platform experience on top: watchlist management, a full manual
 paper-trading order book, AI Mode vs. Human Mode with a deterministic trade
@@ -41,7 +204,41 @@ V2-6 (journal/improvement dashboard) are not started.
 | Performance & polish pass | Scan cycle 14.9s → ~0.1s warm, non-blocking scans, brokerage-style UI redesign | Committed, stable |
 | V2-4 — Chart workspace | Vendored lightweight-charts, `/api/candles`, five-timeframe chart with indicator overlays/subpanes, drawing tools (level/trend/fib/zone/note), position/order trade lines, trade-from-chart | Committed, live-verified |
 | Documentation & AI framework | `PROJECT_STATUS.md`/`ROADMAP.md`/`ARCHITECTURE.md` (with diagrams)/`AI_CONTEXT.md`/`NEXT_SESSION.md`/`CONTRIBUTING.md` | Committed |
-| Developer scripts & automation | `dev`/`test`/`verify`/`docs`/`build`/`release`/`clean` `.ps1` entry points, `check_html_ids.py`, `check_docs.py`, `browser_check.py`, `bump_version.py` | Not yet committed (see "Exact stopping point" in `PROJECT_STATE.md`) |
+| Developer scripts & automation | `dev`/`test`/`verify`/`docs`/`build`/`release`/`clean` `.ps1` entry points, `check_html_ids.py`, `check_docs.py`, `browser_check.py`, `chart_check.py`, `bump_version.py` | Committed (`7373c51`) |
+| V3-0 — Chart reliability | Root cause of blank charts fixed (empty-fetch cache poisoning, no stale fallback, uncaught frontend failures); never-blank canvas with loading/error/stale states, 30s zoom-preserving refresh | Committed on `v3-ui`, browser-verified |
+| V3-1 — Design system | Type/spacing/elevation tokens, inline-SVG icon nav, 56px responsive rail, flex/grid min-width blowout fix | Committed on `v3-ui` |
+| V3-2 — Dashboard redesign | 2:1 layout, AI-opportunities + watchlist-movers side rail, action-oriented empty states | Committed on `v3-ui`, live-verified with a real scan |
+| V3-3 — Trade screen | ATM quick-picks, risk-vs-buying-power line, on-tab positions with close-prefill, B/S/+/−/Enter order keys | Committed on `v3-ui`, browser-verified |
+| V3-4 — Settings redesign | Grouped searchable config cards replace the JSON dump; live-trading flags visibly locked | Committed on `v3-ui`, browser-verified |
+| V3-5 — Analytics presentation | Coach first-run explainer, journal filters + cumulative P&L curve, backtest drawdown/exit-reason panels, learning weight-shift bars | Committed on `v3-ui`, real backtest run |
+| V3-6 — Accessibility | Skip link, toast live region, `scope="col"` on all 51 headers, `aria-current`, `?` shortcut overlay | Committed on `v3-ui`, browser-verified |
+| V3-7 — Pre-merge audit fixes | `CandleCache` thread-safety (the disk cache silently never worked in the threaded live app), chart auto-retry for failed first loads, `?`-overlay order-key guard | Committed on `v3-ui`, each fix individually verified |
+| Packaging fix (2026-07-18) | Exe shipped without yfinance (lazy `importlib` import invisible to PyInstaller since `f1bae42`): `--collect-all yfinance`, new `selftest` CLI as a post-build bundle gate, `tests/test_packaging.py` dynamic-import guard | `61a2c60`, exe rebuilt + endpoints verified live |
+| V3.1-1 — Chart reliability | Per-ticker failures root-caused: drawings no longer drive the price scale (`autoscaleInfoProvider:null`), `validate_candles` drops NaN/inf/≤0 bars + zeroes bad volume + logs, indicator/serialization `isfinite` guards, renderer try/catch surfaces errors | `b93eac9`, reproduced + fixed in a headless browser |
+| V3.1-2 — Timeframes | 6 → 13 intervals (1m/2m/3m/5m/10m/15m/30m/1h/2h/4h/1d/1w/1mo), table-driven (`_TF_LABEL`/`_FETCH_SPEC`/`_WINDOW_DAYS`/`CANDLE_TTL`), completeness-enforced by a test | `0d2c870`, all 13 verified against the live provider |
+| V3.1-3 — Infinite history | Inverted prepend merge fixed (was replacing the window); logical-index trigger; viewport/zoom/drawings preserved; loading/end pill | `98551e1`, 206 → 407 bars on scroll-left verified |
+| V3.1-4 — Editable drawings | Overlay-canvas object model: select/drag/resize/color/width/lock/hide/duplicate/rename/delete, instant tool arming, v1→v2 migration | `917d0c9`, 16-check browser lifecycle green |
+| V3.1-5 — Trade-tab chart | The one chart instance relocated into a collapsible Trade slot (symbol/tf/drawings/indicators shared), preference remembered | `edfe2bc`, 10-check browser sync green |
+| V3.1-6 — Live updates + perf | `chSig` includes last-bar OHLCV (forming candle no longer freezes); `series.update()` fast path for trailing bars (no flicker, no reflow) | `5e04506`, simulated intrabar tick, zero view jump |
+| V3.1-7 — Chart test suite | `scripts/chart_check.py` 19-check headless-browser regression suite wired into `verify.ps1`; 10 tickers × 13 timeframes = 130/130 | `2bcb84a`, 19/19 green |
+| V3.1 RC1 — Stabilization polish | Dead-code removal, `safeParse` localStorage-corruption guard, refresh-mid-interaction + wake refreshes, bounded LRU payload cache, WS frame-parse guard + reconnect-contract test; +2 chart_check checks (21) | `3a56145`, 21/21 browser + 374-test suite green |
+| V3.1 RC2 — Final chart audit | Drawing-toolbar actions fixed (capture-phase deselect); market-aware stale banner (`market_open` in `/api/candles`); Reset-view / Go-to-latest + stranded-viewport recovery; single-owner viewport (one-way pane sync kills random jumps on indicator toggle); +6 chart_check checks (27) + 2 backend tests | `6f3643d`, 27/27 browser + 376-test suite green |
+| V3.1 RC3 — Final release blockers | Toolbar "still broken" root-caused to a STALE EXE (source fixed since RC2) → exe rebuilt; banner-flapping fixed (high-water mark: warn only when genuinely behind); timeframe-switch tiny-zoom fixed (single-owner viewport, fit on switch); stuck loading-overlay/skeleton-legend on rapid switch fixed; real-mouse toolbar test + anti-flap + tf-zoom checks (29) | `60f16a4`, 29/29 browser + 376-test suite green |
+| V3.2 — Drawing engine + Ray (PARTS 1/2/5) | Timeframe-INDEPENDENT drawing model (visibility policy, `createdTf`, `source`, `meta`; v1/v2→v3 migration so old drawings stop vanishing on a tf switch); one `chAddDrawing` API for user/AI/replay; TradingView-style **Ray** tool (two-click, infinite one-way extension) reusing the existing edit machinery | `62cbcb4`, browser-verified, chart_check 9b |
+| V3.2 — Extended Hours (PART 4) | yfinance `prepost` feasibility confirmed; `extended_hours` display-only flag threaded provider→cache→payload (trading path stays RTH-only); `data/sessions.py` classifier; per-bar session tags + pre/after-market shading + persisted "Ext" toggle (no-op on daily) | `409cfc0`, 31/31 browser + 388-test suite green |
+| V3.2.1 — Critical chart regression fixes | Drawings render on every tf (`chX` interpolates between bracketing integer bars — `logicalToCoordinate` rejects fractional); tf switch preserves the focal date (`chCaptureFocal`/`chApplyFocal`, clamp to closest candle); refresh no longer snaps the viewport (preserve LOGICAL range); root cause: `setData` triggered a mid-switch history load — guarded. Tests now assert rendered coordinates/viewport, not internal counts | 0.3.1, 33/33 browser + 388-test suite green |
+| V3.2.2 — Viewport ownership unification + Auto Follow | Single `chMoveViewport` controller for every programmatic move; history-arming race fixed (arm off the range-change subscription); deeper root cause found — the subscription fires on a later animation frame, so the guard-reset needed deferring, not just re-timing the arm; new Auto Follow toggle (OFF default, persisted, disabled by manual pan, re-enabled by Latest); `scrollToRealTime()`'s multi-frame animation replaced with a non-animated `chScrollToLatest()` | 0.3.2, 36/36 browser + 388-test suite green |
+| V3.3 — Chart stabilization & market validation | Live-verified during trading hours. Adaptive refresh cadence (~7s intraday, forming candle no longer updates in 30s chunks); America/New_York x-axis/crosshair/timer (labels formatted via Intl, timestamps unchanged); candle countdown timer; drawing creation preview (rubber-band); overlay rAF sync loop (drawings track vertical price-axis moves, no snap); **root cause** — periodic refresh merged (`chMergeRefresh`) instead of replacing, so paged-in history + viewport survive a refresh. yfinance limits documented (no streaming; forming bar V=0 until close). Candle correctness matches yfinance bar-for-bar | 0.3.3, 41/41 browser + 388-test suite green |
+| V3.3.1 — Chart reliability investigation | Root-caused the intermittent "blank until restart": **no fetch timeout** (backend throttle backlog / hung upstream left the first-paint spinner up forever) → bounded `AbortController` (timeout → recoverable error, not permanent spinner); **superseded fetches not aborted** (rapid-switch pile-up starved the wanted symbol) → abort-on-switch; backend `yfinance.history()` `REQUEST_TIMEOUT`; hung history left `historyLoading` stuck → timeout; uncaught "Value is null" on non-monotonic data → `chEnsureMonotonic` + guarded rAF loop; unbounded `_mem` → `MEM_CACHE_MAX`. No new features | 0.3.4, 44/44 browser + 388-test suite green |
+| V0.4.0 (phases 1–2) — AI Experience Engine | New `optionspilot/experience/` subsystem: rich, expandable, 100k-scalable `ExperienceStore` (`data/experience.db`, indexed columns + JSON payload + `user_version` migrations) recording a `TradeRecord` superset alongside the journal; deterministic `SimilarityEngine` (weighted distance → win rate / return / failure mode / **advisory** calibrated confidence). Calibration advisory-only (deterministic scorer unchanged); exploration deferred to a future orthogonal `learning_mode` axis. Backend-only; best-effort recording never touches the trading path | 0.4.0, 424-test suite green (+32) |
+| V0.4.1 (phase 3) — Experience Engine integration | Centralized `build_snapshot` captures the full AI decision context at entry (feature-symmetric with coached manual trades); advisory historical-similarity explanation on every tradeable signal; Experience API (`recent`/`similar_trades`/`statistics`/strategy·regime·session stats/failure·success patterns) over `GET /api/experience[/similar]`; storage schema v2 (indexed `market_regime` + SQL aggregates). Advisory only — nothing touches gate/risk/execution | 0.4.1, 454-test suite green (+30) |
+| V0.4.2 — architecture audit + refactors | Read-only audit (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`) → three behavior-preserving improvements: shared `core/sqlite.py` foundation (`connect` + `user_version` migrations) adopted by all five stores; `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`; executable layering-guard `test_architecture.py`. No behavior change | 0.4.2, 470-test suite green (+16) |
+| V0.4.3 — AI Coach 2.0 (phase 1) | Per-trade 10-category scorecard (`coach/categories.py`) + outcome snapshot on each review; mentor dashboard (`coach/analytics.py`): sub-scores, category trends, streaks, pattern detection w/ confidence, improvement timeline, ≤5 auto-expiring action items; `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades only, additive, backward-compatible | 0.4.3, 492-test suite green (+22) |
+| V0.4.4 — persistent storage & migration | `core/paths.py::AppPaths` (single source of truth; root at `%LOCALAPPDATA%\OptionsPilot`, `OPTIONSPILOT_HOME` override) + `core/migration.py::initialize_storage` (one-time lossless legacy import: timestamps preserved, verified, never overwrites newer/deletes source; marker; backups; empty versioned framework). Bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior change | 0.4.4, 520-test suite green (+28) |
+| V0.4.5 — Professional Release Pipeline 1.0 | GitHub Actions `ci.yml` (push/PR: tests + selftest + checks, pip-cached, reusable) + `release.yml` (tag `v*`: reuse CI → tag/version guard → build → package `OptionsPilot-vX.Y.Z.zip` → GitHub Release). Single-source version (`__version__` via pyproject `dynamic`/`attr`). `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`; unwired Inno Setup installer template. No behavior change | 0.4.5, 527-test suite green (+7) |
+| V0.4.6 — Professional Windows Installer 1.0 | Completed `installer/OptionsPilot.iss` (Inno Setup): installs to `C:\Program Files\OptionsPilot` (admin), stable AppId for in-place upgrades, Start Menu (app + Uninstall) + optional desktop shortcut, app icon everywhere, Programs-and-Features registration, uninstall-time "remove my data?" prompt (default No). `scripts/build_installer.ps1` + `release.yml` now build/upload `OptionsPilot-Setup-vX.Y.Z.exe` alongside the zip. No behavior change | 0.4.6, 546-test suite green (+19) |
+| V0.5.2 — Market data & chart reliability | Chart history replaced, not patched. New under `optionspilot/data/`: `capabilities` (per-interval depth **measured from now** — the primary root cause was the old clamp measuring from the request's *end*), `adapter` (`HistoryAdapter`; adapters raise typed errors instead of returning empty frames), `yahoo_provider` (v8 chart JSON over urllib, now primary — it reports *why* it refused), `yfinance_adapter`, `stooq_provider`, `legacy`, `registry` (ordering, pre-network eligibility, circuit breakers + half-open recovery), `service` (`MarketDataService` tier ladder; distinguishes `exhausted`/`empty`/`stale`/`failed`), `quality` (semantic validation + report), `diagnostics` + `/api/diagnostics/marketdata`. `cache.py` rebuilt as durable storage (atomic, integrity-checked, corruption-quarantining, versioned, provider-attributed). Frontend: explicit load state machine + honest "start of available history". Also fixed: a history-paging request poisoning the live memo (QQQ 1d returned ONE candle), a corrupt cache.db crashing startup, and a history prepend restoring a mid-drag viewport. No trading-behavior change | 0.5.1, 880-test suite green (+229); chart_check 44 → 49 and green end to end |
+| V0.5.0 — Auto-Updater 1.0 | New self-contained `optionspilot/update/` subpackage (core+stdlib only; `urllib`, no new dep): SemVer ordering, GitHub Releases client (installer asset only), checker (channel/frequency, never raises), streamed downloader (progress/cancel, atomic finalize), validation (size/hash/Authenticode-ready), installer launcher (mandatory `pre-update` backup → `/VERYSILENT` install → restart), `UpdateService` state machine. `/api/update/*` endpoints; launch-time background check gated on `run_loop`; prefs in `RuntimeSettings` (`updates` key). Frontend: Settings ▸ Software updates, Help ▸ Check for Updates…, update dialog. Verified offline via fakes | 0.5.0, 651-test suite green (+105) |
 
 ## Features complete
 
@@ -53,7 +250,7 @@ V2-6 (journal/improvement dashboard) are not started.
 - Desktop app: FastAPI + pywebview + PyInstaller, single-file frontend
 - Full manual paper-trading order book (market/limit/stop/take-profit/trailing, DAY/GTC)
 - AI Mode / Human Mode toggle, deterministic post-trade coaching with a 14-tag mistake taxonomy
-- Interactive chart workspace: candles/volume, indicator overlays, drawing tools (5 types), position/order trade lines
+- Interactive chart workspace: candles/volume, indicator overlays, drawing tools (5 types), alias-safe cached revisits, automatic left-edge history backfill, position/order trade lines
 - Watchlist manager with a bundled 12k-symbol offline directory
 - TradingView inbound webhook (scan-trigger only, never places an order)
 
@@ -64,7 +261,9 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known limitations (deliberate, documented — not bugs)
 
-- yfinance data is ~15-minute delayed with limited intraday history (~60 days of 5m bars); paid-feed adapters are the documented upgrade path.
+- Free market data is delayed (up to ~15 min for some symbols; liquid ETFs/large-caps measure ~1 min behind) and **intraday history is genuinely shallow**: ~7 days of 1m, ~59 days of 5m/15m/30m, ~729 days of 1h, unlimited daily. Since V0.5.2 these are *measured* limits declared in `data/capabilities.py`, the chart states them plainly when a scroll-back reaches one, and an out-of-depth request costs zero upstream calls (`scripts/marketdata_probe.py` re-measures them). Deeper intraday history requires a paid feed — see `docs/MARKET_DATA.md` §4.
+- **`yfinance` serializes all requests through one process-wide throttle** (0.15s min interval, single lock), which under concurrent load pushed fetch latency to 10–15s+. V0.5.2 demoted it to the *secondary* provider behind a direct `urllib` call to Yahoo's chart JSON, which has no such global lock: 24 concurrent live chart loads now complete in **~0.5s with zero blanks**. The throttle still applies whenever the yfinance fallback is actually used, and to option chains/quotes, which still go through it.
+- **yfinance is poll-only (no streaming/websocket feed)** and returns the *current forming bar* as a flat placeholder with `volume=0` until it completes. So the chart cannot build the forming candle tick-by-tick like TradingView — it advances as fast as we poll (~7s intraday, V3.3), and the just-forming bar shows no intrabar volume/range until it closes. Completed bars match yfinance to the cent/share. A true real-time forming bar requires a **streaming provider**; the smallest change to support one is a new `MarketDataProvider` adapter that pushes bar updates over the existing `/api/candles` WebSocket path (the frontend already applies trailing-bar updates via `chTailUpdate`), so no chart rewrite is needed. See `docs/AI_HANDOFF.md`.
 - No historical option-chain data exists for free; the backtester reconstructs option prices via Black-Scholes.
 - Manual/working orders evaluate once per scan cycle against fresh quotes — no intrabar/tick simulation.
 - The coach infers behavioral tags (revenge trading, chased entry) from observable timing patterns, not literal intent.
@@ -72,7 +271,35 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. Fixed in-session (2026-07-17, automation session): the
+None open. **Fixed in V0.5.2** (each reproduced from evidence before any code
+changed, each now covered by a regression test that fails without its fix):
+(1) intraday history depth was measured from the *request's end* instead of from
+*now*, so every scroll-back into older intraday data 422'd upstream, returned an
+empty frame, and was retried on every subsequent scroll — forever;
+(2) a history-paging request shared the live-window memo key and overwrote it, so
+a subsequent live load rendered the sliced overlap — observed as **QQQ 1d showing
+a single candle from nine months earlier**, `outcome: memo`, with no error
+anywhere; (3) the shipped depth caps for 5m/15m/30m/1h were each one day *past*
+Yahoo's real cliff, so a boundary request looked like an outage; (4) a corrupt
+`cache.db` crashed the app during `Orchestrator` construction, and leaked its
+Windows file handle so the file could not even be quarantined; (5) a history
+prepend restored a viewport captured mid-drag, yanking on-screen bars.
+
+Previously fixed in-session (2026-07-18, packaging-fix session): the
+packaged exe shipped without yfinance — every chart/quote/chain request
+failed with "No module named 'yfinance'". The performance pass (`f1bae42`)
+had made the yfinance import lazy via `importlib.import_module`, which
+PyInstaller's static analysis cannot see, so every exe built since then
+silently omitted it. Fixed with `--collect-all yfinance` in
+`scripts/build_exe.ps1`, a `selftest` CLI command the build now runs
+against the fresh exe (fails the build on an incomplete bundle), and
+`tests/test_packaging.py` (fails the suite if any dynamic third-party
+import isn't collected by the build script). One pre-existing limitation
+noted while verifying: `OptionsPilot.exe serve` (the windowed exe running
+the browser-serve subcommand) never binds its port — desktop `ui` mode
+and dev-repo `serve` both work; tracked in `TODO.md`.
+
+Fixed earlier (2026-07-17, automation session): the
 `/favicon.ico` 404 (the one remaining browser console error from the prior
 session), found immediately by the new `scripts/browser_check.py`'s first
 real run. Fixed the same session before it: a halted paper account could
@@ -81,28 +308,44 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. **Commit this session's automation work** (`scripts/*`, `pyproject.toml`
-   extras, `docs/QUICK_START.md`, `docs/RELEASE_CHECKLIST.md`, the favicon
-   fix, and doc updates) — currently uncommitted working-tree changes.
-2. Scope decision for what's next: V2-5 (replay engine), V2-6 (journal/improvement dashboard), the deferred V2-4 workspace layout, or pausing feature work to accumulate paper-trading data — this is the user's call, not a technical blocker.
-3. Exe rebuild + smoke test — deliberately deferred until feature-complete (user's stated preference), not urgent.
-4. Hygiene backlog: see `TODO.md` (currently: deep per-flow browser regression tests, CI, linting — all recommended, none installed).
+1. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
+   are committed there and verified; merging to `main` is the user's call.
+2. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
+   with persistence (H5), chart↔chain cross-links (N2), toast stacking
+   (N4) — plus everything under "Long-term ideas."
+3. Then the standing scope decision: V2-5 (replay engine), V2-6
+   (journal/improvement dashboard), the deferred V2-4 workspace layout,
+   or pausing feature work to accumulate paper-trading data.
+4. Exe rebuild + smoke test — deferred until the V3 branch is approved.
+5. Hygiene backlog: see `TODO.md` (deep per-flow browser regression
+   tests, CI, linting — all recommended, none installed).
 
 ## Next milestone
 
-Whichever of V2-5 / V2-6 / workspace-layout the user selects. See `ROADMAP.md` for scope detail on each, `NEXT_SESSION.md` for the immediate handoff.
+**Authenticode code signing** (of the setup + app exe, plus signature
+verification in `update/validation.py`) is the natural follow-up to the
+auto-updater — it removes SmartScreen warnings and closes the updater's last
+security gap. After that: whichever of V2-5 / V2-6 / workspace-layout the user
+selects. See `ROADMAP.md` for scope detail, `NEXT_SESSION.md` for the immediate
+handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**345 tests, 100% passing** (`.\scripts\test.ps1`, ~13s). Frontend coverage
+**1052 tests, 100% passing** (`.\scripts\test.ps1`, ~45s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
-check) and `scripts/browser_check.py` (headless browser, every tab, zero
-console errors) both run automatically via `scripts/verify.ps1` — neither
-is deep per-flow regression coverage (see `TODO.md`).
+check), `scripts/browser_check.py` (headless browser, every tab, zero
+console errors), and `scripts/chart_check.py` (chart alias, drawing, and
+history regressions) all run automatically via `scripts/verify.ps1` — the
+browser checks are still focused regressions, not exhaustive UI coverage
+(see `TODO.md`).
 
 ## Last verified date
 
-**2026-07-17** — `.\scripts\verify.ps1` end to end: full pytest run
-(345/345), static `$("id")` reference check, documentation consistency
-check, `pip check`, and a headless-browser smoke check across all 9 tabs
-(Playwright + system Edge) with zero console errors.
+**2026-07-22** (V3.3.1 chart reliability investigation) —
+`.\scripts\verify.ps1` end to end: full pytest run (392/392), static
+`$("id")` reference check, documentation consistency check, `pip check`, a
+headless-browser smoke check across all 9 tabs (Playwright + system Edge)
+with zero console errors, and the 44-check chart regression suite
+(`chart_check.py`) — plus a 250-symbol-switch stress run (0 blanks / 0 console
+errors), fault-injection recovery (7/7: empty / malformed / flapping), a
+bounded-fetch timeout→recover check, and a memory-plateau profile.

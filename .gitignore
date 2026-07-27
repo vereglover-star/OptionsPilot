@@ -11,3 +11,6 @@ config.local.yaml
 .pytest_cache/
 
 .Rhistory
+
+# Inno Setup installer build output
+/installer/Output/

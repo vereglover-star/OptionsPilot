@@ -39,7 +39,7 @@ def _acquire_single_instance() -> socket.socket | None:
         return None
 
 
-def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI entry point
+def launch(config: AppConfig, runtime=None, data_dir=None) -> None:  # pragma: no cover - GUI entry point
     import uvicorn
     import webview
 
@@ -60,11 +60,25 @@ def launch(config: AppConfig, runtime=None) -> None:  # pragma: no cover - GUI e
         return
 
     port = _free_port()
-    app = create_app(config, run_loop=True, runtime=runtime)
+    app = create_app(config, run_loop=True, runtime=runtime, data_dir=data_dir)
     server = uvicorn.Server(uvicorn.Config(
         app, host="127.0.0.1", port=port, log_level="warning"
     ))
     threading.Thread(target=server.run, daemon=True, name="uvicorn").start()
+
+    # When the updater launches the installer, gracefully close the window and
+    # release the single-instance lock so the installer can replace the exe and
+    # (via /RESTARTAPPLICATIONS) relaunch it cleanly.
+    def _on_install_launched() -> None:
+        import webview as _wv
+        server.should_exit = True
+        try:
+            for w in list(_wv.windows):
+                w.destroy()
+        except Exception:  # noqa: BLE001 - best-effort shutdown
+            pass
+
+    app.state.server.updater.set_install_hook(_on_install_launched)
 
     url = f"http://127.0.0.1:{port}"
     for _ in range(100):  # wait for the server to come up

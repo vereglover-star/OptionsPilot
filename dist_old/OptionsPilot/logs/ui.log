@@ -1,0 +1,13 @@
+2026-07-26T00:17:49.010Z INFO     optionspilot.ui | cycle loop started (scan every 60s while market open)
+2026-07-26T00:17:49.597Z INFO     optionspilot.ui | desktop shell starting at http://127.0.0.1:65234
+2026-07-26T01:00:58.347Z INFO     optionspilot.ui | cycle loop started (scan every 60s while market open)
+2026-07-26T01:00:58.930Z INFO     optionspilot.ui | desktop shell starting at http://127.0.0.1:54761
+2026-07-26T01:19:09.714Z INFO     optionspilot.ui | cycle loop started (scan every 60s while market open)
+2026-07-26T01:19:10.333Z INFO     optionspilot.ui | desktop shell starting at http://127.0.0.1:59072
+2026-07-26T01:19:28.585Z INFO     optionspilot.ui | watchlist add: +['AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'AVGO', 'JPM', 'LLY', 'V'] (invalid: [], dupes: [])
+2026-07-26T01:19:39.591Z INFO     optionspilot.ui | trading mode switched to high_risk
+2026-07-26T01:19:42.417Z INFO     optionspilot.ui | trading mode switched to custom
+2026-07-26T01:20:02.973Z INFO     optionspilot.ui | [large_move] MSFT: large move down — 5m bar range 1.50 (2.3x ATR) on 6.9x volume
+2026-07-26T01:20:03.111Z INFO     optionspilot.ui | [large_move] GOOGL: large move down — 5m bar range 1.42 (2.3x ATR) on 6.7x volume
+2026-07-26T01:20:03.121Z INFO     optionspilot.ui | [large_move] JPM: large move up — 5m bar range 0.86 (2.1x ATR) on 7.5x volume
+2026-07-26T01:20:03.126Z INFO     optionspilot.ui | [large_move] V: large move up — 5m bar range 1.03 (2.1x ATR) on 6.2x volume

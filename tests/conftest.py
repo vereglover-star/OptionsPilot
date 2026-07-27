@@ -1,6 +1,25 @@
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
+
+from optionspilot.core.paths import ENV_HOME
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_storage_root(tmp_path_factory):
+    """Point AppPaths at a throwaway root for the entire test session so nothing
+    ever reads or writes the developer's real %LOCALAPPDATA%\\OptionsPilot — even
+    a test that constructs a default (unrooted) AppPaths/Orchestrator/UIServer."""
+    root = tmp_path_factory.mktemp("optionspilot_home")
+    prev = os.environ.get(ENV_HOME)
+    os.environ[ENV_HOME] = str(root)
+    yield
+    if prev is None:
+        os.environ.pop(ENV_HOME, None)
+    else:
+        os.environ[ENV_HOME] = prev
 
 
 def make_candles(closes, start="2026-01-05 14:30", freq="5min", volume=None) -> pd.DataFrame:

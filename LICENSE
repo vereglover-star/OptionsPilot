@@ -1,0 +1,23 @@
+OptionsPilot — LICENSE
+
+Copyright (c) 2026 the OptionsPilot authors. All rights reserved.
+
+-------------------------------------------------------------------------------
+PLACEHOLDER — REVIEW BEFORE PUBLISHING A RELEASE
+-------------------------------------------------------------------------------
+This is a default "all rights reserved" notice added so the release pipeline has
+a LICENSE file to bundle. It grants no rights and is NOT a considered license
+choice. Before publishing OptionsPilot publicly, replace this file with the
+license you actually intend (e.g. MIT, Apache-2.0, BSD-3-Clause, a commercial
+EULA, or a deliberate proprietary "all rights reserved"). The release packaging
+(scripts/package_release.ps1) bundles whatever this file contains verbatim.
+
+Note also that the app vendors a third-party charting library under Apache-2.0
+(optionspilot/ui/static/lightweight-charts.js) whose own license terms continue
+to apply regardless of the license chosen for OptionsPilot itself.
+-------------------------------------------------------------------------------
+
+Until replaced: this software is provided as-is, without warranty of any kind,
+for personal, non-commercial evaluation only. No permission is granted to copy,
+distribute, or create derivative works. It is a paper-trading tool and places no
+real orders; it is not financial advice.

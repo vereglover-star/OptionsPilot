@@ -9,6 +9,35 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.5.3 — Market data production readiness (2026-07-26, uncommitted)
+
+V0.5.2 built the subsystem; this made it **operable**, as infrastructure work
+rather than a feature. Provider health gained a single owner
+(`data/health.py`), the provider chain is ordered by measured health instead of
+a hard-coded constant (a cold system reproduces the old order exactly), and
+**Help ▸ Diagnostics** answers "why did that chart look like that?" from one
+page — with JSON/text export and per-request replay across every provider.
+Every operational knob moved into `config.yaml`'s `market_data:` section, so
+adding or retuning a provider needs no code change; the consolidation also
+surfaced and fixed two real accounting bugs (a provider serving unusable bars
+was recorded as *succeeding*, and a demoted success could never build a failure
+streak). Also: cache intelligence, structured request logging, advisory
+capability discovery, and a provider benchmark. **No new provider by design** —
+the point was to make adding one cheap. 880 → 1052 tests; stress 41 → 65;
+`chart_check` 49 → 52. Design: `docs/MARKET_DATA.md` §13–22.
+
+### V0.5.2 — Market data & chart reliability (2026-07-26, uncommitted)
+
+Chart history — the last inconsistent subsystem — replaced rather than patched.
+A capability-driven, multi-provider architecture (Yahoo chart JSON → yfinance →
+Stooq) with typed failures, circuit breakers, semantic validation, durable
+self-healing storage, and per-request diagnostics. The four conditions that used
+to arrive as one empty array (`exhausted` / `empty` / `stale` / `failed`) are now
+distinguished end to end, which is what lets the chart say "start of available
+history" instead of retrying an impossible window forever. 651 → 880 tests.
+Design: `docs/MARKET_DATA.md`. Manual QA: `docs/QA_MARKET_DATA.md`.
+
+
 ### v1 — Original 8-phase build (2026-07-11, commit `40eb1ea`)
 
 Foundation, analysis suite, AI decision engine, risk manager + paper
@@ -64,14 +93,29 @@ symbol+timeframe in localStorage), position/order price lines on the
 chart, and trade-from-chart deep links. **The three-panel workspace layout
 and multi-chart layouts are explicitly deferred** — see "Deferred" below.
 
+### V3 product-quality sprint, milestones 0–6 (2026-07-17, branch `v3-ui`)
+
+A UX/reliability sprint, not a feature sprint — scoped by the full audit in
+`ROADMAP-V3-UX.md`. Chart reliability root-caused and fixed (never-blank
+canvas, stale-data fallback for display only, alias-safe symbol resolution,
+cached payload reuse for instant revisits, automatic left-edge history
+backfill, 30s zoom-preserving refresh), a design-token system + responsive
+icon-rail nav, and redesigns of Dashboard, Trade (ATM quick-picks, risk
+context, order-entry keys), Settings (structured cards replace the JSON
+dump), the four analytics tabs, and an accessibility pass. Seven commits,
+each browser-verified.
+**On `v3-ui`, awaiting user review — not merged to `main`.**
+
 ---
 
 ## In Progress
 
-Nothing is actively in progress between sessions — each V2 phase has
-shipped as a complete, tested, documented unit before the next began (the
-project's stated discipline; see `CLAUDE.md`). The next phase to pick up is
-an open scope decision — see "Planned."
+**The `v3-ui` branch is awaiting the user's review/merge decision.**
+Remaining audit items deliberately not built (see `ROADMAP-V3-UX.md`):
+notification center with persistence (H5), chart↔chain cross-links (N2),
+toast stacking (N4), and everything under "Long-term ideas." Beyond that,
+nothing is actively in progress — each phase ships as a complete, tested,
+documented unit before the next begins (see `CLAUDE.md`).
 
 ---
 

@@ -5,10 +5,155 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [x] **V2-4 drawing/overlay remainder** — done 2026-07-16: fib
-      retracement / zone rectangle / bar-note drawing tools, and
-      position/order lines drawn on the chart (entry/stop/target +
-      working-order trigger levels).
+- [ ] **Authenticode code signing + checksums** — the remaining security gap:
+      sign the setup + app exe in `release.yml` (removes SmartScreen warnings),
+      add signature verification to `update/validation.py` (designed as a drop-in
+      check), publish a SHA-256 checksums asset the validator enforces, replace
+      the placeholder `LICENSE`, and run one manual end-to-end update QA on real
+      Windows (`docs/AUTO_UPDATER.md` §7).
+
+- [x] **V0.5.3 Market-data production readiness** — done 2026-07-26. Made the
+      V0.5.2 subsystem *operable*: `data/health.py` (`ProviderHealthMonitor` —
+      one owner for counters, latency/p95, breaker, per-day totals and the
+      ranking score, replacing the split between `adapter.ProviderHealth` and
+      `registry._Breaker`), health-ranked provider ordering (cold ranks equal
+      priority, so the shipped order is unchanged; `dynamic_ranking: false`
+      pins it), **Help ▸ Diagnostics** with JSON/text export and per-request
+      replay, `data/config.py` + `market_data:` in `config.yaml` (every
+      operational knob, no code edit), cache intelligence, structured
+      `key=value` request logging, `data/discovery.py` (advisory capability
+      discovery, off by default) and `scripts/marketdata_benchmark.py`.
+      Fixed two real accounting bugs found by the consolidation: a provider
+      serving consistently-unusable bars was recorded as *succeeding* and never
+      tripped its breaker, and a demoted success could never build a failure
+      streak past 1. +172 tests (1052); stress 41 → 65 scenarios; `chart_check`
+      49 → 52 (three new checks drive the dashboard and a replay in a real
+      browser). No new provider, no version bump, no trading-behavior change.
+      Full design: `docs/MARKET_DATA.md` §13–22.
+
+- [x] **V0.5.2 Market-data subsystem** — done 2026-07-26. Replaced the chart
+      history stack with a capability-driven, multi-provider architecture inside
+      `optionspilot/data/`: `capabilities` (measured per-interval depth, from
+      *now*), `adapter` (`HistoryAdapter`; adapters raise typed errors instead of
+      returning empty frames), three adapters (Yahoo chart JSON / yfinance /
+      Stooq) + `LegacyProviderAdapter`, `registry` (ordering, pre-network
+      eligibility, circuit breakers with half-open recovery), `service`
+      (`MarketDataService`'s tier ladder, and the one place `exhausted` /
+      `empty` / `stale` / `failed` are told apart), `quality` (semantic
+      validation with a report), `diagnostics` + `/api/diagnostics/marketdata`,
+      and a rebuilt `cache` (atomic, integrity-checked, self-healing, versioned,
+      provider-attributed). Frontend gained an explicit load state machine and
+      an honest "start of available history". +229 tests (870);
+      `scripts/marketdata_stress.py` (41 offline scenarios, wired into
+      `verify.ps1`) and `scripts/marketdata_probe.py` (re-measures provider
+      limits) are new; `chart_check.py` 44 → 49 and now green end to end.
+      Full design: `docs/MARKET_DATA.md`. **Manual QA not yet run:**
+      `docs/QA_MARKET_DATA.md` (84 checks).
+
+- [ ] **Optional: a second non-Yahoo intraday provider** — Tiingo or Twelve
+      Data behind a free API key would make an entire Yahoo outage survivable at
+      intraday resolution (Stooq only covers daily+). The chain is already built
+      for it: one adapter file plus one `default_registry()` entry, and since
+      V0.5.3 the whole operational half (dashboard row, breaker, config section,
+      replay, benchmark, ranking) comes for free. See `docs/MARKET_DATA.md` §4
+      for the survey, §21 for the step-by-step checklist.
+
+- [ ] **Optional: act on cross-provider disagreement.**
+      `quality.disagreement()` measures it, diagnostics record it, and
+      `compare_providers` surfaces it per request — but nothing acts on it,
+      deliberately: deciding which source is "right" is not something the data
+      layer can know. Worth revisiting only with a third independent intraday
+      source, where a majority vote would actually mean something.
+
+- [x] **V0.5.0 Auto-Updater 1.0** — done 2026-07-26. Self-contained
+      `optionspilot/update/` subpackage (core + stdlib only, `urllib`, no new
+      dep): SemVer ordering, GitHub Releases client (installer asset only),
+      never-raising checker (stable/beta channel, launch/daily/weekly frequency),
+      streamed downloader (progress/cancel, atomic finalize), validation
+      (size/hash, Authenticode-ready), installer launcher (mandatory `pre-update`
+      backup → `/VERYSILENT` → restart), `UpdateService` state machine.
+      `/api/update/*`; launch check gated on `run_loop`; prefs in
+      `RuntimeSettings`. Frontend: Settings ▸ Software updates, Help ▸ Check for
+      Updates…, update dialog. +105 tests (651), all offline via fakes. Full
+      design: `docs/AUTO_UPDATER.md`. **Deferred within scope:** delta updates,
+      private update servers, enterprise policies (§8).
+
+- [x] **V0.4.6 Professional Windows Installer 1.0** — done 2026-07-26. Completed
+      `installer/OptionsPilot.iss` (Inno Setup: C:\Program Files install, stable
+      AppId in-place upgrades, Start Menu + optional desktop shortcut, app icon,
+      Programs-and-Features registration, uninstall-time data prompt default No);
+      `scripts/build_installer.ps1`; `release.yml` builds + uploads the setup exe
+      alongside the zip. +19 tests (546). Full design: `docs/INSTALLER.md`.
+      **Next:** Authenticode code signing (SmartScreen); then auto-updater;
+      manual installer QA on real Windows; replace placeholder `LICENSE`.
+
+- [x] **V0.4.5 Professional Release Pipeline 1.0** — done 2026-07-23. GitHub
+      Actions `ci.yml` (push/PR, reusable) + `release.yml` (tag `v*`: build +
+      package + GitHub Release); single-source `__version__` (pyproject dynamic);
+      `scripts/package_release.ps1` + `release_notes.py`; placeholder `LICENSE`;
+      unwired Inno Setup installer template. No behavior change; +7 tests (527).
+      Full design: `docs/RELEASE.md`. **Next:** wire the installer into
+      `release.yml`; replace the placeholder `LICENSE` before a public release.
+
+- [x] **V0.4.4 persistent storage & automatic data migration** — done
+      2026-07-23. `core/paths.py::AppPaths` (single source of truth, root at
+      `%LOCALAPPDATA%\OptionsPilot`) + `core/migration.py::initialize_storage`
+      (one-time lossless legacy import, backups, empty versioned framework);
+      bootstrap/Orchestrator/UIServer/selftest wired through it. No behavior
+      change; +28 tests (520). Full design: `docs/STORAGE.md`. **Next infra:**
+      automatic updater (replace install dir only; back up before applying).
+
+- [x] **V0.4.3 AI Coach 2.0 (phase 1)** — done 2026-07-23. Per-trade 10-category
+      scorecard (`coach/categories.py`) + outcome snapshot; mentor dashboard
+      (`coach/analytics.py`: sub-scores, category trends, streaks, confidence-
+      scored pattern detection, improvement timeline, ≤5 auto-expiring action
+      items); `GET /api/coach → dashboard` (cached) + coach-tab UI. Manual trades
+      only, additive, backward-compatible. +22 tests (492). Coach 2.1 ideas
+      (persist dashboard history, AI-trade coaching, overtrading detection) left
+      for a future phase.
+
+- [x] **V0.4.2 architecture audit + three refactors** — done 2026-07-23
+      (`docs/ARCHITECTURE-AUDIT-V0.4.2.md`): shared `core/sqlite.py` foundation
+      (`connect` + `user_version` migrations) adopted by all five stores;
+      `ui/server.py` import cleanup + public `orchestrator.WINDOW_DAYS`;
+      executable layering-guard `test_architecture.py`. Behavior-preserving,
+      +16 tests (470). Optional follow-ups (orchestrator split, `core→config`
+      de-inversion, journal SQL stats) left per the report's judgment-over-churn
+      guidance.
+
+- [x] **V0.4.0 Experience Engine — phases 1–2** — done 2026-07-23:
+      `optionspilot/experience/` (rich 100k-scalable `ExperienceStore` +
+      migrations, deterministic `SimilarityEngine`, advisory calibration),
+      recorded alongside the journal, best-effort. +32 tests (424 total).
+      See `docs/ROADMAP-V0.4-EXPERIENCE.md`.
+- [x] **V0.4.1 — Phase 3: Experience Engine integration** — done 2026-07-23:
+      centralized `build_snapshot` (feature symmetry), advisory
+      historical-similarity explanation on tradeable signals, Experience API
+      (`/api/experience[/similar]`), storage schema v2 (`market_regime` + SQL
+      aggregates). +30 tests (454 total). Advisory only — nothing touches
+      gate/risk/execution.
+- [ ] **V0.4.0 — Phase 4: `learning_mode` axis + Exploration mode.** New
+      orthogonal axis (normal/exploration); tagged, strictly risk-limited
+      lower-confidence paper trades. `ExperienceRecord.exploration` already exists.
+- [ ] **V0.4.0 — Phase 5: AI Performance dashboard.** New tab over
+      `ExperienceEngine.stats()` + slices; backend endpoint first, then
+      single-file frontend (manually browser-verify — no automated UI coverage).
+- [ ] **V0.4.0 — Phase 6: strategy-discovery infrastructure.** Group experiences
+      by shared characteristics for later pattern mining. Infra only.
+- [ ] **Populate MFE/MAE + `risk_multiple`** once intrabar tracking / stop-premium
+      capture exists (fields already modelled; see roadmap doc §10).
+
+- [x] **V3.1 chart-stabilization sprint** — done 2026-07-18 (`61a2c60`…
+      `2bcb84a`): per-ticker reliability root-causes fixed, 13 timeframes,
+      infinite scroll-back, TradingView-style editable drawing objects,
+      collapsible synced Trade-tab chart, flicker-free live updates, and
+      a 19-check `chart_check.py` regression suite in `verify.ps1`.
+      Remaining chart-adjacent item: one market-hours pass to confirm the
+      live-update path against a real feed (verified with a simulated tick).
+- [x] **V2-4 drawing/overlay remainder** — done 2026-07-16, then rebuilt
+      2026-07-18 (V3.1-4) into an editable overlay-canvas object model:
+      fib / zone / note / trend / level, all selectable, draggable,
+      resizable, recolorable, lockable, hideable, and persisted.
 - [ ] **V2-4 layout remainder** (only if the user wants it): the full
       three-panel workspace layout (top bar / right sidebar / bottom
       panel) and multi-chart layouts — a large UI restructuring, left as
@@ -16,9 +161,29 @@ is. This file is the flat, actionable checklist version.
 
 ## Deferred by user decision
 
-- [ ] **Rebuild and smoke-test the exe** — the packaged app predates all
-      2026-07-16 UI/performance work. The user explicitly wants packaging
-      LAST, once feature-complete; don't prioritize it.
+- [x] **Downloaded release crashed on launch (V0.3.5)** — done 2026-07-22:
+      a GitHub-downloaded, Explorer-extracted release died with
+      "Failed to resolve Python.Runtime.Loader.Initialize" because .NET
+      Framework refuses to load Mark-of-the-Web-flagged managed assemblies
+      (pythonnet's Python.Runtime.dll). Reproduced end-to-end, fixed with
+      `optionspilot_app.py::unblock_bundle()` (self-unblock at startup),
+      +3 regression tests, verified against a MOTW-flagged release copy.
+
+- [x] **Rebuild and smoke-test the exe** — done 2026-07-18 as part of the
+      yfinance packaging fix: rebuilt with `--collect-all yfinance`,
+      packaged selftest gate PASS, then verified live from the packaged
+      desktop app (206 daily SPY candles, 624 SMCI 5m candles,
+      231-contract chain over HTTP against a scratch data dir).
+
+- [ ] **`OptionsPilot.exe serve` from the windowed exe never binds its
+      port** — discovered 2026-07-18 while verifying the packaging fix:
+      the process starts (broker/orchestrator threads spin up) but
+      uvicorn never listens, with no log output. Pre-existing, unrelated
+      to yfinance; desktop `ui` mode and dev-repo `python -m optionspilot
+      serve` both work, so nothing user-facing is broken. Diagnose the
+      windowed-stdio + `uvicorn.run` interaction if `exe serve` ever
+      needs to be a supported path (or document it as unsupported and
+      make it exit with a clear message).
 
 - [x] **Live-verify the V2-3 frontend in a real browser** — done 2026-07-16
       against a scratch data dir: toggle switch + persistence across reload,
@@ -55,7 +220,17 @@ is. This file is the flat, actionable checklist version.
       scripts) with those specific flows remains a real opportunity. Gotcha
       worth keeping if you do: lightweight-charts coalesces chart clicks
       faster than ~500ms apart as double-clicks — pace scripted two-point
-      drawing-tool clicks ≥700ms apart.
+      drawing-tool clicks ≥700ms apart. **Update 2026-07-17 (V3 session):**
+      per-flow Playwright scripts now exist and were used to verify every
+      V3 milestone (chart failure states/races, the full order-ticket flow,
+      settings search, a real backtest run, the `?` overlay) — but they
+      live in the session scratchpad, not the repo. Promoting them into
+      `scripts/` as committed regression checks is now the concrete version
+      of this item.
+- [ ] One market-hours manual pass over the Trade tab's *fill* path (fill →
+      stop-loss pre-arm → position row → close-prefill) — the V3 session
+      verified everything up to the risk gate's after-hours rejection, but
+      no real fill could occur with the market closed.
 - [ ] Consider a minimal CI workflow (`.github/workflows/tests.yml`
       running `scripts/verify.ps1` or just the pytest suite on push/PR) and
       `ruff` for linting/formatting — recommended but not installed; see

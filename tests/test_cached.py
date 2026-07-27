@@ -26,11 +26,20 @@ class CountingProvider(MarketDataProvider):
 
     def __init__(self):
         self.calls = {"candles": 0, "quote": 0, "expirations": 0, "chain": 0}
-        self.frame = _frame()
+        self.frame = None      # set to force one fixed frame for every request
+
+    def frame_for(self, timeframe):
+        """Bars must be spaced like the timeframe that was asked for: the
+        service validates the interval it receives, and a fixture that answered
+        every request with 5-minute bars would be rejected on a 4h request —
+        correctly, but for a reason unrelated to what these tests measure."""
+        if self.frame is not None:
+            return self.frame
+        return _frame(freq=f"{timeframe.minutes}min")
 
     def get_candles(self, symbol, timeframe, start, end):
         self.calls["candles"] += 1
-        return self.frame
+        return self.frame_for(timeframe)
 
     def get_quote(self, symbol):
         self.calls["quote"] += 1
@@ -186,3 +195,104 @@ class TestWriteThrough:
         second = CachedProvider(fresh_inner, db)
         _get(second)
         assert fresh_inner.calls["candles"] == 1   # disk was stale -> refetched
+
+
+class FailingProvider(CountingProvider):
+    """First `fail_for` candle fetches return empty (yfinance failure style),
+    then recover."""
+
+    def __init__(self, fail_for=1):
+        super().__init__()
+        self.fail_for = fail_for
+
+    def get_candles(self, symbol, timeframe, start, end):
+        self.calls["candles"] += 1
+        if self.calls["candles"] <= self.fail_for:
+            return pd.DataFrame()
+        return self.frame_for(timeframe)
+
+
+class TestEmptyFetchNotPoisoned:
+    """Root cause of blank charts (2026-07-17): a transient empty fetch was
+    memoized for the full TTL, so healthy retries kept getting the failure."""
+
+    def test_empty_result_expires_quickly_not_full_ttl(self, clock):
+        inner = FailingProvider(fail_for=1)
+        provider = CachedProvider(inner)
+        assert _get(provider).empty                    # upstream hiccup
+        clock["t"] += cached_mod.EMPTY_CANDLE_TTL + 1  # well inside M5's TTL
+        assert not _get(provider).empty                # recovered on retry
+        assert inner.calls["candles"] == 2
+
+    def test_empty_result_is_briefly_cached_to_avoid_hammering(self, clock):
+        inner = FailingProvider(fail_for=99)
+        provider = CachedProvider(inner)
+        _get(provider)
+        _get(provider)                                 # inside the short TTL
+        assert inner.calls["candles"] == 1
+
+    def test_good_data_still_cached_for_full_ttl(self, rig):
+        provider, inner, clock = rig
+        _get(provider)
+        clock["t"] += cached_mod.EMPTY_CANDLE_TTL + 1
+        _get(provider)                                 # still fresh, no refetch
+        assert inner.calls["candles"] == 1
+
+
+class TestStaleOkFallback:
+    """Charts-tab fallback: clearly-flagged stale disk data beats a blank
+    canvas. The strict get_candles path (the engine's) is unchanged."""
+
+    def _end(self):
+        return datetime.now(timezone.utc)
+
+    def test_live_data_reported_not_stale(self, tmp_path, clock):
+        provider = CachedProvider(CountingProvider(), tmp_path / "c.db")
+        df, stale = provider.get_candles_stale_ok(
+            "SPY", Timeframe.M5, self._end() - WINDOW, self._end())
+        assert not df.empty and stale is False
+
+    def test_dead_network_with_disk_history_serves_stale(self, tmp_path, clock):
+        db = tmp_path / "c.db"
+        old = CountingProvider()
+        old.frame = _frame(end=pd.Timestamp.now(tz="UTC") - pd.Timedelta("2D"))
+        CachedProvider(old, db).get_candles(          # seed the disk cache
+            "SPY", Timeframe.M5, self._end() - WINDOW, self._end())
+        dead = FailingProvider(fail_for=99)
+        provider = CachedProvider(dead, db)
+        df, stale = provider.get_candles_stale_ok(
+            "SPY", Timeframe.M5, self._end() - WINDOW, self._end())
+        assert not df.empty and stale is True
+        # and the STRICT path still fails closed for the same state
+        clock["t"] += cached_mod.EMPTY_CANDLE_TTL + 1
+        assert _get(provider).empty
+
+    def test_dead_network_no_disk_returns_empty_not_stale(self, clock):
+        provider = CachedProvider(FailingProvider(fail_for=99))
+        df, stale = provider.get_candles_stale_ok(
+            "SPY", Timeframe.M5, self._end() - WINDOW, self._end())
+        assert df.empty and stale is False
+
+
+class TestMemCacheBounded:
+    """V3.3.1: the in-memory memo must not grow without limit over a long
+    session that browses hundreds of distinct symbols (each entry can hold a
+    full candle DataFrame). Fails before the fix — `_mem` grew one entry per
+    distinct key forever."""
+
+    def _end(self):
+        return datetime.now(timezone.utc)
+
+    def test_mem_cache_evicts_oldest_beyond_cap(self, rig):
+        provider, inner, clock = rig
+        # request far more distinct symbols than the cap allows
+        for i in range(cached_mod.MEM_CACHE_MAX + 120):
+            provider.get_candles(f"SYM{i}", Timeframe.M5,
+                                 self._end() - WINDOW, self._end())
+        # candle frames are memoized by the service the provider delegates to
+        memo = provider.service._mem
+        assert len(memo) <= cached_mod.MEM_CACHE_MAX
+        # the most-recent symbol is still cached; the oldest was evicted
+        keys = list(memo)
+        assert any(k[0] == f"SYM{cached_mod.MEM_CACHE_MAX + 119}" for k in keys)
+        assert not any(k[0] == "SYM0" for k in keys)

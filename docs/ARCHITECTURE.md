@@ -49,7 +49,7 @@ optionspilot/
 │   ├── __main__.py                #   CLI: run/ui/serve/scan/status/journal/backtest/learn
 │   ├── orchestrator.py            #   the one event loop; composes every subsystem
 │   ├── config/                    #   settings.py (pydantic, startup) + runtime.py (live overlay)
-│   ├── core/                      #   domain models (dataclasses), logging setup
+│   ├── core/                      #   domain models (dataclasses), logging setup, sqlite foundation, storage (paths+migration)
 │   ├── data/                      #   MarketDataProvider ABC, yfinance adapter, caching, symbols
 │   ├── analysis/                  #   PURE FUNCTIONS: indicators, patterns, structure, SMC, options math
 │   ├── engine/                    #   MultiTimeframeAnalyzer → ConfluenceScorer → TradeGate → planner
@@ -58,9 +58,11 @@ optionspilot/
 │   ├── coach/                     #   TradeCoach (process-scored review) + CoachProfile (aggregation)
 │   ├── journal/                   #   SQLite trade record store
 │   ├── learning/                  #   evidence-weight tuning from journal history
+│   ├── experience/                #   AI long-term memory: rich trade store + similarity (V0.4.0)
 │   ├── backtest/                  #   event-driven replay through the SAME engine/risk/broker
 │   ├── notify/                    #   desktop toast + email notifications
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
+│   ├── update/                    #   self-updater: GitHub Releases → verify → backup → silent install (V0.5.0, core+stdlib only; docs/AUTO_UPDATER.md)
 │   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py)
 │   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
 │   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)
@@ -135,15 +137,80 @@ orchestrator exposes for exactly that purpose (see `register_manual_entry`,
 `approve_manual_entry`).
 
 ### 3.1 Data Engine (`optionspilot/data/`)
+
+Rebuilt in V0.5.2 into a multi-provider subsystem, and made operable in V0.5.3.
+**Full design, the measured provider limits, and the root causes it eliminates:
+`docs/MARKET_DATA.md`.** Summary of the layering (top to bottom):
+
+```
+MarketDataProvider (ABC)  ← everything above the data layer speaks only this
+      │
+CachedProvider            ← the ABC's face; quotes/chains memoized here
+      │ candles
+MarketDataService         ← the tier ladder + the four "no data" conditions
+      │
+ProviderRegistry          ← eligibility, breakers, health-RANKED ordering
+      │
+HistoryAdapter × N        ← Yahoo JSON (10) · yfinance (20) · Stooq (30)
+      │                       each owning one ProviderHealthMonitor
+      +  CandleCache · quality · diagnostics · capabilities
+      +  health · config · report · replay · discovery      (V0.5.3)
+```
+
+**V0.5.3 cross-cuts.** Each adapter owns a `ProviderHealthMonitor` — the single
+owner of its counters, latency, breaker and ranking score (previously split
+between the adapter and the registry, which is how a provider serving unusable
+bars could be recorded as *succeeding*). The registry orders by that rank rather
+than by a constant, though a cold system reproduces the static order exactly.
+`data/config.py` carries every operational knob; because `data/` may not import
+`config/`, the pydantic mirror lives in `config/settings.py` and is translated
+in `orchestrator.py` — the composition root that already imports both.
+
 - `MarketDataProvider` (abstract): `get_candles(symbol, timeframe, start, end)`,
-  `get_quote(symbol)`, `get_option_chain(symbol, expiration)`.
-- `YFinanceProvider`: free provider used in v1. Delayed/EOD-quality data — fine for
-  paper trading and backtesting. Rate-limited (0.15s between requests).
-- `CachedProvider`: the caching/deduplicating layer the orchestrator wraps around
-  the real provider — timeframe-aware candle TTLs, short quote/chain/expiration
-  memos, in-flight request dedup, SQLite write-through for warm restarts. This is
-  why a manual "Scan now" right after a cycle completes in ~0.1s.
-- `CandleCache`: SQLite-backed cache so backtests and repeated scans don't re-download.
+  `get_quote(symbol)`, `get_option_chain(symbol, expiration)`. Unchanged — the
+  engine, risk, broker and backtester see exactly what they always did.
+- `build_provider()` is the composition root; `Orchestrator` calls it and never
+  names a provider.
+- **Capability-first.** Every provider declares, per interval, how far back it
+  can actually serve — measured from *now*, which is how the upstream limit
+  really works. A request outside that costs zero network calls and comes back
+  flagged `exhausted`, which is what lets the chart say "start of available
+  history" instead of retrying an impossible window forever.
+- **Typed failures, so failover is a decision rather than a guess.** Adapters
+  raise (`ProviderRangeError` / `RateLimited` / `SymbolError` / `Unavailable`)
+  instead of returning empty frames; "no data", "can't reach data" and "this
+  data cannot exist" are no longer the same value.
+- **Circuit breakers.** A repeatedly-failing provider leaves rotation and
+  returns by itself after a growing cooldown, via a single half-open probe — so
+  one dead source cannot add its timeout to every chart load.
+- **Health-ranked ordering (V0.5.3).** Between "healthy" and "breaker open"
+  there is a wide band the breaker cannot express, and a provider in it used to
+  keep being asked first regardless. Ordering is now `priority + latency +
+  recent failure rate + quality`, scaled so one priority step equals one second
+  of latency — enough that a genuinely degraded primary yields, not so little
+  that ordering thrashes on noise. **Cold ranks equal priority**, so the shipped
+  chain starts in its documented order; `dynamic_ranking: false` pins it.
+- **Configurable without code changes (V0.5.3).** `config.yaml`'s
+  `market_data:` section owns per-provider enable/priority/timeout/retries/
+  breaker thresholds/quality floor plus cache and ranking policy, so retuning or
+  disabling a provider is not a source edit.
+- **Diagnosable without reproduction (V0.5.3).** Help ▸ Diagnostics renders the
+  health payload; the same payload exports as JSON or as a paste-safe text
+  report; and any recorded request can be replayed against every provider at
+  once to see who says what.
+- `CandleCache`: durable SQLite history — atomic writes, `PRAGMA quick_check` on
+  open, corruption quarantined to `cache.db.corrupt-<ts>` and rebuilt (a damaged
+  cache degrades to a *cold* cache, never a crash), versioned migrations,
+  provider attribution per bar. Thread-safe (single locked connection,
+  `check_same_thread=False`) because in serve/desktop mode every candle fetch
+  runs on a ThreadPoolExecutor worker or FastAPI threadpool thread — see
+  `CHANGELOG.md` V3-7 for the bug this fixed.
+- The strict `get_candles` path the engine uses **never serves stale data**;
+  stale bars exist only behind `get_history()`/`allow_stale=True`, which display
+  surfaces use. The fail-closed trading rule is unchanged.
+- `GET /api/diagnostics/marketdata` returns provider health, cache stats and the
+  last N request traces, so a chart complaint is diagnosable without
+  reproducing it.
 - `symbols.py` + bundled `optionspilot/data_assets/symbols.csv` (12,472 NASDAQ/NYSE tickers):
   offline ticker validation and autocomplete search for the watchlist manager.
 - `presets.py`: static preset watchlists (Magnificent 7, S&P 500 Leaders, etc.).
@@ -426,16 +493,30 @@ repeatedly-reaffirmed architectural constraint; see `CLAUDE.md` and `AI_CONTEXT.
 
 ### 11.1 Charts
 
-The Charts tab (V2-4) is built on vendored `lightweight-charts`:
-- Candlestick + volume chart, five timeframes (5m/15m/1h/4h/1D), zoom/pan/crosshair,
-  an OHLC+change+volume+indicator legend.
+The Charts tab (V2-4, extensively hardened in V3.1) is built on vendored
+`lightweight-charts`:
+- Candlestick + volume chart, **13 timeframes** (1m/2m/3m/5m/10m/15m/30m/
+  1h/2h/4h/1d/1w/1mo — V3.1-2, table-driven: adding one is a single line in
+  `core/models._TF_LABEL`, `data/yfinance_provider._FETCH_SPEC`,
+  `orchestrator._WINDOW_DAYS`, and `data/cached.CANDLE_TTL`, with
+  `test_models::test_every_member_fully_wired` enforcing completeness),
+  zoom/pan/crosshair, an OHLC+change+volume+indicator legend.
 - Overlay indicators (EMA×3, VWAP, Bollinger) and synced RSI/MACD subpanes — all
   computed by `/api/candles`, which calls the *same* `analysis/` functions the
   engine trades with (what you see charted is exactly what the scorer saw).
-- Five drawing tools: horizontal Level (persists per symbol), Trend line, Fib
-  retracement, Zone rectangle, and bar Note (all persist per symbol+timeframe in
-  `localStorage`). Esc cancels an armed tool; Clear removes everything for the
-  current symbol.
+- **Editable drawing objects (V3.1-4)**: horizontal Level, Trend line, Fib
+  retracement, Zone rectangle, and bar Note are first-class objects
+  (`{id,type,tf,points,color,width,text,locked,hidden}`, stored per symbol as
+  `{version:2,items:[]}`, old format migrated) rendered on a dedicated
+  `#ch-draw` overlay canvas. Each can be selected, dragged, endpoint-resized,
+  recolored, re-widthed, locked, hidden, duplicated, renamed (notes), and
+  deleted; tools arm instantly. Interaction runs on capture-phase pointer
+  listeners that freeze chart pan only while a drawing is grabbed. Drawings
+  never drive the price scale (`autoscaleInfoProvider:null`). Esc cancels an
+  armed tool / deselects; Clear removes everything for the symbol.
+- **Trade-tab chart (V3.1-5)**: the single chart instance is relocated
+  between the Charts tab and a collapsible Trade-tab slot, so its symbol,
+  timeframe, drawings, and indicators are shared with zero synchronization.
 - **Position/order trade lines**: loading a chart draws labeled price lines for
   that symbol's open position (entry/stop/target, underlying space) and working
   manual orders' underlying-level triggers — LIMIT orders are premium-space and
@@ -443,6 +524,26 @@ The Charts tab (V2-4) is built on vendored `lightweight-charts`:
 - Trade-from-chart: deep links from watchlist rows, dashboard meters, and position
   cards open the chart; "Trade →" jumps to the order ticket with the symbol loaded.
 - Fullscreen (F key).
+- **Reliability layer (V3-0/V3-7/V3.1)**: the canvas is never silently
+  blank. Every load carries a generation number (newest wins — rapid
+  symbol/timeframe switches can't interleave or be dropped); first paint
+  shows a loading overlay, failures show an error overlay with Retry, and
+  if the backend served stale disk bars (`stale`/`as_of` in the
+  `/api/candles` payload) a warning banner names the last bar's date. Data
+  is sanitized at one boundary — `data/base.validate_candles` drops
+  NaN/inf/≤0 OHLC bars, zeroes non-finite volume, and logs every removal
+  with symbol/timeframe context — so a glitched provider bar can neither
+  500 the endpoint nor blank the chart (V3.1-1). The endpoint accepts
+  optional `start`/`end` range parameters so the UI **prepends history as
+  the user pans left** (V3.1-3: older bars merge in front of the visible
+  ones with indicators in lockstep; viewport, zoom, and drawings are
+  preserved; a left-edge pill shows loading / start-of-history). A visible
+  chart refreshes every 30s preserving zoom; the refresh signature
+  includes the last bar's OHLCV so the **forming candle updates intrabar**,
+  and a `series.update()` fast path renders trailing-bar changes with no
+  flicker or reflow (V3.1-6). The same timer auto-retries a chart stuck on
+  the error overlay. `scripts/chart_check.py` (33 headless-browser checks,
+  in `verify.ps1`) guards all of the above.
 
 ### 11.2 WebSockets
 
@@ -463,7 +564,9 @@ Two settings surfaces, matching the two config layers (§13):
   %, max trades/day, max contracts, min risk/reward, daily loss limit, confidence
   bar). Values are validated identically to `config.yaml`; switching back to
   conservative/high-risk restores the yaml values exactly via the `baseline`
-  snapshot.
+  snapshot. Below it, the effective structural config renders as grouped,
+  searchable read-only cards (V3-4) — one per section with a plain-English
+  note, booleans as ✓/–, and the live-trading gate flags shown locked.
 - **Header segmented controls**: `operating_mode` (AI/Human) and `trading_mode`
   toggles, both instant, no restart, both persisted to `data/settings.json`.
 
@@ -621,8 +724,13 @@ flowchart LR
 - The trade coach infers behavioral tags (revenge trading, chased entry, etc.) from
   observable order/timing patterns, not literal intent — an honest approximation,
   documented in `coach/coach.py`'s module docstring.
-- Browser-driven UI test coverage is a smoke check, not deep regression
-  coverage: `scripts/browser_check.py` (§11) proves every tab loads with
-  zero console errors, not that any specific interaction (mode toggle,
-  order placement, coach review rendering) still behaves correctly — see
-  `CONTRIBUTING.md` "Automation" for the open opportunity to extend it.
+- Browser-driven UI test coverage is a smoke check plus a deep chart
+  regression suite, not exhaustive per-flow coverage:
+  `scripts/browser_check.py` (§11) proves every tab loads with zero console
+  errors, and `scripts/chart_check.py` runs 33 headless-browser checks over
+  the chart system (ticker loading, invalid ticker + recovery, all 13
+  timeframes, indicators, the full editable-drawing lifecycle, historical
+  scroll-back, zoom, the stale banner + retry, rapid symbol changes,
+  resize, live intrabar update, single-instance leak guard). Neither
+  replaces manual verification of the non-chart flows (mode toggle, order
+  placement, coach review rendering) — see `CONTRIBUTING.md` "Automation".

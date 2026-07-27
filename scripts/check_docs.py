@@ -95,15 +95,23 @@ def check_test_counts(live_count: int | None) -> list[str]:
 
 
 def check_version() -> list[str]:
+    """The version has a single source of truth: optionspilot/__init__.py's
+    __version__. Verify pyproject.toml derives it dynamically from there rather
+    than hardcoding a (drift-prone) second copy."""
     problems = []
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     init = (ROOT / "optionspilot" / "__init__.py").read_text(encoding="utf-8")
-    m1 = re.search(r'(?m)^version\s*=\s*"([^"]+)"', pyproject)
-    m2 = re.search(r'__version__\s*=\s*"([^"]+)"', init)
-    if m1 and m2 and m1.group(1) != m2.group(1):
+    if not re.search(r'__version__\s*=\s*"([^"]+)"', init):
+        problems.append("optionspilot/__init__.py has no __version__ string")
+    if re.search(r'(?m)^version\s*=\s*"[^"]+"', pyproject):
         problems.append(
-            f"version mismatch: pyproject.toml={m1.group(1)!r} "
-            f"vs optionspilot/__init__.py={m2.group(1)!r}"
+            "pyproject.toml hardcodes a `version = \"...\"` — it must derive the "
+            "version dynamically from optionspilot.__version__ (single source)."
+        )
+    if 'attr = "optionspilot.__version__"' not in pyproject:
+        problems.append(
+            "pyproject.toml must set [tool.setuptools.dynamic] "
+            'version = {attr = "optionspilot.__version__"}'
         )
     return problems
 

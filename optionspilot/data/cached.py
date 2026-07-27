@@ -1,22 +1,30 @@
-"""CachedProvider — a caching/deduplicating layer over any MarketDataProvider.
+"""CachedProvider — the `MarketDataProvider` face of the market-data stack.
 
-Sits between the orchestrator/UI and the real (network) provider so that one
-scan cycle never fetches the same thing twice, and consecutive cycles only
-refetch what could actually have changed:
+The engine, the risk manager, the backtester and the UI all speak the
+`MarketDataProvider` interface, and none of them should learn about providers,
+fallback ladders or diagnostics. This class is the adapter between that
+interface and `MarketDataService`:
 
-  - Candles are memoized per (symbol, timeframe) with a timeframe-aware
-    freshness cap (a 4h frame can't grow a new bar every 30 seconds), and
-    written through to the SQLite CandleCache so a restart within the
-    freshness window starts warm instead of re-downloading everything.
-  - Quotes, option chains, and expirations get short in-memory TTLs sized to
-    the ~15-minute-delayed upstream data: a 5s quote memo or 30s chain memo
-    cannot lose information the free feed didn't have anyway.
-  - Concurrent requests for the same key are deduplicated: one caller fetches,
-    the rest wait for its result (important once fetches run in parallel).
+    engine / UI  ──MarketDataProvider──▶  CachedProvider
+                                              │
+                          candles ────────────┴──▶ MarketDataService
+                          quotes / chains / expirations ──▶ inner provider
 
-The wrapper implements the same MarketDataProvider interface, so everything
-downstream (engine, risk, broker, backtester) is unaware it exists. Tests that
-inject fake providers bypass it entirely.
+Candles come from the service (which owns the provider chain, the cache, the
+validation, and the diagnostics). Quotes, option chains and expirations still
+come from a single `inner` provider — the options data has no second source in
+this build — memoized with short TTLs sized to the ~15-minute-delayed upstream
+feed, and deduplicated so concurrent callers share one fetch.
+
+Two contracts here are load-bearing and must not be relaxed:
+
+  - `get_candles` never returns stale data. The engine's fail-closed rule (no
+    data ⇒ skip the symbol) depends on it. Stale bars are available only via
+    `get_candles_stale_ok`, which display surfaces call and the trading path
+    does not.
+  - Anything the service could not validate comes back as an EMPTY frame, not
+    as an approximation. A chart drawing yesterday's bars with a banner is
+    useful; a trade placed on them is not.
 """
 
 from __future__ import annotations
@@ -31,23 +39,14 @@ import pandas as pd
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionContract, Quote, Timeframe
 from optionspilot.data.base import MarketDataProvider
-from optionspilot.data.cache import CandleCache
+from optionspilot.data.legacy import LegacyProviderAdapter
+from optionspilot.data.registry import ProviderRegistry
+from optionspilot.data.service import (
+    CANDLE_TTL, DEFAULT_CANDLE_TTL, EMPTY_CANDLE_TTL, MEM_CACHE_MAX,
+    HistoryResult, MarketDataService,
+)
 
 log = get_logger("data")
-
-# How long a fetched candle frame stays fresh, per timeframe (seconds).
-# Sized to the bar interval and the free feed's ~15-minute delay: the entry
-# timeframe and daily bars (used for live price display) stay tight; higher
-# timeframes can't grow new bars quickly and don't need refetching to show one.
-CANDLE_TTL: dict[Timeframe, float] = {
-    Timeframe.M1: 20.0,
-    Timeframe.M5: 30.0,
-    Timeframe.M15: 60.0,
-    Timeframe.H1: 120.0,
-    Timeframe.H4: 240.0,
-    Timeframe.D1: 60.0,
-}
-DEFAULT_CANDLE_TTL = 60.0
 
 QUOTE_TTL = 5.0
 CHAIN_TTL = 30.0
@@ -55,146 +54,151 @@ EXPIRATIONS_TTL = 3600.0
 
 
 class _Entry:
-    __slots__ = ("value", "fetched_at", "start")
+    __slots__ = ("value", "fetched_at")
 
-    def __init__(self, value, fetched_at: float, start: datetime | None = None):
+    def __init__(self, value, fetched_at: float):
         self.value = value
         self.fetched_at = fetched_at
-        self.start = start
 
 
 class CachedProvider(MarketDataProvider):
+    """`MarketDataProvider` backed by `MarketDataService` (candles) and a
+    memoized inner provider (quotes/chains/expirations)."""
+
     name = "cached"
 
     def __init__(self, inner: MarketDataProvider,
-                 cache_db: str | Path | None = None):
+                 cache_db: str | Path | None = None, *,
+                 service: MarketDataService | None = None):
         self._inner = inner
         self.name = f"cached({inner.name})"
-        self._store = CandleCache(cache_db) if cache_db is not None else None
+        if service is not None:
+            self.service = service
+        else:
+            # No service supplied: adapt `inner` into the new chain as its sole
+            # provider. This is what keeps every existing caller — and every
+            # test that injects a fake provider — working unchanged, while
+            # still routing through the validation/cache/diagnostics ladder.
+            self.service = MarketDataService(
+                ProviderRegistry([LegacyProviderAdapter(inner)]),
+                cache_db=cache_db)
         self._lock = threading.Lock()
         self._mem: dict[tuple, _Entry] = {}
         self._inflight: dict[tuple, threading.Event] = {}
 
-    # ── generic memo with in-flight dedup ────────────────────────────────────
-
-    def _memo(self, key: tuple, valid, fetch):
-        """Return the cached value for `key` while `valid(entry)` holds, else
-        call `fetch()` — with concurrent callers for the same key waiting on a
-        single fetch instead of stampeding the network."""
-        while True:
-            with self._lock:
-                entry = self._mem.get(key)
-                if entry is not None and valid(entry):
-                    return entry.value
-                event = self._inflight.get(key)
-                if event is None:
-                    event = threading.Event()
-                    self._inflight[key] = event
-                    break  # we are the fetcher
-            event.wait(timeout=60.0)
-            with self._lock:
-                entry = self._mem.get(key)
-            if entry is not None and valid(entry):
-                return entry.value
-            # the fetcher failed — loop and try to become the fetcher ourselves
-        try:
-            return fetch()
-        finally:
-            with self._lock:
-                self._inflight.pop(key, None)
-            event.set()
-
-    def _fresh(self, ttl: float):
-        return lambda e: _time.monotonic() - e.fetched_at < ttl
-
-    def _put(self, key: tuple, value, start: datetime | None = None):
-        with self._lock:
-            self._mem[key] = _Entry(value, _time.monotonic(), start=start)
-        return value
-
     # ── candles ──────────────────────────────────────────────────────────────
 
     def get_candles(self, symbol: str, timeframe: Timeframe,
-                    start: datetime, end: datetime) -> pd.DataFrame:
-        symbol = symbol.upper()
-        key = ("candles", symbol, timeframe)
-        ttl = CANDLE_TTL.get(timeframe, DEFAULT_CANDLE_TTL)
-        fresh = self._fresh(ttl)
+                    start: datetime, end: datetime,
+                    *, extended_hours: bool = False) -> pd.DataFrame:
+        """Strict: live (or cache-fresh) bars only, empty on failure."""
+        return self.service.get_history(
+            symbol, timeframe, start, end,
+            extended_hours=extended_hours, allow_stale=False).frame
 
-        def valid(entry: _Entry) -> bool:
-            # the cached frame must be fresh AND cover the requested window
-            return fresh(entry) and entry.start is not None and entry.start <= start
+    def get_candles_stale_ok(self, symbol: str, timeframe: Timeframe,
+                             start: datetime, end: datetime,
+                             *, extended_hours: bool = False,
+                             ) -> tuple[pd.DataFrame, bool]:
+        """Candles for DISPLAY surfaces: falls back to locally cached bars,
+        flagged stale, rather than showing nothing. Kept for callers that only
+        need the pair; `get_history` returns the full result."""
+        result = self.get_history(symbol, timeframe, start, end,
+                                  extended_hours=extended_hours)
+        return result.frame, result.stale
 
-        def fetch() -> pd.DataFrame:
-            df = None
-            with self._lock:
-                cold = key not in self._mem
-            if cold and self._store is not None:
-                # cold start: reuse the on-disk cache if its last bar is still
-                # inside the freshness window (e.g. an app restart mid-session)
-                df = self._warm_from_store(symbol, timeframe, start, end, ttl)
-            if df is None:
-                df = self._inner.get_candles(symbol, timeframe, start, end)
-                if self._store is not None and not df.empty:
-                    try:
-                        self._store.store(symbol, timeframe, df)
-                    except Exception as exc:  # noqa: BLE001 — cache is best-effort
-                        log.error("candle cache store failed %s %s: %s",
-                                  symbol, timeframe, exc)
-            return self._put(key, df, start=start)
-
-        return _slice(self._memo(key, valid, fetch), start)
-
-    def _warm_from_store(self, symbol, timeframe, start, end, ttl):
-        try:
-            cached = self._store.load(symbol, timeframe, start, end)
-        except Exception:  # noqa: BLE001 — fall back to a live fetch
-            return None
-        if cached.empty:
-            return None
-        age = (pd.Timestamp.now(tz="UTC") - cached.index[-1]).total_seconds()
-        # the last cached bar's *open* must be within one bar + ttl of now for
-        # the frame to still be current
-        if age <= timeframe.minutes * 60 + ttl:
-            return cached
-        return None
+    def get_history(self, symbol: str, timeframe: Timeframe,
+                    start: datetime, end: datetime, *,
+                    extended_hours: bool = False) -> HistoryResult:
+        """The full result — outcome, provider, staleness, history exhaustion,
+        validation report and diagnostics id. This is what `/api/candles` uses
+        so the frontend can be explicit about which state it is in."""
+        return self.service.get_history(symbol, timeframe, start, end,
+                                        extended_hours=extended_hours,
+                                        allow_stale=True)
 
     # ── quotes / chains / expirations ────────────────────────────────────────
 
     def get_quote(self, symbol: str) -> Quote:
         key = ("quote", symbol.upper())
-        return self._memo(key, self._fresh(QUOTE_TTL),
-                          lambda: self._put(key, self._inner.get_quote(symbol)))
+        return self._memo(key, QUOTE_TTL, lambda: self._inner.get_quote(symbol))
 
     def get_expirations(self, symbol: str) -> list[date]:
         key = ("expirations", symbol.upper())
-        return self._memo(key, self._fresh(EXPIRATIONS_TTL),
-                          lambda: self._put(key, self._inner.get_expirations(symbol)))
+        return self._memo(key, EXPIRATIONS_TTL,
+                          lambda: self._inner.get_expirations(symbol))
 
     def get_option_chain(self, symbol: str,
                          expiration: date) -> list[OptionContract]:
         key = ("chain", symbol.upper(), expiration)
-        return self._memo(
-            key, self._fresh(CHAIN_TTL),
-            lambda: self._put(key, self._inner.get_option_chain(symbol, expiration)))
+        return self._memo(key, CHAIN_TTL,
+                          lambda: self._inner.get_option_chain(symbol, expiration))
 
     def invalidate_quotes(self) -> None:
-        """Drop quote/chain memos (e.g. right before filling an order where
+        """Drop quote/chain memos (e.g. right before filling an order, where
         maximum freshness matters more than saving one request)."""
         with self._lock:
             for key in [k for k in self._mem if k[0] in ("quote", "chain")]:
                 del self._mem[key]
+
+    # ── observability ────────────────────────────────────────────────────────
+
+    def health(self) -> dict:
+        """Provider health, cache stats and request diagnostics in one object."""
+        return self.service.health()
+
+    @property
+    def diagnostics(self):
+        return self.service.diagnostics
+
+    # ── memo with in-flight dedup ────────────────────────────────────────────
+
+    def _memo(self, key: tuple, ttl: float, fetch):
+        """Return the memoized value while fresh, else call `fetch()` — with
+        concurrent callers for the same key waiting on a single fetch instead
+        of stampeding the network."""
+        while True:
+            with self._lock:
+                entry = self._mem.get(key)
+                if entry is not None and _fresh(entry.fetched_at, ttl):
+                    return entry.value
+                event = self._inflight.get(key)
+                if event is None:
+                    event = threading.Event()
+                    self._inflight[key] = event
+                    break                      # we are the fetcher
+            event.wait(timeout=30.0)
+            with self._lock:
+                entry = self._mem.get(key)
+            if entry is not None and _fresh(entry.fetched_at, ttl):
+                return entry.value
+            # the fetcher failed — loop and try to become the fetcher ourselves
+        try:
+            return self._put(key, fetch())
+        finally:
+            with self._lock:
+                self._inflight.pop(key, None)
+            event.set()
+
+    def _put(self, key: tuple, value):
+        with self._lock:
+            # Bounded LRU-ish store: re-insert to move the key to the newest
+            # slot, evicting the oldest when over the cap.
+            self._mem.pop(key, None)
+            self._mem[key] = _Entry(value, _time.monotonic())
+            while len(self._mem) > MEM_CACHE_MAX:
+                self._mem.pop(next(iter(self._mem)))
+        return value
 
     # feature-detected extras (e.g. get_market_cap) pass through untouched
     def __getattr__(self, item):
         return getattr(self._inner, item)
 
 
-def _slice(df: pd.DataFrame, start: datetime) -> pd.DataFrame:
-    if df.empty or df.index[0] >= start:
-        return df
-    return df[df.index >= start]
+def _fresh(fetched_at: float, ttl: float) -> bool:
+    return _time.monotonic() - fetched_at < ttl
 
 
-__all__ = ["CachedProvider", "CANDLE_TTL", "QUOTE_TTL", "CHAIN_TTL",
-           "EXPIRATIONS_TTL"]
+__all__ = ["CachedProvider", "CANDLE_TTL", "DEFAULT_CANDLE_TTL",
+           "EMPTY_CANDLE_TTL", "QUOTE_TTL", "CHAIN_TTL", "EXPIRATIONS_TTL",
+           "MEM_CACHE_MAX"]

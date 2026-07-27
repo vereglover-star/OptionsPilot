@@ -1,0 +1,91 @@
+name: Release
+
+# Fires when a version tag is pushed (e.g. `git tag v0.5.0 && git push --tags`).
+# Gates on the full CI test job, then builds the Windows exe, packages a clean
+# versioned zip, and publishes a GitHub Release with notes from the CHANGELOG.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write          # create the Release and upload assets
+
+jobs:
+  # Reuse the exact CI test job — a tag never ships without a green suite.
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build, package & publish
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Set OPTIONSPILOT_HOME here rather than in job-level env: — the `runner`
+      # context isn't available at workflow-parse time, so ${{ runner.temp }}
+      # in a job `env:` block is rejected before the job starts. $GITHUB_ENV
+      # exports it to every subsequent step, preserving the original behavior.
+      - name: Configure storage root
+        shell: pwsh
+        run: '"OPTIONSPILOT_HOME=$env:RUNNER_TEMP\OptionsPilot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      # Fail fast, before the multi-minute build, if the tag and the app's
+      # single-source version disagree (the tag drives the release name/zip).
+      - name: Verify tag matches optionspilot.__version__
+        shell: pwsh
+        run: |
+          $ver = (python -c "import re,pathlib; print(re.search(r'__version__\s*=\s*""([^""]+)""', pathlib.Path('optionspilot/__init__.py').read_text()).group(1))").Trim()
+          $tag = "${{ github.ref_name }}"
+          if ("v$ver" -ne $tag) {
+            throw "tag '$tag' != app version 'v$ver'. Run scripts/bump_version.py $($tag.TrimStart('v')), commit, and retag."
+          }
+          Write-Host "OK: tag $tag matches app version v$ver"
+
+      # scripts/build.ps1 -> Ensure-Environment (.venv + dev,ui,build) ->
+      # build_exe.ps1 (PyInstaller + packaged-selftest bundle gate). Tests
+      # already ran in the `test` job, so -SkipTests here.
+      - name: Build the executable
+        shell: pwsh
+        run: .\scripts\build.ps1 -SkipTests
+
+      - name: Package the release zip
+        shell: pwsh
+        run: .\scripts\package_release.ps1
+
+      # Inno Setup (ISCC) isn't preinstalled on the runner; Chocolatey is.
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      # Reuses the dist\OptionsPilot\ built above -> OptionsPilot-Setup-v<ver>.exe.
+      - name: Build the Windows installer
+        shell: pwsh
+        run: .\scripts\build_installer.ps1
+
+      - name: Generate release notes from CHANGELOG
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          python scripts/release_notes.py $ver | Out-File -Encoding utf8 release_notes.md
+
+      # Publish BOTH artifacts: the portable zip and the installer.
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem dist\OptionsPilot-v*.zip | Select-Object -First 1
+          $setup = Get-ChildItem installer\Output\OptionsPilot-Setup-v*.exe | Select-Object -First 1
+          if (-not $zip) { throw "no release zip produced" }
+          if (-not $setup) { throw "no installer produced" }
+          gh release create "${{ github.ref_name }}" $zip.FullName $setup.FullName `
+            --title "OptionsPilot ${{ github.ref_name }}" `
+            --notes-file release_notes.md

@@ -13,12 +13,21 @@ from __future__ import annotations
 import importlib
 import threading
 import time as _time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 
+from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionContract, OptionRight, Quote, Timeframe, utcnow
 from optionspilot.data.base import MarketDataProvider, validate_candles
+from optionspilot.data.capabilities import YAHOO_CAPABILITIES
+
+log = get_logger("data")
+
+# Upper bound (seconds) on any single upstream HTTP request. Yahoo occasionally
+# hangs a connection; without a cap the worker thread blocks forever and stalls
+# every queued request for that key (see get_candles for the failure it caused).
+REQUEST_TIMEOUT = 10.0
 
 # yfinance costs ~0.3s to import and drags in its whole scraping stack; defer
 # it to the first actual data request so app startup (and every CLI command
@@ -32,14 +41,78 @@ def _yf():
         yf = importlib.import_module("yfinance")
     return yf
 
-_YF_INTERVAL = {
-    Timeframe.M1: "1m",
-    Timeframe.M5: "5m",
-    Timeframe.M15: "15m",
-    Timeframe.H1: "1h",
-    Timeframe.H4: "1h",   # fetched as 1h, resampled to 4h below
-    Timeframe.D1: "1d",
+# Fetch spec per timeframe: (yfinance interval, pandas resample rule or None).
+# Intervals Yahoo doesn't serve natively (3m, 10m, 2h, 4h) are built by
+# resampling the nearest finer native interval. Adding a future interval is
+# one line here (plus the enum/window/TTL entries the models.py docstring
+# lists — test_models enforces completeness).
+_FETCH_SPEC: dict[Timeframe, tuple[str, str | None]] = {
+    Timeframe.M1: ("1m", None),
+    Timeframe.M2: ("2m", None),
+    Timeframe.M3: ("1m", "3min"),
+    Timeframe.M5: ("5m", None),
+    Timeframe.M10: ("5m", "10min"),
+    Timeframe.M15: ("15m", None),
+    Timeframe.M30: ("30m", None),
+    Timeframe.H1: ("1h", None),
+    Timeframe.H2: ("1h", "2h"),
+    Timeframe.H4: ("1h", "4h"),
+    Timeframe.D1: ("1d", None),
+    Timeframe.W1: ("1wk", None),
+    Timeframe.MN1: ("1mo", None),
 }
+
+# Yahoo's intraday depth limits now live in ONE place — `capabilities.py` —
+# shared by this provider and by the adapter-based chain, so the two can never
+# drift apart. See `YAHOO_INTERVALS` for the measured values and how they were
+# obtained.
+
+
+def _symbol_candidates(symbol: str) -> list[str]:
+    """Best-effort Yahoo symbol variants.
+
+    Yahoo Finance uses hyphens where many data sources and users type dots
+    (for example, BRK.B -> BRK-B). We keep the original spelling first so
+    ordinary symbols stay on the fast path, then try the common punctuation
+    variant before giving up.
+    """
+    raw = symbol.upper().strip()
+    variants = [raw]
+    if "." in raw:
+        variants.append(raw.replace(".", "-"))
+    if "-" in raw:
+        variants.append(raw.replace("-", "."))
+    # preserve order while dropping duplicates
+    return list(dict.fromkeys(v for v in variants if v))
+
+
+def _clamp_history_window(timeframe: Timeframe, start: datetime, end: datetime,
+                          now: datetime | None = None
+                          ) -> tuple[datetime, datetime] | None:
+    """Clamp `[start, end)` to what Yahoo can serve for `timeframe`.
+
+    Returns None when the ENTIRE window predates Yahoo's depth for this
+    interval — the caller must not spend a request on it.
+
+    The depth limit is measured from NOW, not from the request's end. That
+    distinction is the bug this function used to have: a history-paging request
+    for, say, 5-minute bars from two months ago has a start that sits happily
+    inside `end - 60 days`, so the old clamp passed it through untouched,
+    Yahoo answered HTTP 422, yfinance turned that into an empty frame, and the
+    chart retried the same impossible window on every scroll (proved from
+    `logs/data.log`: repeated "history fetch empty IWM 5m requested
+    2026-05-22..2026-06-22" with the clamp reporting no change).
+    """
+    now = now or utcnow()
+    max_days = YAHOO_CAPABILITIES.max_lookback_days(timeframe)
+    if max_days is None:
+        return start, end
+    oldest_allowed = now - timedelta(days=max_days)
+    if end <= oldest_allowed:
+        return None
+    if start < oldest_allowed:
+        return oldest_allowed, end
+    return start, end
 
 
 class YFinanceProvider(MarketDataProvider):
@@ -61,15 +134,56 @@ class YFinanceProvider(MarketDataProvider):
             self._last_request = _time.monotonic()
 
     def get_candles(
-        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime,
+        *, extended_hours: bool = False,
     ) -> pd.DataFrame:
         self._throttle()
-        raw = _yf().Ticker(symbol).history(
-            start=start, end=end,
-            interval=_YF_INTERVAL[timeframe],
-            auto_adjust=False, actions=False,
-        )
+        interval, resample_rule = _FETCH_SPEC[timeframe]
+        requested_start = start
+        window = _clamp_history_window(timeframe, start, end)
+        if window is None:
+            log.info("history request for %s %s is entirely older than Yahoo's "
+                     "%s-day window for that interval (%s..%s) — not fetching",
+                     symbol, timeframe,
+                     YAHOO_CAPABILITIES.max_lookback_days(timeframe),
+                     requested_start, end)
+            return validate_candles(pd.DataFrame())
+        start, end = window
+        if start != requested_start:
+            log.info("history request for %s %s clamped to Yahoo-supported window %s..%s (requested %s..%s)",
+                     symbol, timeframe, start, end, requested_start, end)
+        # Pre-/after-market bars come back only when prepost=True, and only for
+        # intraday intervals — daily+ bars are RTH aggregates upstream, so the
+        # flag is a no-op there. This is display-only: the engine/trading path
+        # never sets it (see CachedProvider), so paper execution is unchanged.
+        prepost = extended_hours and timeframe.minutes < Timeframe.D1.minutes
+        raw = pd.DataFrame()
+        last_symbol = symbol
+        for candidate in _symbol_candidates(symbol):
+            last_symbol = candidate
+            # `timeout` bounds the underlying HTTP request. Without it a hung
+            # Yahoo connection blocks this thread indefinitely — and because it
+            # holds the CachedProvider's per-key in-flight slot, every later
+            # request for the same symbol/timeframe piles up behind it, which
+            # surfaced as a chart that "loads blank and stays blank until the app
+            # is restarted" (V3.3.1). On timeout yfinance raises; we fall through
+            # to the next candidate / an empty frame, handled by the caller.
+            try:
+                raw = _yf().Ticker(candidate).history(
+                    start=start, end=end,
+                    interval=interval,
+                    auto_adjust=False, actions=False, prepost=prepost,
+                    timeout=REQUEST_TIMEOUT,
+                )
+            except Exception as exc:  # noqa: BLE001 — a timeout/network error is
+                log.warning("history fetch failed %s %s: %s",  # not fatal: try the
+                            candidate, timeframe, exc)          # next variant, else empty
+                raw = pd.DataFrame()
+            if not raw.empty:
+                break
         if raw.empty:
+            log.warning("history fetch empty %s %s requested %s..%s (clamped %s..%s)",
+                        symbol, timeframe, requested_start, end, start, end)
             return validate_candles(pd.DataFrame())
         df = raw.rename(columns={
             "Open": "open", "High": "high", "Low": "low",
@@ -77,15 +191,31 @@ class YFinanceProvider(MarketDataProvider):
         })
         if df.index.tz is None:  # daily bars come back tz-naive
             df.index = df.index.tz_localize("UTC")
-        df = validate_candles(df)
-        if timeframe is Timeframe.H4:
-            df = _resample(df, "4h")
+        df = validate_candles(df, context=f"{last_symbol} {timeframe}")
+        if resample_rule is not None:
+            df = _resample(df, resample_rule)
+        log.debug("provider history %s %s requested %s..%s -> %d bars %s..%s",
+                  symbol, timeframe, requested_start, end, len(df),
+                  df.index[0] if not df.empty else None,
+                  df.index[-1] if not df.empty else None)
         return df
 
     def get_quote(self, symbol: str) -> Quote:
         self._throttle()
-        info = _yf().Ticker(symbol).fast_info
-        last = float(info["last_price"])
+        last = 0.0
+        used_symbol = symbol
+        info = None
+        for candidate in _symbol_candidates(symbol):
+            used_symbol = candidate
+            try:
+                info = _yf().Ticker(candidate).fast_info
+                last = float(info["last_price"])
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+            if last > 0:
+                break
+        if last <= 0:
+            raise ValueError(f"could not resolve quote for {symbol!r}")
         # Yahoo bid/ask are often stale or zero outside market hours; fall back
         # to a synthetic quote around last so downstream math stays sane.
         bid = float(info.get("bid") or 0) or last
@@ -99,21 +229,42 @@ class YFinanceProvider(MarketDataProvider):
         Broker/data ABC — callers must feature-detect)."""
         self._throttle()
         try:
-            cap = _yf().Ticker(symbol).fast_info["market_cap"]
-            return float(cap) if cap else None
+            for candidate in _symbol_candidates(symbol):
+                try:
+                    cap = _yf().Ticker(candidate).fast_info["market_cap"]
+                except Exception:  # noqa: BLE001 - try common symbol variants
+                    continue
+                return float(cap) if cap else None
         except Exception:  # noqa: BLE001 — sorting metadata is never critical
             return None
+        return None
 
     def get_expirations(self, symbol: str) -> list[date]:
         self._throttle()
-        return sorted(
-            datetime.strptime(s, "%Y-%m-%d").date()
-            for s in _yf().Ticker(symbol).options
-        )
+        for candidate in _symbol_candidates(symbol):
+            try:
+                return sorted(
+                    datetime.strptime(s, "%Y-%m-%d").date()
+                    for s in _yf().Ticker(candidate).options
+                )
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+        return []
 
     def get_option_chain(self, symbol: str, expiration: date) -> list[OptionContract]:
         self._throttle()
-        chain = _yf().Ticker(symbol).option_chain(expiration.strftime("%Y-%m-%d"))
+        chain = None
+        used_symbol = symbol
+        for candidate in _symbol_candidates(symbol):
+            used_symbol = candidate
+            try:
+                chain = _yf().Ticker(candidate).option_chain(
+                    expiration.strftime("%Y-%m-%d"))
+                break
+            except Exception:  # noqa: BLE001 - retry common symbol variants
+                continue
+        if chain is None:
+            return []
         out: list[OptionContract] = []
         for frame, right in ((chain.calls, OptionRight.CALL), (chain.puts, OptionRight.PUT)):
             for row in frame.itertuples(index=False):

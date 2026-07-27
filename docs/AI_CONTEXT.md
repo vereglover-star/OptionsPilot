@@ -119,7 +119,7 @@ drift the way a `docs/` file might.
 
 - `pytest`, one test file per module (`broker/orders.py` ↔
   `tests/test_orders.py`), `class Test<Thing>` / `def test_<behavior>`.
-- 345 tests as of 2026-07-17, all passing, ~13s to run the full suite.
+- 374 tests as of 2026-07-18, all passing, ~13s to run the full suite.
 - New backend code needs new tests in the matching file. Boundary
   conditions get explicit tests for anything touching money/positions/risk
   (empty positions, zero quantities, missing quotes, restart-persistence) —
@@ -255,6 +255,46 @@ into long-term memory:
    `Orchestrator.run_cycle()`'s logic** for a UI action. Either call into
    the orchestrator or add a narrowly-scoped public method to it (the
    `register_manual_entry`/`approve_manual_entry` pattern).
+9. **Never let a market-data adapter return an empty frame to signal
+   failure** (V0.5.2). Adapters raise typed `ProviderError`s; the empty
+   frame is reserved for "this window genuinely holds no bars." Collapsing
+   those two back together is the ancestor of every chart-history bug this
+   project has had — see `docs/MARKET_DATA.md` §1–2 for the proof. By the
+   same rule: never relax `CachedProvider.get_candles` /
+   `MarketDataService.get_history(allow_stale=False)` to serve stale data.
+   The engine's empty-means-skip behavior is load-bearing for trading
+   safety, and stale bars belong only on display surfaces.
+10. **Never re-derive a provider's history depth inside an adapter.** It
+   lives in `data/capabilities.py`, is *measured* (rerun
+   `scripts/marketdata_probe.py`), is asserted by `test_capabilities.py`,
+   and is measured **from now** — not from the request's end. That
+   distinction was the primary root cause fixed in V0.5.2. V0.5.3's
+   `data/discovery.py` measures the same thing at runtime but is
+   **advisory and off by default**: it reports drift, it does not rewrite
+   the table, because the shipped numbers sit one day *inside* each
+   measured cliff on purpose and a probe can be wrong.
+11. **Never split a provider's operational state across two objects again**
+   (V0.5.3). `data/health.py::ProviderHealthMonitor` is the single owner
+   of counters, latency, rate-limit window, circuit breaker and ranking
+   score. It used to be `adapter.ProviderHealth` plus
+   `registry._Breaker`, with the breaker's trip condition reading the
+   adapter's counter — and that split hid two real bugs for a full
+   milestone (a provider serving unusable bars was recorded as
+   *succeeding*, and a demoted success could never build a failure
+   streak). Relatedly: `health.COUNTS_AGAINST_HEALTH` is the ONE place
+   that decides whether a failure counts. Do not re-derive that policy at
+   a call site — range and symbol errors are correct answers to
+   impossible questions and must never trip a breaker.
+12. **Never make provider ranking dominate the static priority anchor.**
+   `rank()` is anchored on `provider_priority` so that a cold system
+   reproduces the documented chain order exactly; that property is what
+   makes dynamic ranking safe to ship, and `dynamic_ranking: false` must
+   keep restoring the pure static order. The scale (10 rank points = 1
+   second of latency) is deliberate: loose enough that ordering doesn't
+   thrash on noise, tight enough that a genuinely degraded primary
+   yields. Also keep the rank's failure rate **windowed** — a lifetime
+   rate never decays, so a provider would stay demoted long after it
+   recovered.
 
 ## Common mistakes to avoid
 

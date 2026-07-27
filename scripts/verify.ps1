@@ -24,23 +24,29 @@ param(
 
 $results = [ordered]@{}
 
-Write-Step "1/4 Tests"
+Write-Step "1/5 Tests"
 & "$PSScriptRoot\test.ps1"
 $results["Tests"] = ($LASTEXITCODE -eq 0)
 
 $python = Ensure-Environment -Extras @("dev", "ui")
 
-Write-Step "2/4 Frontend id() references"
+Write-Step "2/5 Frontend id() references"
 & $python "$PSScriptRoot\check_html_ids.py"
 $results["HTML id references"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "3/4 Documentation consistency"
+Write-Step "3/5 Documentation consistency"
 & $python "$PSScriptRoot\check_docs.py"
 $results["Docs consistency"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "4/4 Dependency check (pip check)"
+Write-Step "4/5 Dependency check (pip check)"
 & $python -m pip check
 $results["pip check"] = ($LASTEXITCODE -eq 0)
+
+# Offline by default (scripted providers, no network) so it is deterministic
+# and safe here; `--live` probes the real provider chain and is a manual step.
+Write-Step "5/5 Market-data stress scenarios"
+& $python "$PSScriptRoot\marketdata_stress.py"
+$results["Market-data stress"] = ($LASTEXITCODE -eq 0)
 
 if (-not $SkipBrowser) {
     Write-Step "Bonus: headless-browser smoke check"
@@ -48,6 +54,10 @@ if (-not $SkipBrowser) {
     if ($RequireBrowser) { $browserArgs += "--require" }
     & $python "$PSScriptRoot\browser_check.py" @browserArgs
     $results["Browser smoke check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: chart regression check"
+    & $python "$PSScriptRoot\chart_check.py" @browserArgs
+    $results["Chart regression check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

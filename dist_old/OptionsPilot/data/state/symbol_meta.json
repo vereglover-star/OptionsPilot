@@ -1,0 +1,50 @@
+{
+ "SPY": {
+  "name": "State Street SPDR S&P 500 ETF Trust",
+  "market_cap": null
+ },
+ "QQQ": {
+  "name": "Invesco QQQ Trust, Series 1",
+  "market_cap": null
+ },
+ "AAPL": {
+  "name": "Apple Inc. - Common Stock",
+  "market_cap": 4891183133759.888
+ },
+ "MSFT": {
+  "name": "Microsoft Corporation - Common Stock",
+  "market_cap": 2835433617195.9346
+ },
+ "NVDA": {
+  "name": "NVIDIA Corporation - Common Stock",
+  "market_cap": 5009871551300.049
+ },
+ "AMZN": {
+  "name": "Amazon.com, Inc. - Common Stock",
+  "market_cap": 2496832677755.5786
+ },
+ "GOOGL": {
+  "name": "Alphabet Inc. - Class A Common Stock",
+  "market_cap": 3910399243430.9824
+ },
+ "META": {
+  "name": "Meta Platforms, Inc. - Class A Common Stock",
+  "market_cap": 1510844172505.0825
+ },
+ "AVGO": {
+  "name": "Broadcom Inc. - Common Stock",
+  "market_cap": 1817015093103.683
+ },
+ "JPM": {
+  "name": "JP Morgan Chase & Co. Common Stock",
+  "market_cap": 938902799285.8887
+ },
+ "LLY": {
+  "name": "Eli Lilly and Company Common Stock",
+  "market_cap": 1066549499943.4165
+ },
+ "V": {
+  "name": "Visa Inc.",
+  "market_cap": 676526320840.2832
+ }
+}
