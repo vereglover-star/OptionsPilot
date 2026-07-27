@@ -32,7 +32,7 @@ import pandas as pd
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.data.adapter import (
     HistoryAdapter, ProviderRateLimited, ProviderSymbolError,
-    ProviderUnavailable,
+    ProviderUnavailable, timeout_or_unavailable,
 )
 from optionspilot.data.capabilities import IntervalSpec, STOOQ_CAPABILITIES
 
@@ -62,11 +62,17 @@ class StooqAdapter(HistoryAdapter):
     # Blocks, HTML challenges, changed headers and unknown symbols all raise;
     # a valid CSV header with no data rows is a genuine empty window.
     reports_empty_reliably = True
+    default_timeout = REQUEST_TIMEOUT
 
-    def __init__(self, *, timeout: float = REQUEST_TIMEOUT, opener=None):
-        super().__init__()
-        self._timeout = timeout
+    def __init__(self, config=None, *, timeout: float | None = None, opener=None):
+        super().__init__(config)
+        if timeout is not None:
+            self.timeout = timeout
         self._opener = opener or urllib.request.urlopen
+
+    @property
+    def _timeout(self) -> float:
+        return self.timeout
 
     def _get_csv(self, params: dict) -> str:
         url = f"{BASE_URL}?{urllib.parse.urlencode(params)}"
@@ -85,7 +91,8 @@ class StooqAdapter(HistoryAdapter):
                 raise ProviderSymbolError(f"stooq 404 for {params.get('s')}") from exc
             raise ProviderUnavailable(f"stooq HTTP {exc.code}") from exc
         except Exception as exc:  # noqa: BLE001 — timeouts, DNS, TLS
-            raise ProviderUnavailable(f"stooq unreachable: {exc}") from exc
+            raise timeout_or_unavailable(
+                f"stooq unreachable: {exc}", exc) from exc
 
     def _fetch_native(self, symbol: str, spec: IntervalSpec,
                       start: datetime, end: datetime,

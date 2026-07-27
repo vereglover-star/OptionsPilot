@@ -51,6 +51,61 @@ class DataConfig(_Section):
         return [s.strip().upper() for s in v]
 
 
+class MarketDataProviderConfig(_Section):
+    """Per-provider operational settings for the market-data subsystem.
+
+    The runtime shape lives in `optionspilot/data/config.py` (plain
+    dataclasses, because `data/` may not import this layer). This is its
+    validated YAML face; `MarketDataConfig.from_mapping` translates one into
+    the other at composition time, so the schema is checked once, at startup,
+    by the same machinery as every other section.
+
+    Keys map 1:1 onto `data.config.ProviderConfig` — see that module for what
+    each one does and why the defaults are what they are.
+    """
+
+    enabled: bool = True
+    priority: int | None = Field(default=None, ge=0, le=1000)
+    timeout: float | None = Field(default=None, gt=0, le=120)
+    max_attempts: int = Field(default=2, ge=1, le=5)
+    retry_backoff: float = Field(default=0.4, ge=0, le=10)
+    min_request_interval: float | None = Field(default=None, ge=0, le=60)
+    breaker_threshold: int = Field(default=3, ge=1, le=100)
+    breaker_base_cooldown: float = Field(default=15.0, gt=0, le=3600)
+    breaker_max_cooldown: float = Field(default=300.0, gt=0, le=86400)
+    min_quality_score: float = Field(default=0.0, ge=0, le=100)
+
+
+class MarketDataCacheConfig(_Section):
+    enabled: bool = True
+    retention_days: int | None = Field(default=None, ge=1)
+    warn_bytes: int = Field(default=512 * 1024 * 1024, ge=1024 * 1024)
+
+
+class MarketDataConfigSection(_Section):
+    """The `market_data:` section of config.yaml.
+
+    Everything here is operational, not behavioural: it changes how history is
+    fetched, never what is traded on it. An empty section (the shipped default)
+    reproduces the V0.5.2 chain exactly.
+    """
+
+    providers: dict[str, MarketDataProviderConfig] = Field(default_factory=dict)
+    cache: MarketDataCacheConfig = MarketDataCacheConfig()
+    dynamic_ranking: bool = True
+    memo_max_entries: int = Field(default=400, ge=1, le=100_000)
+    structured_logging: bool = True
+    capability_discovery: bool = False
+    capability_refresh_days: int = Field(default=30, ge=1, le=3650)
+
+    # NOTE: there is deliberately no `to_runtime()` here. `config/` must not
+    # import `data/` (nor the reverse — `tests/test_architecture.py` enforces
+    # both), so the translation into `data.config.MarketDataConfig` happens in
+    # the composition root that already imports both: `orchestrator.py`. Keys
+    # map 1:1, so the translation is `MarketDataConfig.from_mapping(
+    # cfg.market_data.model_dump())` and nothing more.
+
+
 class IndicatorsConfig(_Section):
     """Per-indicator enable flags plus tunable parameters.
 
@@ -245,6 +300,7 @@ class LoggingConfig(_Section):
 
 class AppConfig(_Section):
     data: DataConfig = DataConfig()
+    market_data: MarketDataConfigSection = MarketDataConfigSection()
     indicators: IndicatorsConfig = IndicatorsConfig()
     engine: EngineConfig = EngineConfig()
     risk: RiskConfig = RiskConfig()

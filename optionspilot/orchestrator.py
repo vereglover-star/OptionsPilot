@@ -40,7 +40,7 @@ from optionspilot.core.paths import AppPaths
 from optionspilot.core.models import (
     Direction, Fill, Position, Timeframe, TradePlan, TradeRecord, utcnow,
 )
-from optionspilot.data import MarketDataProvider, build_provider
+from optionspilot.data import MarketDataConfig, MarketDataProvider, build_provider
 from optionspilot.engine import DecisionEngine
 from optionspilot.experience import ExperienceEngine, build_snapshot
 from optionspilot.journal import TradeJournal
@@ -177,8 +177,12 @@ class Orchestrator:
         # `build_provider` is the market-data composition root: the full
         # provider chain (Yahoo JSON -> yfinance -> Stooq), one shared cache,
         # validation and diagnostics. Everything here still sees only the
-        # MarketDataProvider interface.
-        self.provider = provider or build_provider(data_dir / "cache.db")
+        # MarketDataProvider interface. The `market_data:` config section is
+        # translated to its runtime form here — the single point where
+        # operational settings enter the data subsystem.
+        self.provider = provider or build_provider(
+            data_dir / "cache.db",
+            config=MarketDataConfig.from_mapping(config.market_data.model_dump()))
         self.broker = broker or create_broker(
             config, data_dir / "paper.db", config.risk.starting_balance
         )

@@ -427,6 +427,183 @@ def scenario_diagnostics_integrity(iterations: int) -> None:
           "the whole trace ring is JSON-serializable")
 
 
+def scenario_health_accounting(iterations: int) -> None:
+    """Health counters must survive abuse and stay internally consistent.
+
+    Every upstream call has to be exactly one request in the totals. Two
+    V0.5.3 paths can violate that if they are wrong: a validation reject
+    (recorded as a success by the adapter, then reclassified) and an adapter
+    that raises past its own handler.
+    """
+    print("\nhealth accounting")
+    good = Chaos("good", "healthy", priority=10)
+    junk = Chaos("junk", "garbage", priority=20)
+    svc = service(good, junk)
+    for i in range(40):
+        svc.invalidate()
+        ask(svc, f"SYM{i % 7}")
+
+    m = good.monitor
+    check(m.requests == m.successes + m.failures + m.empties,
+          f"every request is exactly one outcome "
+          f"({m.requests} = {m.successes}+{m.failures}+{m.empties})")
+    check(m.requests == good.requests,
+          f"the monitor counted every upstream call once "
+          f"({m.requests} vs {good.requests} made)")
+
+    rejected = Chaos("rejected", "wrong_interval", priority=10)
+    svc2 = service(rejected, Chaos("ok", "healthy", priority=20))
+    for i in range(12):
+        svc2.invalidate()
+        ask(svc2, f"SYM{i}")
+    rm = rejected.monitor
+    check(rm.successes == 0 and rm.failures > 0,
+          f"a provider serving unusable bars is counted as failing "
+          f"(ok={rm.successes} failed={rm.failures})")
+    check(rm.requests == rejected.requests,
+          f"a reclassified request is still counted once "
+          f"({rm.requests} vs {rejected.requests})")
+    # It is demoted rather than breaker-tripped: ranking routes around it after
+    # the FIRST bad answer, so it never gets the three consecutive failures a
+    # trip needs. That is the better outcome — one wasted request, not three.
+    first = svc2.registry.candidates("SPY", Timeframe.M5)[0].provider_name
+    check(first == "ok",
+          f"a provider serving unusable bars stops being asked first ({first})")
+    check(rejected.requests <= 2,
+          f"and it is not re-asked on every subsequent request "
+          f"({rejected.requests} of 12)")
+
+    ranged = Chaos("ranged", "unknown_symbol", priority=10)
+    svc3 = service(ranged, Chaos("ok2", "healthy", priority=20))
+    for i in range(10):
+        svc3.invalidate()
+        ask(svc3, f"SYM{i}")
+    check(ranged.monitor.failures == 0 and ranged.monitor.available(),
+          "symbol errors never count against health or trip the breaker")
+
+
+def scenario_ranking_under_load(iterations: int) -> None:
+    """Dynamic ranking must reorder toward the healthy provider, never oscillate
+    into asking nobody, and never starve a request."""
+    print("\ndynamic provider ranking")
+    # A flapping primary against a healthy tertiary. Latency alone is not used
+    # here: one priority step is deliberately worth a full SECOND of latency,
+    # so a stress run would have to sleep for minutes to demonstrate it. The
+    # unit tests cover the latency scale exactly; this covers the behaviour
+    # under sustained load, which is reliability-driven reordering.
+    flaky = Chaos("flaky", "flapping", priority=10, seed=11)
+    healthy = Chaos("healthy", "healthy", priority=30)
+    svc = service(flaky, healthy)
+
+    served = 0
+    for i in range(60):
+        svc.invalidate()
+        if ask(svc, f"SYM{i % 9}").bars:
+            served += 1
+    check(served == 60, f"every request served while ranking shifted ({served}/60)")
+
+    order = [a.provider_name for a in svc.registry.candidates("SPY", Timeframe.M5)]
+    check(order[0] == "healthy",
+          f"the reliable provider was promoted over its static priority ({order})")
+    check(healthy.requests > flaky.requests,
+          f"and it is the one actually being asked "
+          f"(healthy={healthy.requests} flaky={flaky.requests})")
+
+    # Static ordering must be exactly restorable — the documented escape hatch.
+    from optionspilot.data.config import MarketDataConfig
+    pinned = MarketDataService(
+        ProviderRegistry([Chaos("a", "flapping", priority=10, seed=2),
+                          Chaos("b", "healthy", priority=20)],
+                         config=MarketDataConfig(dynamic_ranking=False)),
+        clock=lambda: NOW)
+    for i in range(20):
+        pinned.invalidate()
+        ask(pinned, f"SYM{i}")
+    check([a.provider_name
+           for a in pinned.registry.candidates("SPY", Timeframe.M5)] == ["a", "b"],
+          "dynamic_ranking=false pins the static order under the same load")
+
+    ranking = svc.registry.ranking()
+    check([r["position"] for r in ranking] == list(range(1, len(ranking) + 1)),
+          "the ranking report is contiguous and ordered")
+
+    # A total outage must still fail over rather than pick a favourite.
+    dead_svc = service(Chaos("d1", "dead", priority=10),
+                       Chaos("d2", "dead", priority=20))
+    check(ask(dead_svc).outcome == OUTCOME_FAILED,
+          "with every provider dead the ranking still yields an explicit failure")
+
+
+def scenario_diagnostics_export(iterations: int) -> None:
+    """The export must render from any state, including a broken one — it is
+    most valuable exactly when something has gone wrong."""
+    print("\ndiagnostics export")
+    from optionspilot.data.report import render
+
+    svc = service(Chaos("flap", "flapping", priority=10, seed=5),
+                  Chaos("dead", "dead", priority=20))
+    for i in range(25):
+        svc.invalidate()
+        ask(svc, f"SYM{i % 4}")
+
+    payload = svc.health()
+    payload["traces"] = svc.diagnostics.recent(25)
+    payload["available"] = True
+
+    import json
+    check(bool(json.dumps(payload)), "the whole health payload is JSON-serializable")
+
+    text = render(payload, traces=10)
+    check("PROVIDERS" in text and "CACHE" in text and "REQUESTS" in text,
+          "the text report renders every section")
+    check("Traceback" not in text and ".py\", line" not in text,
+          "the report leaks no stack traces")
+    check(bool(render({"available": True})),
+          "an empty payload still renders rather than raising")
+    check(bool(render({"available": False, "reason": "no provider"})),
+          "an unavailable subsystem renders its reason")
+
+
+def scenario_replay(iterations: int) -> None:
+    """Replay must poll every provider, survive hostile ones, and never crash."""
+    print("\nreplay + provider comparison")
+    from optionspilot.data.replay import compare_providers, replay
+
+    good = Chaos("good", "healthy", priority=10)
+    dead = Chaos("dead", "dead", priority=20)
+    junk = Chaos("junk", "garbage", priority=30)
+    svc = service(good, dead, junk)
+    result = ask(svc)
+    trace = svc.diagnostics.find(result.trace_id)
+
+    replayed = replay(svc, trace)
+    check(len(replayed.answers) == 3,
+          f"every provider was polled, not just the winner "
+          f"({len(replayed.answers)})")
+    check(any(a.error for a in replayed.answers),
+          "a failing provider is reported rather than hidden")
+    check(replayed.service_outcome in (OUTCOME_LIVE, "memo", "cache"),
+          f"the live chain still answered ({replayed.service_outcome})")
+
+    import json
+    check(bool(json.dumps(replayed.as_dict())), "a replay result serializes")
+
+    # An adapter that raises past its own handler must not kill the replay.
+    class Exploding(Chaos):
+        def _fetch_native(self, *a, **kw):
+            raise RuntimeError("catastrophe")
+
+    from optionspilot.data.adapter import HistoryRequest
+    comparison = compare_providers(
+        ProviderRegistry([Exploding("boom", priority=10),
+                          Chaos("fine", "healthy", priority=20)]),
+        HistoryRequest("SPY", Timeframe.M5, NOW - timedelta(days=5), NOW),
+        now=NOW)
+    check("catastrophe" in comparison.answers[0].error,
+          "an exploding adapter is reported, not propagated")
+    check(comparison.answers[1].ok, "and the healthy provider still answers")
+
+
 # ── live probes ──────────────────────────────────────────────────────────────
 
 def live_probes() -> None:
@@ -510,6 +687,10 @@ def main() -> int:
         scenario_memory(args.iterations)
         scenario_thread_safety(args.iterations, tmp)
         scenario_diagnostics_integrity(args.iterations)
+        scenario_health_accounting(args.iterations)
+        scenario_ranking_under_load(args.iterations)
+        scenario_diagnostics_export(args.iterations)
+        scenario_replay(args.iterations)
         if args.live:
             live_probes()
     finally:

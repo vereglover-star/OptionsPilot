@@ -317,12 +317,35 @@ Two config layers, by design:
 directly in `config.yaml` (`engine: operating_mode: human`) — documented
 with an inline comment there since 2026-07-16, matching `trading_mode`.
 
+**`market_data:` (V0.5.3)** is a startup-only `config.yaml` section owning every
+operational knob of the data subsystem: per provider `enabled` / `priority` /
+`timeout` / `max_attempts` / `retry_backoff` / `min_request_interval` /
+`breaker_threshold` / `breaker_base_cooldown` / `breaker_max_cooldown` /
+`min_quality_score`, plus `dynamic_ranking`, `memo_max_entries`,
+`structured_logging`, `capability_discovery`, `capability_refresh_days` and a
+`cache:` block (`enabled`, `retention_days`, `warn_bytes`). Full reference:
+`docs/MARKET_DATA.md` §16.
+
+There is a **layering subtlety worth knowing before you touch it**: `data/` may
+import only `core/`, and `config/` may not import `data/` (both enforced by
+`tests/test_architecture.py`). So the runtime shape is frozen dataclasses in
+`data/config.py`, the validated YAML face is
+`config/settings.py::MarketDataConfigSection`, and the translation
+(`MarketDataConfig.from_mapping(cfg.market_data.model_dump())`) happens in
+`orchestrator.py` — the composition root that already imports both. Keys map
+1:1 and two tests assert the key sets are identical, so adding a field to one
+and forgetting the other fails the suite rather than silently dropping it.
+An unknown key raises at startup; an unknown *provider* is accepted, so a
+config can pin a future provider's settings before its adapter ships.
+
 ## APIs and endpoints (FastAPI, `optionspilot/ui/server.py`)
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Serves `static/index.html` |
-| GET | `/api/diagnostics/marketdata?traces=N` | Everything needed to diagnose a chart complaint without reproducing it (V0.5.2): per-provider health (availability, failure rate, latency, rolling data-quality score, circuit-breaker and rate-limit state), cache stats (bars/symbols/bytes/schema version/rebuilds/bars-by-provider), aggregate request outcomes, and the last N request traces — each naming every provider tried, why each was skipped or failed, which tier answered, and what validation found. Returns `{"available": false}` rather than erroring when the injected provider predates this architecture |
+| GET | `/api/diagnostics/marketdata?traces=N` | Everything needed to diagnose a chart complaint without reproducing it (V0.5.2): per-provider health (availability, failure rate, latency, rolling data-quality score, circuit-breaker and rate-limit state), cache stats (bars/symbols/bytes/schema version/rebuilds/bars-by-provider), aggregate request outcomes, and the last N request traces — each naming every provider tried, why each was skipped or failed, which tier answered, and what validation found. Returns `{"available": false}` rather than erroring when the injected provider predates this architecture. **V0.5.3** adds, per provider: `rank` and `state` (closed/open/half_open), `p95_latency_ms`, `success_rate`, `requests_today`, `timeouts`, `validation_failures`, `rate_limits`, `breaker_trips`, `last_success_at`, `intervals`, and the `config` in force; plus top-level `ranking` (ordered, with positions), `memo` (entries/max), `config`, `version`, and richer `cache` metrics (hit rate, stale reads, evictions, average age, `provider_requests_saved`, span held). Each trace also carries `chain` — every provider tried and its verdict, the same string the structured log line uses. This is the payload **Help ▸ Diagnostics** renders |
+| GET | `/api/diagnostics/marketdata/export?format=json\|text&traces=N` | The same payload as a dated download (`Content-Disposition: attachment`). `format=text` renders `data/report.py`'s human-readable report — built to be safe to paste into a public issue tracker (no stack traces, no filesystem paths, no credentials) |
+| POST | `/api/diagnostics/marketdata/replay` | `{"trace_id": N}` — re-run a recorded request through the live ladder AND poll every provider directly, returning each one's bars, latency, quality and disagreement against the first that answered. POST because it is not free: one upstream request per provider, deliberately bypassing the memo and cache so it measures the real chain. 400 without a `trace_id`, 404 for a trace no longer in the ring or a provider that cannot support replay |
 | GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes, scan progress) — also pushed over `/ws` |
 | POST | `/api/scan` | Run one cycle: non-blocking by default (background thread; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous |
 | GET | `/api/journal` | Trade history + stats |
@@ -429,7 +452,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (880 tests as of this writing, all passing)
+# Tests (1052 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -524,7 +547,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (880 tests cover this
+   exercises the FastAPI layer via `TestClient` (1052 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

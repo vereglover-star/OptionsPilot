@@ -309,6 +309,53 @@ tr.atm-marker td::before, tr.atm-marker td::after { content:"—"; margin:0 8px;
   color:var(--muted); padding:10px 6px; }
 .modal.update .acts .btn.linky:hover { color:var(--ink); }
 
+/* ── market-data diagnostics dashboard (Help ▸ Diagnostics) ─────────────── */
+.modal.diag { width:min(1020px, 96vw); max-width:1020px; max-height:90vh;
+  display:flex; flex-direction:column; }
+.diag-head { display:flex; align-items:center; justify-content:space-between;
+  gap:12px; margin-bottom:12px; }
+.diag-head h3 { margin:0; }
+.diag-body { overflow-y:auto; flex:1; padding-right:4px; }
+.diag-sec { margin-bottom:18px; }
+.diag-sec > h4 { font-size:var(--fs-sm); text-transform:uppercase;
+  letter-spacing:.6px; color:var(--muted); margin:0 0 8px; }
+.diag-cards { display:grid; gap:10px;
+  grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); }
+.diag-card { background:var(--surface-2); border:1px solid var(--baseline);
+  border-radius:var(--r-md); padding:12px 14px; }
+.diag-card .dc-top { display:flex; align-items:center; justify-content:space-between;
+  gap:8px; margin-bottom:8px; }
+.diag-card .dc-name { font-weight:600; }
+.diag-card .dc-rank { color:var(--muted); font-size:var(--fs-sm);
+  font-variant-numeric:tabular-nums; }
+.diag-pill { font-size:var(--fs-xs); padding:2px 8px; border-radius:999px;
+  border:1px solid var(--baseline); white-space:nowrap; }
+.diag-pill.ok { color:var(--success); border-color:var(--success); }
+.diag-pill.warn { color:var(--warn, #d08c1a); border-color:var(--warn, #d08c1a); }
+.diag-pill.bad { color:var(--danger); border-color:var(--danger); }
+.diag-kv { display:grid; grid-template-columns:auto 1fr; gap:3px 12px;
+  font-size:var(--fs-sm); }
+.diag-kv span { color:var(--muted); }
+.diag-kv b { font-weight:500; font-variant-numeric:tabular-nums;
+  overflow-wrap:anywhere; }
+.diag-meter { height:5px; border-radius:4px; background:var(--surface);
+  overflow:hidden; margin:8px 0 4px; }
+.diag-meter > span { display:block; height:100%; background:var(--accent); }
+.diag-err { color:var(--danger); font-size:var(--fs-xs); margin-top:6px;
+  overflow-wrap:anywhere; }
+.diag-scroll { overflow-x:auto; }
+.diag-tbl { width:100%; border-collapse:collapse; font-size:var(--fs-sm);
+  font-variant-numeric:tabular-nums; }
+.diag-tbl th, .diag-tbl td { text-align:left; padding:5px 8px; white-space:nowrap;
+  border-bottom:1px solid var(--baseline); }
+.diag-tbl th { color:var(--muted); font-weight:500; }
+.diag-tbl tr.clickable { cursor:pointer; }
+.diag-tbl tr.clickable:hover td { background:var(--surface-2); }
+.diag-tbl td.chain { white-space:normal; color:var(--muted); font-size:var(--fs-xs); }
+.diag-note { color:var(--muted); font-size:var(--fs-xs); margin-top:6px; }
+.diag-replay { background:var(--surface-2); border:1px solid var(--baseline);
+  border-radius:var(--r-md); padding:10px 12px; margin-top:8px; }
+
 /* ── update panel in Settings ───────────────────────────────────────────── */
 .upd-settings-row { display:flex; justify-content:space-between; align-items:center;
   gap:12px; padding:8px 0; border-bottom:1px solid var(--baseline); }
@@ -599,6 +646,8 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
               aria-expanded="false">Help ▾</button>
       <div class="help-menu" id="help-menu" role="menu">
         <button id="help-check-update" role="menuitem">Check for Updates…</button>
+        <button id="help-diagnostics" role="menuitem">Diagnostics
+          <span class="help-note">Market data</span></button>
         <button id="help-about" role="menuitem">About OptionsPilot
           <span class="help-note" id="help-about-ver">…</span></button>
       </div>
@@ -1103,6 +1152,24 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
       <div><span>This reference</span><b>?</b></div>
     </div>
     <div class="acts"><button class="btn" id="keys-close">Close</button></div>
+  </div>
+</div>
+
+<!-- market-data diagnostics (Help ▸ Diagnostics) -->
+<div class="overlay" id="diag-overlay">
+  <div class="modal diag" role="dialog" aria-labelledby="diag-title" aria-modal="true">
+    <div class="diag-head">
+      <h3 id="diag-title">Market data diagnostics</h3>
+      <div class="acts" style="flex:0 0 auto">
+        <button class="btn" id="diag-refresh">Refresh</button>
+        <button class="btn" id="diag-export-text">Export report</button>
+        <button class="btn" id="diag-export-json">Export JSON</button>
+        <button class="btn" id="diag-close">Close</button>
+      </div>
+    </div>
+    <div class="diag-body" id="diag-body">
+      <p class="diag-note">Loading…</p>
+    </div>
   </div>
 </div>
 
@@ -4484,6 +4551,7 @@ const Updater = (() => {
     document.addEventListener("click", e => {
       if (!menu.contains(e.target) && e.target !== btn) closeMenu(); });
     $("help-check-update").onclick = () => { closeMenu(); checkNow(true); };
+    $("help-diagnostics").onclick = () => { closeMenu(); Diagnostics.open(); };
     $("help-about").onclick = () => { closeMenu();
       toast("Hello from v" + (snap ? snap.current_version : "?") + "!"); };
     document.addEventListener("keydown", e => {
@@ -4508,9 +4576,255 @@ const Updater = (() => {
   return {init};
 })();
 
+/* ── market-data diagnostics (Help ▸ Diagnostics) ────────────────────────
+   A read-only view over GET /api/diagnostics/marketdata. It computes nothing:
+   every number shown is rendered straight from that payload, which is the same
+   payload the JSON and text exports carry, so a screenshot, an export and a
+   log line can never disagree about what happened.
+
+   Nothing here polls. The page is opened deliberately, refreshed on request,
+   and closed — a diagnostics screen that fetched on a timer would itself
+   become traffic in the traces it is displaying. */
+const Diagnostics = (() => {
+  let data = null;
+  const overlay = () => $("diag-overlay");
+  const isOpen = () => overlay().classList.contains("show");
+  const num = (v, dp = 0) =>
+    (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(dp);
+  const pct = v => (v === null || v === undefined) ? "—" : (v * 100).toFixed(1) + "%";
+  const bytes = v => {
+    if (!v) return "—";
+    const u = ["B", "KB", "MB", "GB"]; let n = Number(v), i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(1) + " " + u[i];
+  };
+  const ago = s => {
+    if (s === null || s === undefined) return "never";
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + "m ago";
+    if (s < 172800) return (s / 3600).toFixed(1) + "h ago";
+    return (s / 86400).toFixed(1) + "d ago";
+  };
+
+  async function load() {
+    $("diag-body").innerHTML = '<p class="diag-note">Loading…</p>';
+    try {
+      data = await (await fetch("/api/diagnostics/marketdata?traces=40")).json();
+    } catch (e) {
+      data = null;
+      $("diag-body").innerHTML =
+        '<p class="diag-note">Could not reach the diagnostics endpoint.</p>';
+      return;
+    }
+    render();
+  }
+
+  function render() {
+    if (!data) return;
+    if (data.available === false) {
+      $("diag-body").innerHTML = '<p class="diag-note">' +
+        esc(data.reason || "diagnostics are not available for this provider") +
+        "</p>";
+      return;
+    }
+    $("diag-body").innerHTML =
+      providers() + requests() + cache() + traces();
+    // Row clicks replay that request. Bound here rather than inline so the
+    // markup stays free of handlers and re-rendering cannot leave stale ones.
+    $("diag-body").querySelectorAll("tr.clickable").forEach(tr =>
+      tr.onclick = () => replay(Number(tr.dataset.trace)));
+  }
+
+  function statePill(p) {
+    if (p.state === "open")
+      return '<span class="diag-pill bad">out of rotation' +
+        (p.circuit_open_for ? " · " + num(p.circuit_open_for) + "s" : "") + "</span>";
+    if (p.rate_limited_for)
+      return '<span class="diag-pill warn">rate limited · ' +
+        num(p.rate_limited_for) + "s</span>";
+    if (p.state === "half_open")
+      return '<span class="diag-pill warn">probing</span>';
+    return '<span class="diag-pill ok">healthy</span>';
+  }
+
+  function providers() {
+    const list = data.providers || [];
+    if (!list.length)
+      return sec("Providers", '<p class="diag-note">None registered.</p>');
+    const cards = list.map((p, i) => {
+      const q = Math.max(0, Math.min(100, Number(p.data_quality_score) || 0));
+      return '<div class="diag-card">' +
+        '<div class="dc-top">' +
+          '<span class="dc-name">' + (i + 1) + ". " + esc(p.name) + "</span>" +
+          statePill(p) +
+        "</div>" +
+        '<div class="dc-rank">rank ' + num(p.rank, 2) +
+          " · configured priority " + esc(p.priority) + "</div>" +
+        '<div class="diag-meter"><span style="width:' + q + '%"></span></div>' +
+        '<div class="diag-kv">' +
+          kv("Success rate", pct(p.success_rate)) +
+          kv("Latency", num(p.avg_latency_ms) + " ms avg · " +
+                        num(p.p95_latency_ms) + " ms p95") +
+          kv("Requests", esc(p.requests) + " total · " +
+                         esc(p.requests_today) + " today") +
+          kv("Outcomes", esc(p.successes) + " ok · " + esc(p.failures) +
+                         " failed · " + esc(p.empties) + " empty") +
+          kv("Data quality", num(p.data_quality_score, 1)) +
+          kv("Timeouts", esc(p.timeouts)) +
+          kv("Validation fails", esc(p.validation_failures)) +
+          kv("Rate limits", esc(p.rate_limits)) +
+          kv("Breaker trips", esc(p.breaker_trips)) +
+          kv("Last success", ago(p.seconds_since_success)) +
+          kv("Serves", esc((p.intervals || []).join(", ") || "—")) +
+        "</div>" +
+        (p.last_error
+          ? '<div class="diag-err">Last error: ' + esc(p.last_error) + "</div>"
+          : "") +
+      "</div>";
+    }).join("");
+    return sec("Providers — ranked best first",
+      '<div class="diag-cards">' + cards + "</div>" +
+      '<p class="diag-note">Rank starts at the configured priority and moves ' +
+      'with measured latency, failure rate and data quality, so the fastest ' +
+      'healthy source is asked first.</p>');
+  }
+
+  function requests() {
+    const r = data.requests || {};
+    const o = r.outcomes || {};
+    const outcomes = Object.keys(o).filter(k => o[k])
+      .map(k => esc(k) + " " + esc(o[k])).join(" · ") || "—";
+    return sec("Requests this session",
+      '<div class="diag-cards"><div class="diag-card"><div class="diag-kv">' +
+        kv("Total", esc(r.total_requests || 0)) +
+        kv("Served", esc(r.served || 0)) +
+        kv("Success rate", pct(r.success_rate)) +
+        kv("From a provider", pct(r.live_rate)) +
+        kv("Avg duration", num(r.avg_duration_ms) + " ms") +
+        kv("Slowest", num(r.slowest_ms) + " ms") +
+        kv("Outcomes", outcomes) +
+        kv("Memo entries", esc((data.memo || {}).entries ?? "—") + " / " +
+                          esc((data.memo || {}).max_entries ?? "—")) +
+      "</div></div></div>");
+  }
+
+  function cache() {
+    const c = data.cache;
+    if (!c)
+      return sec("Cache", '<p class="diag-note">No local candle cache in ' +
+        "this session.</p>");
+    const byProv = Object.entries(c.by_provider || {})
+      .map(([k, v]) => esc(k) + " " + esc(v)).join(" · ") || "—";
+    return sec("Cache",
+      '<div class="diag-cards"><div class="diag-card"><div class="diag-kv">' +
+        kv("Stored", esc(c.bars || 0) + " bars · " + esc(c.symbols || 0) +
+                     " symbols · " + bytes(c.bytes)) +
+        kv("Hit rate", pct(c.hit_rate) + " (" + esc(c.hits || 0) + " of " +
+                       esc(c.reads || 0) + ")") +
+        kv("Upstream saved", esc(c.provider_requests_saved || 0) + " requests") +
+        kv("Average age", ago(c.avg_age_seconds)) +
+        kv("Stale reads", esc(c.stale_reads || 0)) +
+        kv("Writes", esc(c.writes || 0) + " · " + esc(c.bars_written || 0) +
+                     " bars") +
+        kv("Evictions", esc(c.evictions || 0)) +
+        kv("Rebuilds", esc(c.rebuilds || 0) + " · errors " + esc(c.errors || 0)) +
+        kv("Written by", byProv) +
+        kv("Schema", "v" + esc(c.schema_version)) +
+      "</div></div></div>" +
+      (c.oversized ? '<p class="diag-note">The cache file has passed its ' +
+        "configured warning size.</p>" : ""));
+  }
+
+  function traces() {
+    const list = data.traces || [];
+    if (!list.length)
+      return sec("Recent requests", '<p class="diag-note">None recorded yet.</p>');
+    const rows = list.map(t =>
+      '<tr class="clickable" data-trace="' + esc(t.id) + '">' +
+        "<td>#" + esc(t.id) + "</td>" +
+        "<td>" + esc(t.symbol) + " " + esc(t.timeframe) + "</td>" +
+        "<td>" + esc(t.outcome) + "</td>" +
+        "<td>" + esc(t.provider || "—") + "</td>" +
+        "<td>" + esc(t.bars) + "</td>" +
+        "<td>" + num(t.duration_ms) + " ms</td>" +
+        '<td class="chain">' + esc(t.chain || "—") + "</td>" +
+      "</tr>").join("");
+    return sec("Recent requests",
+      '<div class="diag-scroll"><table class="diag-tbl">' +
+        "<thead><tr><th>#</th><th>Request</th><th>Outcome</th><th>Provider</th>" +
+        "<th>Bars</th><th>Took</th><th>Providers tried</th></tr></thead>" +
+        "<tbody>" + rows + "</tbody></table></div>" +
+      '<div id="diag-replay-out"></div>' +
+      '<p class="diag-note">Click a request to replay it and compare every ' +
+      "provider's answer. A replay spends one live request per provider.</p>");
+  }
+
+  async function replay(traceId) {
+    const out = $("diag-replay-out");
+    if (!out) return;
+    out.innerHTML = '<div class="diag-replay">Replaying #' + esc(traceId) +
+      "…</div>";
+    let res;
+    try {
+      res = await (await fetch("/api/diagnostics/marketdata/replay",
+        {method: "POST", headers: {"Content-Type": "application/json"},
+         body: JSON.stringify({trace_id: traceId})})).json();
+    } catch (e) {
+      out.innerHTML = '<div class="diag-replay">Replay failed.</div>';
+      return;
+    }
+    if (res.error) {
+      out.innerHTML = '<div class="diag-replay">' + esc(res.error) + "</div>";
+      return;
+    }
+    const rows = (res.answers || []).map(a =>
+      "<tr><td>" + esc(a.provider) + "</td>" +
+      "<td>" + (a.skipped ? esc(a.skipped)
+                          : (a.ok ? "answered" : "failed")) + "</td>" +
+      "<td>" + esc(a.bars) + "</td>" +
+      "<td>" + num(a.duration_ms) + " ms</td>" +
+      "<td>" + (a.quality === null || a.quality === undefined
+                ? "—" : num(a.quality, 1)) + "</td>" +
+      "<td>" + (a.disagreement === null || a.disagreement === undefined
+                ? "—" : (a.disagreement * 100).toFixed(2) + "%") + "</td>" +
+      '<td class="chain">' + esc(a.error || "") + "</td></tr>").join("");
+    const svc = res.service || {};
+    out.innerHTML = '<div class="diag-replay">' +
+      "<b>Replay of " + esc(res.symbol) + " " + esc(res.timeframe) + "</b>" +
+      '<div class="diag-note">Through the live chain: ' + esc(svc.outcome) +
+        " · " + esc(svc.bars) + " bars · via " + esc(svc.provider || "—") +
+        ". Providers " + (res.agreed ? "agreed" : "DISAGREED") + ".</div>" +
+      '<div class="diag-scroll"><table class="diag-tbl">' +
+      "<thead><tr><th>Provider</th><th>Result</th><th>Bars</th><th>Took</th>" +
+      "<th>Quality</th><th>Differs</th><th>Error</th></tr></thead><tbody>" +
+      rows + "</tbody></table></div></div>";
+  }
+
+  const kv = (k, v) => "<span>" + k + "</span><b>" + v + "</b>";
+  const sec = (title, body) =>
+    '<div class="diag-sec"><h4>' + title + "</h4>" + body + "</div>";
+
+  function open() { overlay().classList.add("show"); load(); }
+  function close() { overlay().classList.remove("show"); }
+
+  function init() {
+    $("diag-close").onclick = close;
+    $("diag-refresh").onclick = load;
+    $("diag-export-text").onclick = () =>
+      window.open("/api/diagnostics/marketdata/export?format=text&traces=50");
+    $("diag-export-json").onclick = () =>
+      window.open("/api/diagnostics/marketdata/export?format=json&traces=50");
+    overlay().onclick = e => { if (e.target === overlay()) close(); };
+    document.addEventListener("keydown", e => {
+      if (e.key === "Escape" && isOpen()) close(); });
+  }
+  return {init, open};
+})();
+
 refresh();
 connectWS();
 Updater.init();
+Diagnostics.init();
 </script>
 </body>
 </html>

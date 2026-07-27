@@ -43,7 +43,7 @@ class LegacyProviderAdapter(HistoryAdapter):
 
     provider_priority = 50
 
-    def __init__(self, inner: MarketDataProvider):
+    def __init__(self, inner: MarketDataProvider, config=None):
         self._inner = inner
         self.provider_name = getattr(inner, "name", None) or type(inner).__name__
         self.capabilities = LEGACY_CAPABILITIES
@@ -51,7 +51,7 @@ class LegacyProviderAdapter(HistoryAdapter):
         # kwarg. Plain 4-argument providers (test fakes, older adapters) must
         # keep working, so we only pass it when the signature has it.
         self._takes_extended = _accepts_extended_hours(inner.get_candles)
-        super().__init__()
+        super().__init__(config)
 
     def _fetch_native(self, symbol: str, spec: IntervalSpec,
                       start: datetime, end: datetime,

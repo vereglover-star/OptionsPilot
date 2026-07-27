@@ -298,6 +298,35 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   touched the chart.** It was silently failing at check 12 for several sessions
   before V0.5.2, and running it is what surfaced the memo bug above — a real
   data-layer defect that no unit test and no amount of clicking had found.
+- **A counter that two objects both maintain will drift, and the drift will
+  hide bugs.** Provider health lived in `adapter.ProviderHealth` (counters) and
+  `registry._Breaker` (rotation), with the breaker's trip condition being a read
+  of the adapter's counter. Consolidating them into
+  `data/health.py::ProviderHealthMonitor` in V0.5.3 immediately exposed two real
+  defects that had shipped in V0.5.2: a provider answering every request with
+  *unusable* bars was recorded by the adapter as a **success** (the service's
+  validation reject was counted nowhere), so it never tripped its breaker and
+  held the head of the chain forever; and once that was fixed, the demotion
+  could only ever reach a streak of 1, because recording the success had already
+  zeroed the streak. If you add a second place that tracks the same fact, expect
+  the same class of bug.
+- **When you reclassify an outcome, move the counters — don't add new ones.**
+  The adapter records a success as soon as the transport parses; the service may
+  then reject the bars. Recording a fresh failure there would make one upstream
+  call count as two requests and halve every provider's apparent failure rate.
+  `demote_last_success` exists for exactly this.
+- **A lifetime failure rate never decays.** Ranking on one meant five failures
+  during a two-minute outage kept a provider demoted for thousands of later
+  requests. Anything that feeds a "how healthy is this right now" decision wants
+  a bounded window (`health.OUTCOME_WINDOW`), not a lifetime total. Lifetime
+  totals are still the right thing to *report*.
+- **`config/` and `data/` may not import each other**, and
+  `tests/test_architecture.py` enforces it in both directions — including
+  imports inside a function body, which the AST walker still sees. A pydantic
+  config section that needs a runtime counterpart in `data/` is translated in
+  `orchestrator.py` (the composition root that already imports both), with tests
+  asserting the two key sets are identical so a field added to one and forgotten
+  in the other fails the suite.
 - PyInstaller only bundles what it can see in literal `import` statements.
   A lazy `importlib.import_module("...")` (added for startup speed in
   `f1bae42`) silently dropped yfinance from every exe built afterwards —

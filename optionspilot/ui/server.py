@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import json
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from optionspilot import __version__
@@ -37,6 +37,8 @@ from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
 from optionspilot.core.paths import AppPaths
+from optionspilot.data import replay as mdreplay
+from optionspilot.data import report as mdreport
 from optionspilot.data import sessions
 from optionspilot.data import symbols as symdir
 from optionspilot.data.base import validate_candles
@@ -417,7 +419,36 @@ class UIServer:
         payload = health()
         payload["available"] = True
         payload["traces"] = diagnostics.recent(max(0, min(traces, 200)))
+        payload["version"] = __version__
         return payload
+
+    def marketdata_report(self, traces: int = 25) -> str:
+        """The same diagnostics rendered as plain text for a bug report.
+
+        Rendering happens in `data/report.py` over the *same* payload the JSON
+        export and the dashboard use, so the three can never disagree about a
+        number."""
+        return mdreport.render(self.marketdata_diagnostics(traces),
+                               traces=traces,
+                               title=f"OptionsPilot v{__version__} — market "
+                                     f"data diagnostics")
+
+    def marketdata_replay(self, trace_id: int) -> dict:
+        """Re-run a recorded request and poll every provider directly.
+
+        This spends real upstream requests, so it is a POST triggered by an
+        explicit click on the diagnostics page — never anything the chart or a
+        background timer can reach.
+        """
+        service = getattr(self.orch.provider, "service", None)
+        diagnostics = getattr(self.orch.provider, "diagnostics", None)
+        if service is None or diagnostics is None:
+            return {"error": "this provider does not support replay"}
+        trace = diagnostics.find(trace_id)
+        if trace is None:
+            return {"error": f"no trace {trace_id} in the ring "
+                             f"(it holds the most recent requests only)"}
+        return mdreplay.replay(service, trace).as_dict()
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
@@ -788,6 +819,48 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         (which providers were tried, why each was skipped or failed, which tier
         answered, and what validation found)."""
         return server.marketdata_diagnostics(traces)
+
+    @app.get("/api/diagnostics/marketdata/export")
+    def marketdata_export(format: str = "json", traces: int = 50):
+        """The diagnostics payload as a downloadable attachment.
+
+        `format=text` renders the human-readable report a user can paste into
+        an issue; `format=json` is the same data verbatim for tooling. Both are
+        served as attachments with a dated filename so a bug report arrives
+        with something identifiable rather than `download (3)`.
+        """
+        stamp = utcnow().strftime("%Y%m%d-%H%M%S")
+        if format == "text":
+            return PlainTextResponse(
+                server.marketdata_report(traces),
+                headers={"Content-Disposition": "attachment; filename="
+                         f"optionspilot-diagnostics-{stamp}.txt"})
+        return JSONResponse(
+            server.marketdata_diagnostics(traces),
+            headers={"Content-Disposition": "attachment; filename="
+                     f"optionspilot-diagnostics-{stamp}.json"})
+
+    @app.post("/api/diagnostics/marketdata/replay")
+    def marketdata_replay(payload: dict | None = None):
+        """Re-run one recorded request and compare every provider's answer.
+
+        POST because it is not free: it spends one upstream request per
+        provider, deliberately bypassing the memo and the cache so it measures
+        the real chain rather than the answer being investigated.
+        """
+        trace_id = int((payload or {}).get("trace_id", 0))
+        if trace_id <= 0:
+            return JSONResponse({"error": "trace_id is required"},
+                                status_code=400)
+        try:
+            result = server.marketdata_replay(trace_id)
+        except Exception as exc:  # noqa: BLE001 — a diagnostic must not 500
+            log.error("marketdata replay failed: %s", exc)
+            return JSONResponse({"error": f"replay failed: {exc}"},
+                                status_code=502)
+        if "error" in result:
+            return JSONResponse(result, status_code=404)
+        return result
 
     @app.get("/api/status")
     def status():

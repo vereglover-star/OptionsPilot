@@ -4,6 +4,129 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-26 — V0.5.3: market-data production readiness
+
+*880 → **1052 tests** (+172); market-data stress 41 → **65 scenarios**;
+`chart_check.py` 49 → **52**. No version bump, no new provider, no
+trading-behavior change. V0.5.2 built the subsystem; this milestone makes it
+**operable** — observable, rankable, configurable, and cheap to extend. Full
+design: `docs/MARKET_DATA.md` §13–22.*
+
+**The theme.** V0.5.2 could serve data correctly but could not tell you *why* it
+had. Health lived in two objects, ordering was a hard-coded constant, every knob
+required a source edit, and diagnosing a user's chart complaint meant reading
+their logs. Nothing here changes what is traded or what the shipped chain
+answers — a cold system produces byte-identical behaviour to V0.5.2.
+
+**1. One owner for provider health** (`data/health.py`, new). A provider's state
+used to live in `adapter.ProviderHealth` (counters) *and* `registry._Breaker`
+(rotation) — one invariant, two owners, with the breaker's trip condition being
+a read of the adapter's counter. `ProviderHealthMonitor` now owns counters,
+latency (EWMA + a real p95 over a 100-sample window), the rate-limit window, the
+circuit breaker, per-day totals and the ranking score together. The policy "a
+range error is not an outage" now exists once, in `COUNTS_AGAINST_HEALTH`,
+rather than being re-derived in three files.
+
+That consolidation immediately exposed **two real accounting bugs**, both
+present since V0.5.2 and both invisible without a single owner:
+
+- **A provider serving consistently-unusable bars never tripped its breaker.**
+  The adapter recorded a *success* as soon as the transport parsed, and the
+  service's validation reject was counted nowhere — so a source answering
+  promptly with garbage kept its place at the head of the chain indefinitely.
+  Fixed with `demote_last_success`, which *moves* the counters rather than
+  adding a second request (recording a fresh failure would have inflated
+  `requests` and halved every provider's apparent failure rate).
+- **A demotion could only ever reach a failure streak of 1**, because recording
+  the success had already zeroed the streak — so a provider failing *every*
+  request oscillated 0 → 1 → 0 → 1 and never reached the threshold.
+
+**2. Dynamic provider ranking** (`registry.candidates`). Ordering was
+`provider_priority`, a constant. It is now `monitor.rank()`: priority as the
+anchor, moved by measured latency, recent failure rate, consecutive failures,
+breaker history and data quality. The scale is deliberate — providers are spaced
+10 apart and **10 rank points is one second of latency** — so Yahoo at 180ms
+still beats Stooq at 320ms, while Yahoo degraded to 2.4s loses to Stooq at
+260ms, exactly as intended. **With no traffic recorded every rank equals its
+priority**, so a cold system reproduces V0.5.2's order precisely; that is what
+makes it safe to ship, and `dynamic_ranking: false` pins it permanently. The
+rank's failure rate is measured over a **moving 50-attempt window**, not
+lifetime: a lifetime rate never decays, so five failures in a two-minute outage
+would demote a provider for thousands of requests after it had recovered.
+
+**3. Diagnostics dashboard + export** (Help ▸ Diagnostics). A read-only page over
+the existing endpoint showing every provider's status, rank, latency (avg/p95),
+success rate, requests today, timeouts, validation failures, rate limits,
+breaker trips, quality, last error and served intervals — plus session
+aggregates, cache intelligence and the recent-request table with each request's
+provider chain. It computes nothing (every number comes from the payload the
+exports carry, so a screenshot and an export cannot disagree) and never polls (a
+diagnostics screen fetching on a timer becomes traffic inside the traces it
+displays). `GET …/export?format=text|json` downloads it as a dated attachment;
+the text rendering (`data/report.py`) is built to be safe to paste into a public
+issue tracker — no stack traces, no paths, no credentials.
+
+**4. Replay + provider comparison** (`data/replay.py`). Clicking any request on
+the dashboard re-runs it and asks **every** provider directly, reporting bars,
+latency, quality and disagreement against the first that answered. It
+deliberately bypasses the memo, cache, failover and breaker, because "what does
+each source actually say?" is a different question from "what does the ladder
+return". There is deliberately **no new recorder** — every request is already
+recorded once in `diagnostics.RequestTrace`, so replay takes a trace id.
+
+**5. Configuration without code changes** (`data/config.py` + `market_data:` in
+`config.yaml`). Per provider: enabled, priority, timeout, retries, backoff,
+throttle, breaker thresholds, minimum quality. Globally: ranking on/off, memo
+cap, structured logging, cache policy and retention. Previously a provider's
+timeout was in its adapter, its retry count a constant in `service.py`, its
+breaker thresholds constants in `registry.py`, and its ordering a class
+attribute. Unknown keys are a startup error (a silently-ignored `timout: 30`
+would do nothing for the life of the install); unknown *providers* are accepted,
+so a config can pin a future provider's settings before its adapter ships.
+Because `data/` may not import `config/`, the runtime shape is dataclasses and
+the pydantic mirror is translated in `orchestrator.py` — with two tests
+asserting the key sets line up exactly.
+
+**6. Cache intelligence** (`cache.CacheMetrics`). "Is the cache working?" used to
+be answerable only as "there are N bars in it". Now: reads, hits, misses, hit
+rate, stale reads, writes, evictions, rebuilds, errors, average age of served
+bars, the span actually held, and `provider_requests_saved` — every hit is one
+upstream request that did not happen. Optional `retention_days` pruning bounds
+the file; off by default, because the deeper the cache the better the last tier
+before a blank chart.
+
+**7. Structured logging.** One `key=value` line per request carrying request id,
+symbol, timeframe, outcome, provider, bars, duration, cache/memo hit, retries,
+fallbacks, the full provider chain, quality and failure reason. Greppable rather
+than JSON on purpose — `logs/data.log` is read by a human looking at a bug
+report. Failures log at WARNING and successes at DEBUG, but **both carry the
+same line**, so raising the log level to chase an intermittent problem gives the
+same fields as the dashboard.
+
+**8. Capability discovery** (`data/discovery.py`) + a benchmark
+(`scripts/marketdata_benchmark.py`). Discovery measures a provider's real depth
+(ladder walk then binary search — a dozen requests per interval, not hundreds),
+persists it to a JSON store and refreshes on a cadence; `marketdata_probe.py`
+now calls into it, so the app and the script cannot disagree about how depth is
+measured. It is **advisory and off by default**: it does not rewrite
+`capabilities.py`, whose numbers sit one day *inside* each measured cliff on
+purpose. `drift()` reports one-directionally — a conservative table costs a
+little depth, an over-promising one produces guaranteed-422s on every scroll.
+The benchmark ranks providers on latency, throughput, quality, disagreement, CPU
+and memory, and reports the health rank each would actually receive.
+
+**Adding a provider is now one file and one registry entry, with the entire
+operational half free** — dashboard row, breaker, configuration section, replay
+participation, benchmark column and ranking, all inherited. See
+`docs/MARKET_DATA.md` §21 for the checklist.
+
+**Verification.** 1052 tests (all offline, no network, no flakes); market-data
+stress 65/65 scenarios; `chart_check.py` 52/52 in a real headless browser —
+including three new checks that open Help ▸ Diagnostics, drive a replay and
+assert the chart survives, since the dashboard is new frontend and the frontend
+is this project's thinnest coverage. `browser_check.py`, `check_html_ids.py`,
+`check_docs.py` and `pip check` all green.
+
 ## [Uncommitted] 2026-07-26 — V0.5.2: the market-data subsystem
 
 *651 → **880 tests** (+229). No version bump, no trading-behavior change. The

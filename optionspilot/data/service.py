@@ -71,7 +71,9 @@ from optionspilot.data.adapter import (
 )
 from optionspilot.data.base import validate_candles
 from optionspilot.data.cache import CandleCache
+from optionspilot.data.config import MarketDataConfig
 from optionspilot.data.diagnostics import Diagnostics, RequestTrace
+from optionspilot.data.health import KIND_INTERNAL, KIND_VALIDATION
 from optionspilot.data.quality import (
     FUTURE_TOLERANCE, HistoryReport, disagreement, validate_history,
 )
@@ -181,16 +183,26 @@ class MarketDataService:
                  cache: CandleCache | None = None,
                  cache_db: str | Path | None = None,
                  diagnostics: Diagnostics | None = None,
+                 config: MarketDataConfig | None = None,
                  clock=None):
-        self.registry = registry if registry is not None else default_registry()
+        # A registry carries its own config; a bare service without one falls
+        # back to the defaults, so every construction path has exactly one
+        # answer to "which config is in force".
+        self.config = config or (registry.config if registry is not None
+                                 else MarketDataConfig())
+        self.registry = (registry if registry is not None
+                         else default_registry(config=self.config))
         self.cache = cache if cache is not None else (
-            CandleCache(cache_db) if cache_db is not None else None)
-        self.diagnostics = diagnostics or Diagnostics()
+            CandleCache(cache_db, config=self.config.cache)
+            if cache_db is not None and self.config.cache.enabled else None)
+        self.diagnostics = diagnostics or Diagnostics(
+            structured_logging=self.config.structured_logging)
         # Injectable so tests drive time deterministically instead of sleeping.
         self._now = clock or (lambda: datetime.now(timezone.utc))
         self._lock = threading.Lock()
         self._mem: dict[tuple, _Entry] = {}
         self._inflight: dict[tuple, threading.Event] = {}
+        self._memo_max = max(1, self.config.memo_max_entries)
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -276,12 +288,24 @@ class MarketDataService:
         return self.get_history(symbol, timeframe, now - span, now)
 
     def health(self) -> dict:
-        """Everything an operator (or a bug report) needs in one object."""
+        """Everything an operator (or a bug report) needs in one object.
+
+        This is the diagnostics dashboard's single data source and the payload
+        the JSON export writes verbatim, so anything the page shows is here and
+        nothing it shows is computed twice.
+        """
         return {
             "providers": self.registry.health_report(),
+            "ranking": self.registry.ranking(),
             "cache": self.cache.stats() if self.cache else None,
             "requests": self.diagnostics.summary(),
+            "memo": {
+                "entries": len(self._mem),
+                "max_entries": self._memo_max,
+            },
+            # Kept flat as well: several callers and one test read it directly.
             "memo_entries": len(self._mem),
+            "config": self.config.as_dict(),
         }
 
     def invalidate(self, symbol: str | None = None) -> int:
@@ -456,8 +480,15 @@ class MarketDataService:
     def _try_one(self, adapter: HistoryAdapter, request: HistoryRequest,
                  trace: RequestTrace,
                  now: datetime) -> tuple[pd.DataFrame | None, bool]:
-        """One provider, with retries. Returns (frame|None, answered_empty)."""
-        for attempt in range(1, MAX_ATTEMPTS_PER_PROVIDER + 1):
+        """One provider, with retries. Returns (frame|None, answered_empty).
+
+        Attempt count and backoff come from the provider's own configuration,
+        so a slow-but-valuable feed can be given a second chance and a fast one
+        can be told to fail over immediately, without editing this loop.
+        """
+        cfg = adapter.config
+        max_attempts = max(1, cfg.max_attempts)
+        for attempt in range(1, max_attempts + 1):
             t0 = _time.monotonic()
             try:
                 raw = adapter.fetch_history(request, now=now)
@@ -470,11 +501,11 @@ class MarketDataService:
                 # or trip its breaker (the adapter already excludes them).
                 if not isinstance(exc, (ProviderRangeError, ProviderSymbolError)):
                     self.registry.record_failure(adapter)
-                if not exc.retryable or attempt == MAX_ATTEMPTS_PER_PROVIDER:
+                if not exc.retryable or attempt == max_attempts:
                     return None, False
                 trace.retries += 1
                 delay = (exc.retry_after if isinstance(exc, ProviderRateLimited)
-                         else RETRY_BACKOFF * attempt)
+                         else cfg.retry_backoff * attempt)
                 if isinstance(exc, ProviderRateLimited):
                     # Never sleep out a rate limit inline — a chart is waiting.
                     # Move to the next provider; the breaker keeps this one out
@@ -488,6 +519,10 @@ class MarketDataService:
                               adapter.provider_name)
                 trace.attempt(adapter.provider_name, "InternalError", elapsed,
                               detail=str(exc)[:200])
+                # The adapter never saw this — it escaped past its own handler
+                # — so the count has to be made here or an adapter bug would be
+                # invisible in the provider's health forever.
+                adapter.monitor.record_failure(KIND_INTERNAL, str(exc)[:200])
                 self.registry.record_failure(adapter)
                 return None, False
 
@@ -501,10 +536,20 @@ class MarketDataService:
                 raw, request.timeframe, now=now,
                 context=f"{adapter.provider_name} {request.symbol} {request.timeframe}")
             adapter.observe_quality(report.score)
-            if not report.usable:
+            usable = report.usable and report.score >= cfg.min_quality_score
+            if not usable:
+                reason = ("; ".join(report.issues)[:200] if not report.usable
+                          else f"quality {report.score:.0f} below the configured "
+                               f"minimum {cfg.min_quality_score:.0f}")
                 trace.attempt(adapter.provider_name, "rejected", elapsed,
-                              bars=len(raw),
-                              detail="; ".join(report.issues)[:200])
+                              bars=len(raw), detail=reason)
+                # A provider that answers promptly with unusable bars is
+                # failing, and before V0.5.3 it was recorded as a SUCCESS by
+                # the adapter and never counted here — so a source serving
+                # consistently-broken data never tripped its breaker and stayed
+                # first in the chain indefinitely. Demote rather than record
+                # anew: the adapter already counted this request.
+                adapter.monitor.demote_last_success(KIND_VALIDATION, reason)
                 self.registry.record_failure(adapter)
                 return None, False
 
@@ -607,7 +652,7 @@ class MarketDataService:
             # grows one entry per distinct key forever.
             self._mem.pop(key, None)
             self._mem[key] = _Entry(result, _time.monotonic(), start)
-            while len(self._mem) > MEM_CACHE_MAX:
+            while len(self._mem) > self._memo_max:
                 self._mem.pop(next(iter(self._mem)))
 
     # ── result assembly ──────────────────────────────────────────────────────

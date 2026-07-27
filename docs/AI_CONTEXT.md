@@ -268,7 +268,33 @@ into long-term memory:
    lives in `data/capabilities.py`, is *measured* (rerun
    `scripts/marketdata_probe.py`), is asserted by `test_capabilities.py`,
    and is measured **from now** — not from the request's end. That
-   distinction was the primary root cause fixed in V0.5.2.
+   distinction was the primary root cause fixed in V0.5.2. V0.5.3's
+   `data/discovery.py` measures the same thing at runtime but is
+   **advisory and off by default**: it reports drift, it does not rewrite
+   the table, because the shipped numbers sit one day *inside* each
+   measured cliff on purpose and a probe can be wrong.
+11. **Never split a provider's operational state across two objects again**
+   (V0.5.3). `data/health.py::ProviderHealthMonitor` is the single owner
+   of counters, latency, rate-limit window, circuit breaker and ranking
+   score. It used to be `adapter.ProviderHealth` plus
+   `registry._Breaker`, with the breaker's trip condition reading the
+   adapter's counter — and that split hid two real bugs for a full
+   milestone (a provider serving unusable bars was recorded as
+   *succeeding*, and a demoted success could never build a failure
+   streak). Relatedly: `health.COUNTS_AGAINST_HEALTH` is the ONE place
+   that decides whether a failure counts. Do not re-derive that policy at
+   a call site — range and symbol errors are correct answers to
+   impossible questions and must never trip a breaker.
+12. **Never make provider ranking dominate the static priority anchor.**
+   `rank()` is anchored on `provider_priority` so that a cold system
+   reproduces the documented chain order exactly; that property is what
+   makes dynamic ranking safe to ship, and `dynamic_ranking: false` must
+   keep restoring the pure static order. The scale (10 rank points = 1
+   second of latency) is deliberate: loose enough that ordering doesn't
+   thrash on noise, tight enough that a genuinely degraded primary
+   yields. Also keep the rank's failure rate **windowed** — a lifetime
+   rate never decays, so a provider would stay demoted long after it
+   recovered.
 
 ## Common mistakes to avoid
 

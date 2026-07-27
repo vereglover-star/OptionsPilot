@@ -48,6 +48,11 @@ from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Timeframe
 from optionspilot.data.base import validate_candles
 from optionspilot.data.capabilities import IntervalSpec, ProviderCapabilities
+from optionspilot.data.config import ProviderConfig
+from optionspilot.data.health import (
+    KIND_INTERNAL, KIND_RANGE, KIND_RATE_LIMITED, KIND_SYMBOL, KIND_TIMEOUT,
+    KIND_UNAVAILABLE, ProviderHealth, ProviderHealthMonitor,
+)
 
 log = get_logger("data")
 
@@ -74,6 +79,62 @@ class ProviderRateLimited(ProviderError):
         self.retry_after = retry_after
 
 
+class ProviderTimeout(ProviderUnavailable):
+    """The request did not come back in time.
+
+    A subclass of `ProviderUnavailable` so every existing `except` keeps
+    working, but distinguished because a timeout and a 500 mean different
+    things operationally: a provider that times out is *slow*, which the
+    ranking should react to, while one that 500s is *broken*.
+    """
+
+
+def is_timeout(exc: BaseException) -> bool:
+    """Does this transport exception mean "it did not come back in time"?
+
+    urllib raises `socket.timeout` (an alias of the builtin `TimeoutError`)
+    directly, but wraps it in `URLError` when the timeout happens during connect
+    rather than during read — so the reason has to be unwrapped. yfinance and
+    `requests` surface their own classes whose names end in `Timeout`, which is
+    matched by name so this module need not import either.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, TimeoutError):        # socket.timeout is this
+            return True
+        if type(exc).__name__.endswith(("Timeout", "TimeoutError")):
+            return True
+        reason = getattr(exc, "reason", None)    # urllib.error.URLError
+        exc = reason if isinstance(reason, BaseException) else exc.__cause__
+    return False
+
+
+def timeout_or_unavailable(message: str, exc: BaseException) -> ProviderError:
+    """The typed failure for a transport error — `ProviderTimeout` when the
+    request ran out of time, `ProviderUnavailable` otherwise. Adapters use this
+    rather than classifying by hand, so 'slow' and 'broken' stay distinguishable
+    in provider health without every adapter re-deriving the distinction."""
+    kind = ProviderTimeout if is_timeout(exc) else ProviderUnavailable
+    return kind(message)
+
+
+def failure_kind(exc: BaseException) -> str:
+    """Classify a provider failure for the health monitor. The one mapping from
+    exception type to health-policy kind."""
+    if isinstance(exc, ProviderTimeout):
+        return KIND_TIMEOUT
+    if isinstance(exc, ProviderRateLimited):
+        return KIND_RATE_LIMITED
+    if isinstance(exc, ProviderRangeError):
+        return KIND_RANGE
+    if isinstance(exc, ProviderSymbolError):
+        return KIND_SYMBOL
+    if isinstance(exc, ProviderError):
+        return KIND_UNAVAILABLE
+    return KIND_INTERNAL
+
+
 class ProviderRangeError(ProviderError):
     """The requested window is outside this provider's supported depth."""
 
@@ -98,44 +159,6 @@ class HistoryRequest:
 
     def key(self) -> tuple:
         return (self.symbol.upper(), self.timeframe, self.extended_hours)
-
-
-@dataclass(slots=True)
-class ProviderHealth:
-    """A provider's live operational state, as the registry and the diagnostics
-    endpoint see it."""
-
-    name: str
-    available: bool = True
-    last_success: float | None = None       # monotonic seconds
-    last_error: str | None = None
-    last_error_at: float | None = None
-    consecutive_failures: int = 0
-    total_requests: int = 0
-    total_failures: int = 0
-    rate_limited_until: float | None = None
-    data_quality_score: float = 100.0
-    avg_latency_ms: float = 0.0
-
-    def as_dict(self, now: float | None = None) -> dict:
-        now = _time.monotonic() if now is None else now
-        return {
-            "name": self.name,
-            "available": self.available,
-            "seconds_since_success": (round(now - self.last_success, 1)
-                                      if self.last_success else None),
-            "last_error": self.last_error,
-            "consecutive_failures": self.consecutive_failures,
-            "total_requests": self.total_requests,
-            "total_failures": self.total_failures,
-            "failure_rate": (round(self.total_failures / self.total_requests, 3)
-                             if self.total_requests else 0.0),
-            "rate_limited_for": (round(self.rate_limited_until - now, 1)
-                                 if self.rate_limited_until and
-                                 self.rate_limited_until > now else None),
-            "data_quality_score": round(self.data_quality_score, 1),
-            "avg_latency_ms": round(self.avg_latency_ms, 1),
-        }
 
 
 @dataclass(slots=True)
@@ -170,6 +193,10 @@ class HistoryAdapter(abc.ABC):
     #: Minimum seconds between outbound requests from this adapter.
     min_request_interval: float = 0.0
 
+    #: Seconds an outbound request may take when configuration says nothing.
+    #: Per-provider because the endpoints genuinely differ in speed.
+    default_timeout: float = 10.0
+
     #: Can this provider be BELIEVED when it says "no bars in this window"?
     #:
     #: True only for adapters that raise on every failure path, so an empty
@@ -181,11 +208,28 @@ class HistoryAdapter(abc.ABC):
     #: provider's circuit breaker every weekend. Conservative default: False.
     reports_empty_reliably: bool = False
 
-    def __init__(self) -> None:
+    def __init__(self, config: ProviderConfig | None = None) -> None:
         self._lock = threading.Lock()
         self._last_request = 0.0
-        self._health = ProviderHealth(name=self.provider_name)
-        self._quality_samples = 0
+        self.config = config or ProviderConfig()
+        #: The single owner of this provider's operational state — counters,
+        #: latency, rate-limit window, circuit breaker and ranking score. The
+        #: registry and the diagnostics endpoint read it; nothing else writes
+        #: to it except the `_record_*` methods below and the service's
+        #: explicit validation verdict.
+        self.monitor = ProviderHealthMonitor(
+            self.provider_name,
+            priority=(self.config.priority if self.config.priority is not None
+                      else self.provider_priority),
+            breaker=self.config.breaker_policy())
+        if self.config.priority is not None:
+            self.provider_priority = self.config.priority
+        if self.config.min_request_interval is not None:
+            self.min_request_interval = self.config.min_request_interval
+        #: Seconds an outbound request may take. Adapters that own their
+        #: transport read this; see `docs/MARKET_DATA.md` §6.
+        self.timeout = (self.config.timeout if self.config.timeout is not None
+                        else self.default_timeout)
 
     # ── declarative queries (no I/O) ─────────────────────────────────────────
 
@@ -205,20 +249,20 @@ class HistoryAdapter(abc.ABC):
 
     @property
     def last_error(self) -> str | None:
-        return self._health.last_error
+        return self.monitor.last_error
 
     @property
     def last_success(self) -> float | None:
-        return self._health.last_success
+        return self.monitor.last_success
 
     @property
     def data_quality_score(self) -> float:
-        return self._health.data_quality_score
+        return self.monitor.data_quality_score
 
     @property
     def rate_limit_state(self) -> dict:
         now = _time.monotonic()
-        until = self._health.rate_limited_until
+        until = self.monitor.rate_limited_until
         return {
             "limited": bool(until and until > now),
             "seconds_remaining": round(until - now, 1) if until and until > now else 0.0,
@@ -227,13 +271,12 @@ class HistoryAdapter(abc.ABC):
         }
 
     def health(self) -> ProviderHealth:
-        """Current state. Cheap and non-blocking — never performs I/O."""
-        with self._lock:
-            h = self._health
-            now = _time.monotonic()
-            if h.rate_limited_until and h.rate_limited_until <= now:
-                h.rate_limited_until = None
-            return h
+        """Current state in the pre-V0.5.3 shape. Cheap, non-blocking, no I/O.
+
+        `self.monitor` is the live object; this is a read-only view of it kept
+        for the callers (and tests) written against the old dataclass.
+        """
+        return ProviderHealth.of(self.monitor)
 
     def connect(self) -> bool:
         """Establish/verify usability. Safe to call repeatedly; returns True on
@@ -283,10 +326,10 @@ class HistoryAdapter(abc.ABC):
         try:
             raw = self._fetch_native(symbol, spec, start, end, prepost)
         except ProviderError as exc:
-            self._record_failure(exc)
+            self._record_failure(exc, (_time.monotonic() - t0) * 1000.0)
             raise
         except Exception as exc:  # noqa: BLE001 — unknown transport faults
-            self._record_failure(exc)
+            self._record_failure(exc, (_time.monotonic() - t0) * 1000.0)
             raise ProviderUnavailable(
                 f"{self.provider_name} {symbol} {tf}: {exc}") from exc
         latency_ms = (_time.monotonic() - t0) * 1000.0
@@ -302,7 +345,7 @@ class HistoryAdapter(abc.ABC):
             return df
         if spec.resample:
             df = _resample(df, spec.resample)
-        self._record_success(latency_ms, quality=None)
+        self._record_success(latency_ms, quality=None, bars=len(df))
         return df
 
     def fetch_latest(self, symbol: str, timeframe: Timeframe, *,
@@ -353,59 +396,31 @@ class HistoryAdapter(abc.ABC):
                 _time.sleep(wait)
             self._last_request = _time.monotonic()
 
-    def _record_success(self, latency_ms: float, quality: float | None) -> None:
-        with self._lock:
-            h = self._health
-            h.available = True
-            h.last_success = _time.monotonic()
-            h.consecutive_failures = 0
-            h.total_requests += 1
-            h.rate_limited_until = None
-            h.avg_latency_ms = _ewma(h.avg_latency_ms, latency_ms, h.total_requests)
-            if quality is not None:
-                self._quality_samples += 1
-                h.data_quality_score = _ewma(h.data_quality_score, quality,
-                                             self._quality_samples)
+    def _record_success(self, latency_ms: float, quality: float | None,
+                        bars: int = 0) -> None:
+        self.monitor.record_success(latency_ms, bars=bars)
+        if quality is not None:
+            self.monitor.observe_quality(quality)
 
     def _record_empty(self, latency_ms: float) -> None:
-        with self._lock:
-            h = self._health
-            h.total_requests += 1
-            h.avg_latency_ms = _ewma(h.avg_latency_ms, latency_ms, h.total_requests)
+        self.monitor.record_empty(latency_ms)
 
-    def _record_failure(self, exc: BaseException) -> None:
-        with self._lock:
-            h = self._health
-            h.total_requests += 1
-            h.total_failures += 1
-            h.consecutive_failures += 1
-            h.last_error = f"{type(exc).__name__}: {exc}"[:300]
-            h.last_error_at = _time.monotonic()
-            if isinstance(exc, ProviderRateLimited):
-                h.rate_limited_until = _time.monotonic() + exc.retry_after
-            # A range/symbol error says nothing about the provider's health —
-            # it is a correct answer to an impossible question.
-            if isinstance(exc, (ProviderRangeError, ProviderSymbolError)):
-                h.consecutive_failures = max(0, h.consecutive_failures - 1)
-                h.total_failures -= 1
+    def _record_failure(self, exc: BaseException, latency_ms: float = 0.0) -> None:
+        """Classify and record. Which kinds count against health is decided in
+        exactly one place — `health.COUNTS_AGAINST_HEALTH` — rather than being
+        re-derived here as it used to be."""
+        self.monitor.record_failure(
+            failure_kind(exc), f"{type(exc).__name__}: {exc}", latency_ms,
+            retry_after=(exc.retry_after
+                         if isinstance(exc, ProviderRateLimited) else None))
 
     def observe_quality(self, score: float) -> None:
         """Feed a validated frame's quality score back into this provider's
         rolling average (called by the service after validation)."""
-        with self._lock:
-            self._quality_samples += 1
-            self._health.data_quality_score = _ewma(
-                self._health.data_quality_score, score, self._quality_samples)
+        self.monitor.observe_quality(score)
 
     def __repr__(self) -> str:  # pragma: no cover — debugging aid
         return f"<{type(self).__name__} {self.provider_name} p={self.provider_priority}>"
-
-
-def _ewma(current: float, sample: float, n: int) -> float:
-    """Exponentially-weighted average that behaves like a plain mean for the
-    first few samples (so one slow first request doesn't dominate forever)."""
-    alpha = max(0.1, 1.0 / max(n, 1))
-    return current * (1 - alpha) + sample * alpha
 
 
 def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
@@ -420,5 +435,6 @@ def _resample(df: pd.DataFrame, rule: str) -> pd.DataFrame:
 __all__ = [
     "HistoryAdapter", "HistoryRequest", "ProviderHealth", "Snapshot",
     "ProviderError", "ProviderUnavailable", "ProviderRateLimited",
-    "ProviderRangeError", "ProviderSymbolError",
+    "ProviderRangeError", "ProviderSymbolError", "ProviderTimeout",
+    "failure_kind",
 ]

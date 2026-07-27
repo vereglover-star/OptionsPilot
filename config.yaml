@@ -7,6 +7,48 @@ data:
   watchlist: [SPY, QQQ, AAPL, NVDA, TSLA]
   timeframes: [1d, 4h, 1h, 15m, 5m]
 
+# Market-data subsystem: how price history is FETCHED. Nothing here changes what
+# is traded — only which sources are used, how hard they are tried, and how the
+# results are cached and logged. Every key below is optional; the whole section
+# can be deleted and the shipped chain (Yahoo JSON -> yfinance -> Stooq) behaves
+# exactly as it does today. Full reference: docs/MARKET_DATA.md section 16.
+#
+# market_data:
+#   # Order providers by MEASURED health (latency, recent failure rate, data
+#   # quality) rather than by the fixed priorities below. With no traffic
+#   # recorded every provider ranks at its priority, so a fresh start always
+#   # uses the documented order; set false to pin that order permanently.
+#   dynamic_ranking: true
+#   memo_max_entries: 400        # in-memory frames (symbol x timeframe x session)
+#   structured_logging: true     # one key=value line per request in logs/data.log
+#
+#   # Let providers measure their own history depth in the background. OFF by
+#   # default: the shipped table in data/capabilities.py is measured, sits one
+#   # day inside each real cliff on purpose, and a probe costs real requests.
+#   capability_discovery: false
+#   capability_refresh_days: 30
+#
+#   cache:
+#     enabled: true
+#     retention_days: null       # null keeps everything (a deep cache is the
+#                                # last tier before a blank chart)
+#     warn_bytes: 536870912      # log a warning past 512 MB
+#
+#   providers:                   # any of: yahoo, yfinance, stooq
+#     yahoo:
+#       enabled: true
+#       priority: 10             # lower is tried first; null keeps the adapter's
+#       timeout: null            # null keeps the adapter's own default
+#       max_attempts: 2          # tries before failing over (1 = fail over at once)
+#       retry_backoff: 0.4
+#       min_request_interval: null
+#       breaker_threshold: 3     # consecutive failures before leaving rotation
+#       breaker_base_cooldown: 15.0
+#       breaker_max_cooldown: 300.0
+#       min_quality_score: 0.0   # refuse frames validating below this (0-100)
+#     stooq:
+#       enabled: true            # false drops a provider entirely
+
 engine:
   min_confidence: 80        # the conservative bar; also the base for high-risk tiers
   # Trading mode — "conservative" (default) or "high_risk":

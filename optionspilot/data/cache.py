@@ -39,7 +39,8 @@ import shutil
 import sqlite3
 import threading
 import time
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -49,6 +50,7 @@ from optionspilot.core.models import Timeframe
 from optionspilot.core.sqlite import connect as sqlite_connect
 from optionspilot.core.sqlite import run_migrations
 from optionspilot.data.base import CANDLE_COLUMNS, validate_candles
+from optionspilot.data.config import CacheConfig
 
 log = get_logger("data")
 
@@ -83,16 +85,83 @@ class CacheCorrupt(RuntimeError):
     """The cache file is unusable and could not be rebuilt."""
 
 
+@dataclass
+class CacheMetrics:
+    """What the cache is actually doing for the user.
+
+    "Is the cache working?" used to be answerable only as "there are N bars in
+    it", which says nothing about whether any of them were ever served. These
+    counters make the cache's *value* measurable: the hit rate is how often it
+    answered instead of the network, and `provider_requests_saved` is the
+    number of upstream calls that never had to happen.
+
+    Counters are lifetime-per-process and cheap (plain ints behind the cache's
+    existing lock); nothing here is persisted, because a hit rate that survived
+    a restart would describe a session the user is no longer in.
+    """
+
+    reads: int = 0                   # load()/load_newest() calls
+    hits: int = 0                    # ...that returned at least one bar
+    misses: int = 0
+    stale_reads: int = 0             # served knowingly out-of-date bars
+    bars_read: int = 0
+    writes: int = 0                  # store() calls that wrote rows
+    bars_written: int = 0
+    evictions: int = 0               # bars dropped by retention pruning
+    rebuilds: int = 0                # corruption recoveries
+    errors: int = 0                  # operations that failed and returned empty
+    #: Sum of (now - newest served bar) in seconds, over hits, for a mean age.
+    _age_total: float = 0.0
+    _age_samples: int = 0
+
+    @property
+    def hit_rate(self) -> float:
+        return (self.hits / self.reads) if self.reads else 0.0
+
+    @property
+    def avg_age_seconds(self) -> float:
+        return (self._age_total / self._age_samples) if self._age_samples else 0.0
+
+    def note_age(self, seconds: float) -> None:
+        self._age_total += max(0.0, seconds)
+        self._age_samples += 1
+
+    def as_dict(self) -> dict:
+        return {
+            "reads": self.reads,
+            "hits": self.hits,
+            "misses": self.misses,
+            "hit_rate": round(self.hit_rate, 4),
+            "miss_rate": round(1.0 - self.hit_rate, 4) if self.reads else 0.0,
+            "stale_reads": self.stale_reads,
+            "bars_read": self.bars_read,
+            "writes": self.writes,
+            "bars_written": self.bars_written,
+            "evictions": self.evictions,
+            "rebuilds": self.rebuilds,
+            "errors": self.errors,
+            "avg_age_seconds": round(self.avg_age_seconds, 1),
+            # Every hit is one upstream request that did not happen. This is
+            # the number worth putting in front of a user.
+            "provider_requests_saved": self.hits,
+        }
+
+
 class CandleCache:
     """Durable candle storage. See the module docstring for the guarantees."""
 
-    def __init__(self, db_path: str | Path, *, allow_rebuild: bool = True):
+    def __init__(self, db_path: str | Path, *, allow_rebuild: bool = True,
+                 config: CacheConfig | None = None):
         self._lock = threading.Lock()
         self._path = Path(db_path) if str(db_path) != ":memory:" else None
         self._db_path = db_path
         self._allow_rebuild = allow_rebuild
+        self.config = config or CacheConfig()
         self._rebuilds = 0
+        self.metrics = CacheMetrics()
         self._conn = self._open()
+        if self.config.retention_days is not None:
+            self.prune(self.config.retention_days)
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -189,14 +258,42 @@ class CandleCache:
                             "provider,fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                             rows,
                         )
+                    self.metrics.writes += 1
+                    self.metrics.bars_written += len(rows)
                     return len(rows)
                 except sqlite3.DatabaseError as exc:
                     if attempt == 2 or not _is_corruption(exc):
                         log.error("candle cache store failed %s %s: %s",
                                   symbol, timeframe, exc)
+                        self.metrics.errors += 1
                         return 0
                     self._recover(exc)
         return 0  # pragma: no cover — the loop always returns
+
+    def prune(self, retention_days: int) -> int:
+        """Drop bars older than `retention_days`, returning the count evicted.
+
+        Retention is off by default: history is small, and the deeper the cache
+        the better the last tier before a blank chart. It exists for the user
+        who charts hundreds of symbols and would rather bound the file.
+        """
+        cutoff = int((datetime.now(timezone.utc)
+                      - timedelta(days=retention_days)).timestamp())
+        with self._lock:
+            try:
+                with self._conn:
+                    cur = self._conn.execute(
+                        "DELETE FROM candles WHERE ts < ?", (cutoff,))
+                evicted = cur.rowcount or 0
+            except sqlite3.DatabaseError as exc:
+                log.error("candle cache prune failed: %s", exc)
+                self.metrics.errors += 1
+                return 0
+        self.metrics.evictions += evicted
+        if evicted:
+            log.info("pruned %d cached bars older than %d days",
+                     evicted, retention_days)
+        return evicted
 
     def purge(self, symbol: str | None = None,
               timeframe: Timeframe | None = None) -> int:
@@ -235,9 +332,11 @@ class CandleCache:
              int(start.timestamp()), int(end.timestamp())),
         )
         if not rows:
+            self._note_read(0, None)
             return validate_candles(pd.DataFrame())
         df = pd.DataFrame(rows, columns=["ts", *CANDLE_COLUMNS])
         df["ts"] = pd.to_datetime(df["ts"], unit="s", utc=True)
+        self._note_read(len(rows), rows[-1][0])
         return validate_candles(df.set_index("ts"),
                                 context=f"cache.load {symbol} {timeframe}")
 
@@ -251,9 +350,13 @@ class CandleCache:
             (symbol.upper(), timeframe.minutes, int(limit)),
         )
         if not rows:
+            self._note_read(0, None)
             return validate_candles(pd.DataFrame())
         df = pd.DataFrame(rows, columns=["ts", *CANDLE_COLUMNS])
         df["ts"] = pd.to_datetime(df["ts"], unit="s", utc=True)
+        # `load_newest` is only reached as the last tier before a blank chart,
+        # so every row it returns is by definition a knowingly-stale read.
+        self._note_read(len(rows), rows[0][0], stale=True)
         return validate_candles(df.set_index("ts").sort_index(),
                                 context=f"cache.load_newest {symbol} {timeframe}")
 
@@ -284,7 +387,10 @@ class CandleCache:
             size = sum(Path(str(self._path) + s).stat().st_size
                        for s in ("", "-wal", "-shm")
                        if Path(str(self._path) + s).exists())
-        return {
+        oldest, newest = (self._query(
+            "SELECT MIN(ts), MAX(ts) FROM candles", ()) or [(None, None)])[0]
+        self.metrics.rebuilds = self._rebuilds
+        stats = {
             "bars": int(bars or 0),
             "symbols": int(symbols or 0),
             "timeframes": int(timeframes or 0),
@@ -292,7 +398,31 @@ class CandleCache:
             "bytes": size,
             "schema_version": SCHEMA_VERSION,
             "rebuilds": self._rebuilds,
+            "oldest_bar": (datetime.fromtimestamp(oldest, tz=timezone.utc)
+                           .isoformat() if oldest else None),
+            "newest_bar": (datetime.fromtimestamp(newest, tz=timezone.utc)
+                           .isoformat() if newest else None),
+            "retention_days": self.config.retention_days,
+            "oversized": bool(size and size > self.config.warn_bytes),
         }
+        stats.update(self.metrics.as_dict())
+        return stats
+
+    def _note_read(self, bars: int, newest_ts: int | None, *,
+                   stale: bool = False) -> None:
+        """Record one read's outcome. Metric bookkeeping only — it must never
+        be able to fail a read, so nothing here can raise."""
+        m = self.metrics
+        m.reads += 1
+        if bars:
+            m.hits += 1
+            m.bars_read += bars
+            if stale:
+                m.stale_reads += 1
+            if newest_ts:
+                m.note_age(time.time() - newest_ts)
+        else:
+            m.misses += 1
 
     def _query(self, sql: str, params) -> list[tuple]:
         """Run a read with one corruption-recovery retry."""
@@ -303,6 +433,7 @@ class CandleCache:
                 except sqlite3.DatabaseError as exc:
                     if attempt == 2 or not _is_corruption(exc):
                         log.error("candle cache read failed: %s", exc)
+                        self.metrics.errors += 1
                         return []
                     self._recover(exc)
         return []  # pragma: no cover — the loop always returns
@@ -336,4 +467,4 @@ def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
         "malformed", "not a database", "corrupt", "disk image"))
 
 
-__all__ = ["CandleCache", "CacheCorrupt", "SCHEMA_VERSION"]
+__all__ = ["CandleCache", "CacheCorrupt", "CacheMetrics", "SCHEMA_VERSION"]

@@ -1214,6 +1214,63 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                   f"(providers={diagnostics['providers']}, "
                   f"requests={diagnostics['total']}, "
                   f"cached bars={diagnostics['cache_bars']})")
+            # 40. V0.5.3 — the diagnostics dashboard (Help ▸ Diagnostics). This
+            #     page is the only automated coverage the dashboard has, and it
+            #     is the one surface where a rendering bug is invisible to the
+            #     backend tests: the payload can be perfect while the page
+            #     throws. Any console error here fails the whole run (see the
+            #     `errors` collector), so this drives it like a user would.
+            page.click("#help-btn")
+            page.click("#help-diagnostics")
+            page.wait_for_selector("#diag-overlay.show", timeout=5000)
+            page.wait_for_function(
+                "() => !$('diag-body').textContent.includes('Loading')",
+                timeout=8000)
+            rendered = page.evaluate("""() => {
+                const body = $('diag-body').textContent;
+                return {
+                    open: $('diag-overlay').classList.contains('show'),
+                    providers: body.includes('Providers'),
+                    cache: body.includes('Cache'),
+                    requests: body.includes('Requests this session'),
+                    traces: $('diag-body')
+                        .querySelectorAll('tr.clickable').length,
+                    named: body.includes('yahoo'),
+                };
+            }""")
+            check(rendered["open"] and rendered["providers"] and rendered["cache"]
+                  and rendered["requests"] and rendered["named"]
+                  and rendered["traces"] > 0,
+                  f"Help ▸ Diagnostics renders provider health, cache and "
+                  f"{rendered['traces']} recent requests")
+
+            # 41. Replaying a recorded request from the dashboard: it must poll
+            #     every provider and render the comparison, not silently fail.
+            page.evaluate("() => $('diag-body')"
+                          ".querySelector('tr.clickable').click()")
+            page.wait_for_function(
+                "() => { const o = $('diag-replay-out');"
+                " return o && o.textContent.includes('Replay of'); }",
+                timeout=15000)
+            replayed = page.evaluate("""() => {
+                const out = $('diag-replay-out');
+                return {rows: out.querySelectorAll('tbody tr').length,
+                        text: out.textContent.slice(0, 120)};
+            }""")
+            check(replayed["rows"] > 0,
+                  f"a dashboard replay compares every provider "
+                  f"({replayed['rows']} rows)")
+
+            # 42. Escape closes it, and the chart underneath is undisturbed.
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(200)
+            closed = page.evaluate(
+                "() => !$('diag-overlay').classList.contains('show')")
+            chart_alive = page.evaluate(
+                "() => CH.data && CH.data.candles.length > 3")
+            check(closed and chart_alive,
+                  "Escape closes diagnostics and leaves the chart untouched")
+
             page.evaluate("() => loadChart('SPY')")
             page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
 

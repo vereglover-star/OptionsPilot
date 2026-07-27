@@ -1,7 +1,18 @@
-# MARKET_DATA.md — the market-data subsystem (V0.5.2)
+# MARKET_DATA.md — the market-data subsystem (V0.5.2 · V0.5.3)
 
 The design, the measurements behind it, and the root causes it eliminates.
 Read this before changing anything under `optionspilot/data/`.
+
+**V0.5.2** replaced the layer: typed provider failures, a capability table
+measured from `now`, a tier ladder that distinguishes `exhausted` / `empty` /
+`stale` / `failed`, durable storage, and one trace per request.
+
+**V0.5.3** made it operable: one owner for provider health (§13), ranking by
+measured health instead of a fixed order (§14), a diagnostics dashboard and
+export (§15), configuration without code changes (§16), replay and benchmark
+tools (§17), cache metrics (§18), structured logs (§19), and capability
+discovery (§20). No behavioural change to what is traded, and the shipped
+chain answers exactly as it did before (§21).
 
 ---
 
@@ -425,4 +436,371 @@ wrong chart maps to an exact trace.
 4. **Cross-provider reconciliation.** `quality.disagreement()` already measures
    it and diagnostics already record it; nothing acts on it yet, deliberately —
    deciding which source is "right" is not something this layer can know.
-5. **A user-facing diagnostics panel** in Settings over the existing endpoint.
+5. ~~A user-facing diagnostics panel~~ — shipped in V0.5.3 (§15).
+
+---
+---
+
+# V0.5.3 — production readiness
+
+Everything above still holds. This half is about **operating** the subsystem:
+knowing which provider is healthy, why a request went the way it did, and being
+able to retune any of it without editing code.
+
+---
+
+## 13. Provider health has one owner
+
+Before V0.5.3 a provider's operational state lived in two objects that had to
+agree. `adapter.ProviderHealth` counted requests and failures;
+`registry._Breaker` decided whether the provider stayed in rotation — and it
+decided that **by reading the adapter's failure counter**. One invariant, two
+owners, and the policy "a range error is not an outage" re-derived in three
+files.
+
+`data/health.py::ProviderHealthMonitor` is now the single owner of:
+
+| | |
+|---|---|
+| **Volume** | requests, successes, failures, empties, bars, requests today |
+| **Failure shape** | timeouts, validation failures, rate limits, per-kind breakdown |
+| **Latency** | EWMA average plus a 100-sample window yielding a real p95 |
+| **Recency** | last success, last failure, last error, last outcome |
+| **Breaker** | state (closed / open / half-open), trips, remaining cooldown |
+| **Quality** | rolling data-quality score |
+| **Ranking** | the sort key the registry orders by (§14) |
+
+### The failure taxonomy, defined once
+
+Every failure is recorded with a `kind`, and `health.COUNTS_AGAINST_HEALTH` is
+the **only** place that decides whether it counts:
+
+```
+unavailable · timeout · rate_limited · validation · internal    count
+range · symbol                                                  do not
+```
+
+A range or symbol error is a *correct answer to an impossible question*.
+Counting it would trip the breaker on a provider working perfectly — which is
+exactly what used to happen every time a user scrolled a 5-minute chart past
+Yahoo's 59-day floor.
+
+### Counting and tripping are separate steps
+
+`record_failure()` counts. `evaluate_breaker()` trips. They are separate
+because the caller that sees a transport failure (the adapter) is not the one
+that decides the attempt counted against the provider (the service, which also
+sees validation rejects and adapter bugs the adapter never hears about).
+Merging them double-counted every trip and doubled the first cooldown.
+
+### Two accounting bugs this surfaced
+
+Both existed before and were invisible without a single owner:
+
+1. **A provider serving consistently-unusable bars never tripped.** The adapter
+   recorded a *success* as soon as the transport parsed, and the service's
+   validation reject was never counted anywhere. Now the service calls
+   `demote_last_success(KIND_VALIDATION, …)`, which **moves** the counters
+   rather than adding a second request — one upstream call stays one request in
+   every total. (Recording a fresh failure instead inflated `requests` and
+   halved every provider's apparent failure rate.)
+2. **A demotion could only ever reach a streak of 1.** Recording the success had
+   zeroed the failure streak, so a provider answering *every* request with
+   unusable bars oscillated 0 → 1 → 0 → 1 and never reached the breaker
+   threshold. `demote_last_success` now restores the streak from before the
+   success.
+
+---
+
+## 14. Ranking: health, not fiat
+
+`ProviderRegistry.candidates()` used to sort by the static `provider_priority`.
+It now sorts by `ProviderHealthMonitor.rank()` — **lower is better**:
+
+```
+rank = priority                                   the anchor
+     + min(avg_latency_ms / 100, 50)              1 priority step == 1s latency
+     + recent_failure_rate * 50
+     + consecutive_failures * 15
+     + min(breaker_trips, 4) * 5
+     + max(0, 100 - quality) * 0.5
+```
+
+**The scale is the design.** Priorities are spaced 10 apart, and 10 rank points
+is one second of latency. So:
+
+| Situation | Yahoo (p10) | Stooq (p30) | Winner |
+|---|---|---|---|
+| No traffic yet | 10.00 | 30.00 | Yahoo — the documented static order |
+| 180ms vs 320ms | 11.80 | 33.20 | Yahoo |
+| **2400ms vs 260ms** | 34.00 | 32.60 | **Stooq** |
+
+A cold system reproduces the V0.5.2 order **exactly**, which is what makes this
+safe to ship. A provider merely a little slower keeps its place (no thrashing on
+noise); one a full second slower loses a step; one that is failing loses its
+place immediately rather than after three more chart loads.
+
+### The failure rate is windowed, not lifetime
+
+`rank()` measures failures over the **last 50 attempts** (`OUTCOME_WINDOW`), not
+over the provider's lifetime. A lifetime rate never decays: five failures during
+a two-minute outage would leave a provider at an 83% failure rate, and because
+every later success only moves the denominator it would stay demoted for
+thousands of requests after it was demonstrably healthy. The window makes
+recovery proportional to how long the provider has been well. Lifetime totals
+are still reported — they are just not what orders the chain.
+
+### The escape hatch
+
+`market_data.dynamic_ranking: false` pins the static order exactly. It exists so
+that "ranking misbehaved" is a config change, not a rollback.
+
+---
+
+## 15. The diagnostics dashboard and export
+
+**Help ▸ Diagnostics** opens a read-only page over
+`GET /api/diagnostics/marketdata`. It shows, per provider: status pill (healthy
+/ probing / out of rotation), rank and configured priority, success rate,
+average and p95 latency, request totals and today's count, timeouts, validation
+failures, rate limits, breaker trips, data-quality meter, last success, last
+error, and served intervals — then session request aggregates, cache
+intelligence (§18), and the recent-request table with each request's provider
+chain.
+
+Two rules govern the page:
+
+- **It computes nothing.** Every number is rendered straight from the payload,
+  which is the same payload the exports carry — so a screenshot, an export and
+  a log line cannot disagree about what happened.
+- **It never polls.** It loads when opened and on an explicit Refresh. A
+  diagnostics screen fetching on a timer would become traffic inside the very
+  traces it is displaying.
+
+**Export** (`GET /api/diagnostics/marketdata/export?format=text|json`) serves the
+payload as a dated attachment. The text rendering lives in `data/report.py` and
+is deliberately safe to paste into a public issue tracker: no stack traces, no
+filesystem paths, no credentials — and it says so in its own closing line so a
+user does not have to audit it first.
+
+**Replay** (`POST /api/diagnostics/marketdata/replay`) is on the same page:
+clicking a request re-runs it. See §17.
+
+---
+
+## 16. Configuration without code changes
+
+`config.yaml`'s `market_data:` section. Every operational knob, in one place:
+
+```yaml
+market_data:
+  dynamic_ranking: true          # false pins the static provider order
+  memo_max_entries: 400
+  structured_logging: true
+  capability_discovery: false    # see §20
+  capability_refresh_days: 30
+  cache:
+    enabled: true
+    retention_days: null         # null keeps everything (the default)
+    warn_bytes: 536870912
+  providers:
+    yahoo:
+      enabled: true
+      priority: 10               # null keeps the adapter's own
+      timeout: null              # null keeps the adapter's default_timeout
+      max_attempts: 2
+      retry_backoff: 0.4
+      min_request_interval: null
+      breaker_threshold: 3
+      breaker_base_cooldown: 15.0
+      breaker_max_cooldown: 300.0
+      min_quality_score: 0.0
+    stooq:
+      enabled: false             # drop a provider entirely
+```
+
+Before this, a provider's timeout was in its adapter, its retry count was a
+constant in `service.py`, its breaker thresholds were constants in
+`registry.py`, and its ordering was a class attribute — four files to answer
+"why is Stooq being skipped?", and nothing a user could change at all.
+
+**Three deliberate choices:**
+
+- **Unknown keys are a startup error.** A silently-ignored `timout: 30` would do
+  nothing for the life of the install.
+- **Unknown *providers* are accepted.** That is how a config pins a future
+  provider's settings before its adapter ships, and how a config survives a
+  downgrade.
+- **`timeout: null` means the adapter's own default**, not a global number.
+  Stooq's CSV endpoint is reliably slower than Yahoo's JSON one; flattening both
+  would either cut Stooq off early or let Yahoo hang.
+
+**Where the schema lives.** `data/` may import only `core/`
+(`tests/test_architecture.py` enforces it), so it cannot depend on the pydantic
+config layer. The runtime shape is therefore frozen dataclasses in
+`data/config.py`, the validated YAML face is `config/settings.py`, and the
+translation happens in the composition root that already imports both —
+`orchestrator.py`. Two tests assert the key sets line up exactly, so a field
+added to one and forgotten in the other fails the suite.
+
+---
+
+## 17. Replay and benchmark
+
+### Replay — `data/replay.py`
+
+```python
+replay(service, trace)                  # re-run a recorded request
+compare_providers(registry, request)    # ask EVERY provider directly
+```
+
+`compare_providers` deliberately bypasses the memo, the disk cache, the failover
+chain and (by default) the circuit breaker, because the question is "what does
+each source actually say?" — a ladder that stops at the first success answers a
+different question. It returns bars, latency, quality and **disagreement against
+the first provider that answered**, so "Stooq and Yahoo disagree about last
+Tuesday" is a lookup rather than a hunch.
+
+There is deliberately **no separate recorder**. Every request is already
+recorded once, in `diagnostics.RequestTrace`, with the symbol, timeframe, window
+and session flag replay needs. A second recorder would be a second thing to keep
+in sync for no information gain — which is why replay takes a trace id, and why
+anything in the dashboard's trace list is clickable.
+
+### Benchmark — `scripts/marketdata_benchmark.py`
+
+```
+python scripts/marketdata_benchmark.py            # offline, synthetic providers
+python scripts/marketdata_benchmark.py --live     # the real chain
+```
+
+Runs the same cases against each provider *directly* (so each column is that
+provider's own performance, not the chain's) and reports average / median / p95
+latency, bars per second, data quality, cross-provider disagreement, CPU
+seconds, memory delta, and **the health rank the registry would give it** —
+which is the number that actually decides ordering. Offline by default so it
+runs in CI; `--live` is the one to use before re-prioritising a chain.
+
+---
+
+## 18. Cache intelligence
+
+"Is the cache working?" used to be answerable only as "there are N bars in it",
+which says nothing about whether any of them were ever served. `CacheMetrics`
+adds: reads, hits, misses, hit rate, stale reads, bars read, writes, bars
+written, evictions, rebuilds, errors, average age of served bars, and
+`provider_requests_saved` — every hit is one upstream request that did not
+happen, which is the number worth putting in front of a user.
+
+`stats()` also reports the span actually held (`oldest_bar` / `newest_bar`) and
+whether the file has passed its configured warning size.
+
+**Retention** (`cache.retention_days`) prunes bars older than N days at open and
+counts the evictions. It is **off by default**: history is small, and the deeper
+the cache the better the last tier before a blank chart. It exists for the user
+who charts hundreds of symbols and would rather bound the file.
+
+---
+
+## 19. Structured logging
+
+Every request emits one line, `key=value` throughout:
+
+```
+history req=412 symbol=SPY tf=5m outcome=live provider=yfinance bars=476
+        duration_ms=188 cache=miss memo=miss retries=1 fallbacks=1
+        chain=yahoo=RangeError > yfinance=ok quality=100.0 usable=True
+```
+
+Greppable rather than JSON on purpose: `logs/data.log` is read by a human
+looking at a user's bug report, and `outcome=failed` is something you can find
+with Ctrl-F in Notepad. `chain=` answers "who did we ask and what did they say"
+in one glance — the question a chart complaint always turns into.
+
+Failed and stale requests log at WARNING, everything else at DEBUG, and **both
+carry the same line**, so raising the log level to chase an intermittent problem
+gives the same fields as the dashboard rather than a thinner message. The same
+string is on the trace payload as `chain`, so a log excerpt and the dashboard
+need no translation between them.
+
+---
+
+## 20. Capability discovery
+
+`data/discovery.py` measures a provider's real per-interval depth (ladder walk,
+then a binary search of the cliff — about a dozen requests per interval rather
+than hundreds), persists it to a JSON `CapabilityStore`, and refreshes it on a
+configured cadence. `scripts/marketdata_probe.py` now calls into it, so the app
+and the script cannot disagree about how depth is measured.
+
+**It is advisory, and off by default.** It does not rewrite `capabilities.py`.
+Three reasons, in order of weight:
+
+1. **A probe costs real upstream requests** — roughly a dozen per interval per
+   provider, to re-derive numbers that change maybe once a year.
+2. **The shipped table is a deliberate floor**, sitting one day *inside* each
+   measured cliff so a request built moments before midnight UTC cannot land on
+   the far side of it. A discovery run that measured 60 and wrote 60 would undo
+   that margin on every install.
+3. **A probe can be wrong.** A network hiccup mid-measurement reads exactly like
+   a shallower provider, and a wrong number written to disk is believed until
+   something re-measures it.
+
+So discovery reports, and `drift()` turns that into "the table promises more
+than the provider serves" — one-directional on purpose, because a conservative
+table costs a little depth while an over-promising one produces guaranteed-422
+requests on every scroll. What it buys is that a **future** provider need not
+have its depth hand-measured before it can ship.
+
+One rule it inherits from §1: **an empty window is not a refusal.** The walk
+continues through holidays and weekends; conflating the two would make every
+measurement taken on a Sunday wrong.
+
+---
+
+## 21. Adding a provider after V0.5.3
+
+Still one file and one registry entry — and now the operational half is free.
+Write the adapter as §6 describes, then:
+
+```python
+# data/registry.py::default_registry
+classes = [YahooChartAdapter, YFinanceAdapter, TiingoAdapter]
+```
+
+The adapter inherits, without writing any of it: a `ProviderHealthMonitor` (so
+it appears on the dashboard, in the export, in the benchmark and in the ranking
+immediately), a per-provider circuit breaker, configuration under
+`market_data.providers.<name>` with no schema change, participation in replay
+and comparison, capability discovery, and its own row in every diagnostics
+surface.
+
+**A checklist for the adapter itself:**
+
+1. Set `provider_name`, `provider_priority`, `capabilities`, `default_timeout`.
+2. Implement `_fetch_native` — **raise a typed `ProviderError`; never return an
+   empty frame to signal failure** (§6). Map the provider's own error dialect
+   onto the four types; that mapping is the whole integration risk.
+3. Set `reports_empty_reliably = True` only if *every* failure path raises.
+4. Implement `_probe()` for the health check.
+5. Put depth in `capabilities.py`, measured with
+   `scripts/marketdata_probe.py --check`, one day inside the cliff.
+6. Honour `self.timeout` in the transport.
+7. Add `tests/test_<name>_provider.py` against canned bytes (see
+   `tests/marketdata_helpers.py::fake_opener`) — offline, like every other
+   provider test.
+
+---
+
+## 22. What V0.5.3 does NOT change
+
+Stated explicitly because the whole milestone is infrastructure:
+
+- **No new provider.** Finnhub, Twelve Data, Alpha Vantage and Polygon were
+  out of scope by instruction; the point was to make adding them cheap.
+- **No trading-behaviour change.** The engine, gate, risk manager and sizing are
+  untouched. `get_candles` still never returns stale data.
+- **No change to the shipped chain's answers.** Yahoo JSON → yfinance → Stooq,
+  same order from cold, same capability table, same validation verdicts.
+- **No new runtime dependency.** `psutil` is used by the benchmark *if present*
+  and reported as "n/a" if not.

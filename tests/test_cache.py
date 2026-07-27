@@ -314,3 +314,126 @@ def test_a_newer_schema_is_refused_rather_than_corrupted(tmp_path):
     conn.close()
     with pytest.raises(RuntimeError, match="newer than this build"):
         CandleCache(path, allow_rebuild=False)
+
+
+# ── V0.5.3: cache intelligence ───────────────────────────────────────────────
+#
+# "Is the cache working?" used to be answerable only as "there are N bars in
+# it", which says nothing about whether any of them were ever served. These
+# cover the counters that make the cache's VALUE measurable, plus the retention
+# pruning that bounds the file for a user who charts hundreds of symbols.
+
+def test_metrics_count_hits_and_misses(tmp_path):
+    df = make_candles([100, 101, 102], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        cache.load("SPY", Timeframe.M5, dt(0), dt(23))     # hit
+        cache.load("QQQ", Timeframe.M5, dt(0), dt(23))     # miss
+        stats = cache.stats()
+    assert stats["reads"] == 2
+    assert stats["hits"] == 1
+    assert stats["misses"] == 1
+    assert stats["hit_rate"] == 0.5
+
+
+def test_every_hit_is_one_upstream_request_that_did_not_happen(tmp_path):
+    """The number worth putting in front of a user."""
+    df = make_candles([100, 101], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        for _ in range(5):
+            cache.load("SPY", Timeframe.M5, dt(0), dt(23))
+        assert cache.stats()["provider_requests_saved"] == 5
+
+
+def test_writes_are_counted(tmp_path):
+    df = make_candles([100, 101, 102], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        cache.store("QQQ", Timeframe.M5, df)
+        stats = cache.stats()
+    assert stats["writes"] == 2
+    assert stats["bars_written"] == 6
+
+
+def test_a_last_resort_read_is_recorded_as_stale(tmp_path):
+    """`load_newest` is only reached as the final tier before a blank chart, so
+    everything it returns is knowingly out of date."""
+    df = make_candles([100, 101], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        cache.load_newest("SPY", Timeframe.M5)
+        assert cache.stats()["stale_reads"] == 1
+
+
+def test_stats_report_the_span_actually_held(tmp_path):
+    df = make_candles([100, 101, 102], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        stats = cache.stats()
+    assert stats["oldest_bar"].startswith("2026-01-05")
+    assert stats["newest_bar"].startswith("2026-01-05")
+
+
+def test_stats_are_json_serializable(tmp_path):
+    import json
+
+    df = make_candles([100, 101], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, df, provider="yahoo")
+        cache.load("SPY", Timeframe.M5, dt(0), dt(23))
+        json.dumps(cache.stats())
+
+
+def test_prune_evicts_old_bars_and_counts_them(tmp_path):
+    old = make_candles([100, 101], start="2020-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, old)
+        assert cache.prune(retention_days=30) == 2
+        assert cache.stats()["evictions"] == 2
+        assert cache.load("SPY", Timeframe.M5,
+                          datetime(2019, 1, 1, tzinfo=timezone.utc),
+                          datetime(2027, 1, 1, tzinfo=timezone.utc)).empty
+
+
+def test_prune_keeps_bars_inside_the_retention_window(tmp_path):
+    recent = make_candles([100, 101],
+                          start=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"))
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, recent)
+        assert cache.prune(retention_days=30) == 0
+
+
+def test_retention_is_off_by_default(tmp_path):
+    """History is small, and the deeper the cache the better the last tier
+    before a blank chart — so bounding it is opt-in."""
+    from optionspilot.data.config import CacheConfig
+
+    old = make_candles([100, 101], start="2020-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, old)
+    with CandleCache(tmp_path / "c.db") as cache:
+        assert cache.stats()["bars"] == 2
+        assert cache.config.retention_days is None
+
+
+def test_configured_retention_prunes_on_open(tmp_path):
+    from optionspilot.data.config import CacheConfig
+
+    old = make_candles([100, 101], start="2020-01-05 14:30")
+    with CandleCache(tmp_path / "c.db") as cache:
+        cache.store("SPY", Timeframe.M5, old)
+    with CandleCache(tmp_path / "c.db",
+                     config=CacheConfig(retention_days=30)) as cache:
+        assert cache.stats()["bars"] == 0
+        assert cache.stats()["evictions"] == 2
+
+
+def test_an_oversized_cache_is_flagged(tmp_path):
+    from optionspilot.data.config import CacheConfig
+
+    df = make_candles([100, 101], start="2026-01-05 14:30")
+    with CandleCache(tmp_path / "c.db",
+                     config=CacheConfig(warn_bytes=1)) as cache:
+        cache.store("SPY", Timeframe.M5, df)
+        assert cache.stats()["oversized"] is True

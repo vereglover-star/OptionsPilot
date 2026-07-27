@@ -138,9 +138,9 @@ orchestrator exposes for exactly that purpose (see `register_manual_entry`,
 
 ### 3.1 Data Engine (`optionspilot/data/`)
 
-Rebuilt in V0.5.2 into a multi-provider subsystem. **Full design, the measured
-provider limits, and the root causes it eliminates: `docs/MARKET_DATA.md`.**
-Summary of the layering (top to bottom):
+Rebuilt in V0.5.2 into a multi-provider subsystem, and made operable in V0.5.3.
+**Full design, the measured provider limits, and the root causes it eliminates:
+`docs/MARKET_DATA.md`.** Summary of the layering (top to bottom):
 
 ```
 MarketDataProvider (ABC)  ← everything above the data layer speaks only this
@@ -149,11 +149,22 @@ CachedProvider            ← the ABC's face; quotes/chains memoized here
       │ candles
 MarketDataService         ← the tier ladder + the four "no data" conditions
       │
-ProviderRegistry          ← ordering, eligibility, circuit breakers
+ProviderRegistry          ← eligibility, breakers, health-RANKED ordering
       │
 HistoryAdapter × N        ← Yahoo JSON (10) · yfinance (20) · Stooq (30)
+      │                       each owning one ProviderHealthMonitor
       +  CandleCache · quality · diagnostics · capabilities
+      +  health · config · report · replay · discovery      (V0.5.3)
 ```
+
+**V0.5.3 cross-cuts.** Each adapter owns a `ProviderHealthMonitor` — the single
+owner of its counters, latency, breaker and ranking score (previously split
+between the adapter and the registry, which is how a provider serving unusable
+bars could be recorded as *succeeding*). The registry orders by that rank rather
+than by a constant, though a cold system reproduces the static order exactly.
+`data/config.py` carries every operational knob; because `data/` may not import
+`config/`, the pydantic mirror lives in `config/settings.py` and is translated
+in `orchestrator.py` — the composition root that already imports both.
 
 - `MarketDataProvider` (abstract): `get_candles(symbol, timeframe, start, end)`,
   `get_quote(symbol)`, `get_option_chain(symbol, expiration)`. Unchanged — the
@@ -172,6 +183,21 @@ HistoryAdapter × N        ← Yahoo JSON (10) · yfinance (20) · Stooq (30)
 - **Circuit breakers.** A repeatedly-failing provider leaves rotation and
   returns by itself after a growing cooldown, via a single half-open probe — so
   one dead source cannot add its timeout to every chart load.
+- **Health-ranked ordering (V0.5.3).** Between "healthy" and "breaker open"
+  there is a wide band the breaker cannot express, and a provider in it used to
+  keep being asked first regardless. Ordering is now `priority + latency +
+  recent failure rate + quality`, scaled so one priority step equals one second
+  of latency — enough that a genuinely degraded primary yields, not so little
+  that ordering thrashes on noise. **Cold ranks equal priority**, so the shipped
+  chain starts in its documented order; `dynamic_ranking: false` pins it.
+- **Configurable without code changes (V0.5.3).** `config.yaml`'s
+  `market_data:` section owns per-provider enable/priority/timeout/retries/
+  breaker thresholds/quality floor plus cache and ranking policy, so retuning or
+  disabling a provider is not a source edit.
+- **Diagnosable without reproduction (V0.5.3).** Help ▸ Diagnostics renders the
+  health payload; the same payload exports as JSON or as a paste-safe text
+  report; and any recorded request can be replayed against every provider at
+  once to see who says what.
 - `CandleCache`: durable SQLite history — atomic writes, `PRAGMA quick_check` on
   open, corruption quarantined to `cache.db.corrupt-<ts>` and rebuilt (a damaged
   cache degrades to a *cold* cache, never a crash), versioned migrations,

@@ -12,7 +12,8 @@ import pytest
 
 from optionspilot.core.models import Timeframe
 from optionspilot.data.diagnostics import (
-    ALL_OUTCOMES, Diagnostics, OUTCOME_FAILED, OUTCOME_LIVE, OUTCOME_STALE,
+    ALL_OUTCOMES, Diagnostics, OUTCOME_EMPTY, OUTCOME_FAILED, OUTCOME_LIVE,
+    OUTCOME_STALE,
 )
 
 
@@ -144,3 +145,73 @@ def test_outcome_names_match_the_frontend_state_machine():
     during debugging, so they must not drift into synonyms."""
     assert set(ALL_OUTCOMES) == {
         "live", "memo", "cache", "stale", "empty", "exhausted", "failed"}
+
+
+# ── V0.5.3: structured logging ───────────────────────────────────────────────
+#
+# One line per request, key=value throughout. Deliberately greppable rather
+# than JSON: `logs/data.log` is read by a human looking at a user's bug report,
+# and `outcome=failed` is something you can find with Ctrl-F in Notepad.
+
+class TestStructuredLogging:
+    def _trace(self, diagnostics):
+        t = diagnostics.start("spy", Timeframe.M5, None, None, False)
+        t.attempt("yahoo", "RangeError", 12.0, detail="too old")
+        t.attempt("yfinance", "ok", 88.0, bars=300)
+        t.fallbacks = 1
+        t.retries = 1
+        t.validation = {"score": 98.0, "usable": True, "bars": 300,
+                        "issues": [], "counts": {}}
+        return t.finish(OUTCOME_LIVE, provider="yfinance", bars=300)
+
+    def test_every_field_needed_to_diagnose_a_request_is_present(self):
+        line = self._trace(Diagnostics()).log_line()
+        for key in ("req=", "symbol=SPY", "tf=5m", "outcome=live",
+                    "provider=yfinance", "bars=300", "duration_ms=",
+                    "cache=miss", "memo=miss", "retries=1", "fallbacks=1",
+                    "chain=", "quality=98.0", "usable=True"):
+            assert key in line, key
+
+    def test_the_fallback_chain_names_each_provider_and_its_verdict(self):
+        """One glance answers 'who did we ask and what did they say' — the
+        question a chart complaint always turns into."""
+        line = self._trace(Diagnostics()).log_line()
+        assert "chain=yahoo=RangeError > yfinance=ok" in line
+
+    def test_a_request_with_no_attempts_still_renders(self):
+        d = Diagnostics()
+        trace = d.start("SPY", Timeframe.M5, None, None, False)
+        assert "chain=-" in trace.finish(OUTCOME_EMPTY).log_line()
+
+    def test_the_failure_reason_is_quoted_and_bounded(self):
+        d = Diagnostics()
+        trace = d.start("SPY", Timeframe.M5, None, None, False)
+        line = trace.finish(OUTCOME_FAILED, message="x" * 500).log_line()
+        assert 'reason="' in line
+        assert len(line) < 400
+        assert "\n" not in line
+
+    def test_extended_hours_is_flagged(self):
+        d = Diagnostics()
+        trace = d.start("SPY", Timeframe.M5, None, None, True)
+        assert "ext=1" in trace.finish(OUTCOME_LIVE).log_line()
+
+    def test_the_chain_is_also_carried_in_the_trace_payload(self):
+        """So a log excerpt and the dashboard agree without translation."""
+        assert self._trace(Diagnostics()).as_dict()["chain"] == \
+            "yahoo=RangeError > yfinance=ok"
+
+    def test_structured_logging_can_be_switched_off(self):
+        d = Diagnostics(structured_logging=False)
+        trace = self._trace(d)
+        d.record(trace)          # must not raise; falls back to the prose form
+        assert d.summary()["total_requests"] == 1
+
+    def test_a_failure_logs_at_warning_and_a_success_does_not(self, caplog):
+        d = Diagnostics()
+        with caplog.at_level("WARNING"):
+            d.record(d.start("SPY", Timeframe.M5, None, None, False)
+                     .finish(OUTCOME_FAILED, message="everything is down"))
+            d.record(self._trace(d))
+        assert "outcome=failed" in caplog.text
+        assert "outcome=live" not in caplog.text

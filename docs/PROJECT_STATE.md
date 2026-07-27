@@ -3,7 +3,38 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-26, after **V0.5.2 Market Data & Chart Reliability**
+**Last updated:** 2026-07-26, after **V0.5.3 Market Data Production Readiness**
+(branch `v3-ui`, uncommitted). V0.5.2 built the market-data subsystem; V0.5.3
+makes it **operable**, and is deliberately infrastructure work rather than a
+feature — **no new provider, no version bump, no trading-behavior change, and a
+cold system answers exactly as V0.5.2 did.**
+
+Provider health had been split between `adapter.ProviderHealth` (counters) and
+`registry._Breaker` (rotation), with the breaker's trip condition being a *read
+of the adapter's counter* — one invariant, two owners. `data/health.py`'s
+`ProviderHealthMonitor` now owns counters, latency (EWMA + real p95), the
+rate-limit window, the breaker, per-day totals and the ranking score, and
+`COUNTS_AGAINST_HEALTH` is the single definition of which failures say anything
+about a provider's health. **That consolidation immediately exposed two real
+bugs**, both present since V0.5.2 and both invisible while the state was split:
+a provider serving consistently-unusable bars was recorded by the adapter as a
+*success* and its validation reject counted nowhere, so it kept the head of the
+chain indefinitely; and a demoted success could only ever reach a failure streak
+of 1, because recording the success had already zeroed the streak.
+
+On top of that: **health-ranked provider ordering** (priority as the anchor,
+moved by latency, recent failure rate and quality — scaled so one priority step
+equals one second of latency, with cold ranks equal to priority so the shipped
+order is unchanged, and `dynamic_ranking: false` to pin it); a **Help ▸
+Diagnostics** dashboard with JSON/text export and per-request replay across
+every provider; a **`market_data:` config section** carrying every operational
+knob so retuning or disabling a provider is not a source edit; cache
+intelligence; structured `key=value` request logging; advisory capability
+discovery; and a provider benchmark. 880 → **1052 tests** (+172), stress 41 →
+**65** scenarios, `chart_check` 49 → **52**. Full design: `docs/MARKET_DATA.md`
+§13–22.
+
+**Prior update:** 2026-07-26, after **V0.5.2 Market Data & Chart Reliability**
 (branch `v3-ui`, uncommitted). Chart history — the last subsystem that behaved
 inconsistently — was **replaced**, not patched, with a capability-driven
 multi-provider architecture inside `optionspilot/data/` (Yahoo chart JSON →

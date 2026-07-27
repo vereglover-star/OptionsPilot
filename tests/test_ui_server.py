@@ -725,3 +725,119 @@ class TestMarketDataDiagnosticsAPI:
         """Any injected `MarketDataProvider` must still be safe to ask."""
         d = client.get("/api/diagnostics/marketdata").json()
         assert d["available"] is False and "reason" in d
+
+
+# ── V0.5.3: the diagnostics dashboard's API surface ──────────────────────────
+
+@pytest.fixture
+def diag_client(tmp_path, monkeypatch):
+    """A client whose provider is the real market-data stack over a scripted
+    adapter, so the diagnostics/export/replay endpoints run end to end offline."""
+    from optionspilot.data.cached import CachedProvider
+    from optionspilot.data.registry import ProviderRegistry
+    from optionspilot.data.service import MarketDataService
+    from tests.marketdata_helpers import ScriptedAdapter, UNLIMITED, frame
+
+    monkeypatch.setattr("optionspilot.orchestrator.utcnow", lambda: NOW)
+    monkeypatch.setattr("optionspilot.ui.server.utcnow", lambda: NOW)
+    adapter = ScriptedAdapter("scripted", [frame(30, Timeframe.M5, end=NOW)],
+                              capabilities=UNLIMITED)
+    service = MarketDataService(ProviderRegistry([adapter]),
+                                cache_db=tmp_path / "cache.db",
+                                clock=lambda: NOW)
+    cfg = CFG.model_copy(deep=True)
+    orch = Orchestrator(
+        cfg,
+        provider=CachedProvider(FakeProvider(bullish_candles(), 100.0,
+                                             NOW.date()), service=service),
+        notifier=NotificationCenter(cfg.notify, [CollectingNotifier()]),
+        data_dir=tmp_path)
+    with TestClient(create_app(cfg, orchestrator=orch, run_loop=False,
+                               data_dir=tmp_path)) as c:
+        yield c
+
+
+class TestDiagnosticsDashboardPayload:
+    def test_it_carries_everything_the_dashboard_renders(self, diag_client):
+        """The page computes nothing — anything it shows must be in here, or a
+        screenshot and an export would disagree."""
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        d = diag_client.get("/api/diagnostics/marketdata").json()
+
+        assert set(d) >= {"providers", "ranking", "cache", "requests", "memo",
+                          "config", "traces", "available", "version"}
+        provider = d["providers"][0]
+        for key in ("rank", "state", "success_rate", "avg_latency_ms",
+                    "p95_latency_ms", "timeouts", "validation_failures",
+                    "rate_limits", "breaker_trips", "requests_today",
+                    "data_quality_score", "last_success_at", "intervals"):
+            assert key in provider, key
+        assert d["ranking"][0]["position"] == 1
+        assert d["cache"]["hit_rate"] is not None
+        assert d["traces"][0]["chain"]
+
+    def test_the_trace_count_is_bounded(self, diag_client):
+        """A request for a million traces must not try to serve a million."""
+        assert len(diag_client.get(
+            "/api/diagnostics/marketdata?traces=100000").json()["traces"]) <= 200
+
+
+class TestDiagnosticsExport:
+    def test_the_text_export_is_a_readable_report(self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        r = diag_client.get("/api/diagnostics/marketdata/export?format=text")
+        assert r.status_code == 200
+        assert "PROVIDERS" in r.text and "scripted" in r.text
+        assert "attachment" in r.headers["content-disposition"]
+        assert ".txt" in r.headers["content-disposition"]
+
+    def test_the_json_export_is_the_same_data(self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        live = diag_client.get("/api/diagnostics/marketdata").json()
+        exported = diag_client.get(
+            "/api/diagnostics/marketdata/export?format=json").json()
+        assert [p["name"] for p in exported["providers"]] == \
+            [p["name"] for p in live["providers"]]
+
+    def test_the_json_export_downloads_as_a_dated_file(self, diag_client):
+        r = diag_client.get("/api/diagnostics/marketdata/export?format=json")
+        disposition = r.headers["content-disposition"]
+        assert "attachment" in disposition and ".json" in disposition
+        assert "optionspilot-diagnostics-" in disposition
+
+    def test_an_export_works_before_any_request_has_been_made(self, diag_client):
+        """The first thing a user does after a bad launch is export."""
+        assert diag_client.get(
+            "/api/diagnostics/marketdata/export?format=text").status_code == 200
+
+
+class TestDiagnosticsReplay:
+    def test_replaying_a_recorded_trace_returns_every_provider_answer(
+            self, diag_client):
+        diag_client.get("/api/candles?symbol=SPY&tf=5m")
+        trace_id = diag_client.get(
+            "/api/diagnostics/marketdata").json()["traces"][0]["id"]
+
+        r = diag_client.post("/api/diagnostics/marketdata/replay",
+                             json={"trace_id": trace_id})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["symbol"] == "SPY"
+        assert body["answers"][0]["provider"] == "scripted"
+        assert body["service"]["outcome"] in ("live", "cache", "memo")
+
+    def test_a_missing_trace_id_is_a_400(self, diag_client):
+        assert diag_client.post("/api/diagnostics/marketdata/replay",
+                                json={}).status_code == 400
+
+    def test_an_unknown_trace_is_a_404_that_explains_itself(self, diag_client):
+        r = diag_client.post("/api/diagnostics/marketdata/replay",
+                             json={"trace_id": 999999})
+        assert r.status_code == 404
+        assert "ring" in r.json()["error"]
+
+    def test_replay_is_refused_on_a_provider_that_cannot_support_it(self, client):
+        r = client.post("/api/diagnostics/marketdata/replay",
+                        json={"trace_id": 1})
+        assert r.status_code == 404
+        assert "does not support replay" in r.json()["error"]

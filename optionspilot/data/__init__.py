@@ -28,7 +28,11 @@ from optionspilot.data.base import MarketDataProvider
 from optionspilot.data.cache import CandleCache
 from optionspilot.data.cached import CachedProvider
 from optionspilot.data.capabilities import ProviderCapabilities
+from optionspilot.data.config import (
+    CacheConfig, MarketDataConfig, ProviderConfig,
+)
 from optionspilot.data.diagnostics import Diagnostics
+from optionspilot.data.health import ProviderHealthMonitor
 from optionspilot.data.legacy import LegacyProviderAdapter
 from optionspilot.data.quality import HistoryReport, validate_history
 from optionspilot.data.registry import ProviderRegistry, default_registry
@@ -40,16 +44,25 @@ from optionspilot.data.yfinance_provider import YFinanceProvider
 
 
 def build_provider(cache_db: str | Path | None = None, *,
-                   include_stooq: bool = True) -> CachedProvider:
+                   include_stooq: bool = True,
+                   config: MarketDataConfig | None = None) -> CachedProvider:
     """Assemble the shipped market-data stack.
 
     History goes through the full provider chain (Yahoo JSON -> yfinance ->
     Stooq) with one shared cache and one diagnostics recorder. Quotes, option
     chains and expirations still come from `YFinanceProvider`, which remains
     the only source for options data in this build.
+
+    `config` is the one place operational settings enter the subsystem — which
+    providers are enabled, their timeouts, retries, breaker thresholds and
+    ranking. It reaches here from `config.yaml`'s `market_data:` section via
+    the orchestrator; omitting it uses the shipped defaults, which is what
+    every test and script that does not care about configuration does.
     """
-    service = MarketDataService(default_registry(include_stooq=include_stooq),
-                                cache_db=cache_db)
+    config = config or MarketDataConfig()
+    service = MarketDataService(
+        default_registry(include_stooq=include_stooq, config=config),
+        cache_db=cache_db, config=config)
     return CachedProvider(YFinanceProvider(), service=service)
 
 
@@ -62,4 +75,6 @@ __all__ = [
     "ProviderCapabilities", "Diagnostics", "HistoryReport", "validate_history",
     "ProviderError", "ProviderUnavailable", "ProviderRateLimited",
     "ProviderRangeError", "ProviderSymbolError",
+    "MarketDataConfig", "ProviderConfig", "CacheConfig",
+    "ProviderHealthMonitor",
 ]

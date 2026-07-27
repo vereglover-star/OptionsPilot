@@ -5,13 +5,66 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-26, end of V0.5.2 Market Data & Chart Reliability.
+**Last updated:** 2026-07-26, end of V0.5.3 Market Data Production Readiness.
 
-## What was completed most recently? (V0.5.2 — market-data subsystem)
+## What was completed most recently? (V0.5.3 — production readiness)
+
+V0.5.2 built the market-data subsystem. **V0.5.3 makes it operable.** 880 →
+**1052 tests** (+172); stress 41 → **65 scenarios**; `chart_check` 49 → **52**.
+**No new provider, no version bump, no trading-behavior change. Not committed —
+awaiting user review.** Full design: `docs/MARKET_DATA.md` §13–22.
+
+**Why:** V0.5.2 could serve data correctly but could not tell you *why* it had.
+Health lived in two objects, ordering was a hard-coded constant, every knob
+needed a source edit, and diagnosing a chart complaint meant reading logs.
+
+**What was built:**
+
+1. **`data/health.py` — one owner for provider health.** State used to live in
+   `adapter.ProviderHealth` (counters) *and* `registry._Breaker` (rotation),
+   with the breaker's trip condition being a read of the adapter's counter.
+   `ProviderHealthMonitor` now owns counters, latency (EWMA + real p95),
+   rate-limit window, breaker, per-day totals and the ranking score. The policy
+   "a range error is not an outage" lives once, in `COUNTS_AGAINST_HEALTH`.
+2. **Dynamic ranking** (`registry.candidates`) — priority as the anchor, moved
+   by latency, recent failure rate, consecutive failures, breaker history and
+   quality. **10 rank points = 1 second of latency**, so Yahoo at 180ms beats
+   Stooq at 320ms but Yahoo at 2.4s loses to Stooq at 260ms. **Cold ranks equal
+   priority**, so a fresh system reproduces V0.5.2's order exactly;
+   `dynamic_ranking: false` pins it. The rank's failure rate is measured over a
+   **moving 50-attempt window** — a lifetime rate never decays.
+3. **Help ▸ Diagnostics** — a dashboard over `/api/diagnostics/marketdata`, plus
+   `…/export?format=text|json` (dated attachment, safe to paste publicly) and
+   `POST …/replay` (re-run a recorded request, poll every provider, compare).
+4. **`market_data:` in `config.yaml`** (`data/config.py`) — enabled, priority,
+   timeout, retries, backoff, throttle, breaker thresholds, quality floor,
+   ranking on/off, memo cap, cache policy/retention. Unknown keys are a startup
+   error; unknown *providers* are accepted (so a future provider's settings can
+   be pinned before its adapter ships).
+5. **Cache intelligence** (`CacheMetrics`), **structured logging** (one
+   `key=value` line per request, with the full provider chain), **capability
+   discovery** (`data/discovery.py`, advisory + off by default), and
+   **`scripts/marketdata_benchmark.py`**.
+
+**Two real bugs the consolidation exposed** (both present since V0.5.2, both
+invisible without a single owner):
+
+- A provider serving consistently-unusable bars was recorded by the adapter as a
+  **success** and the service's validation reject was counted nowhere — so a
+  source answering promptly with garbage kept the head of the chain forever.
+- A demoted success could only ever reach a failure streak of **1**, because
+  recording the success had already zeroed the streak.
+
+**Still open:** the 84-item manual QA (`docs/QA_MARKET_DATA.md`) is still not
+run by hand. Adding a real second non-Yahoo intraday provider (Tiingo / Twelve
+Data, free key) is now genuinely one file + one registry entry — see
+`docs/MARKET_DATA.md` §21 for the checklist.
+
+## What was completed before that? (V0.5.2 — market-data subsystem)
 
 Chart history was the last subsystem that behaved inconsistently. It was
-**replaced**, not patched. 651 → **880 tests** (+229). No version bump, no
-trading-behavior change. **Not committed — awaiting user review.**
+**replaced**, not patched. 651 → 880 (+229) tests at the time. No version bump,
+no trading-behavior change.
 Full design + measurements + provider survey: `docs/MARKET_DATA.md`.
 84 manual checks: `docs/QA_MARKET_DATA.md`.
 
@@ -71,17 +124,12 @@ Full design + measurements + provider survey: `docs/MARKET_DATA.md`.
   reaching the start of history shows **"◄ Start of available history · 5m data
   starts May 28, 2026"** and stops requesting.
 
-**Verification:** 880 tests (250 market-data, all offline);
+**Verification at the time:** the then-880-test suite (250 market-data, all offline);
 `scripts/marketdata_stress.py` 41 offline scenarios (now in `verify.ps1`) + 6
 live behind `--live`; `scripts/chart_check.py` at 49 checks and **green end to
 end** — it had been dying at check 12 on `main`, which is how root cause #2 was
 found. Measured: **24 concurrent live chart loads in 0.5s, zero blanks**
-(10–15s before).
-
-**Still open:** the 84-item manual QA (`docs/QA_MARKET_DATA.md`) has not been
-run by hand — several checks need market hours and DevTools throttling. An
-optional second non-Yahoo intraday provider (Tiingo / Twelve Data, free key) is
-the natural next reliability step; streaming needs a paid feed.
+(10–15s before). V0.5.3 has since taken these to 1044 / 65 / 52.
 
 ## What was completed before that? (V0.5.0 — Auto-Updater 1.0)
 

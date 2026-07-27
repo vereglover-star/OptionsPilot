@@ -43,7 +43,7 @@ import pandas as pd
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.data.adapter import (
     HistoryAdapter, ProviderRangeError, ProviderRateLimited,
-    ProviderSymbolError, ProviderUnavailable, Snapshot,
+    ProviderSymbolError, ProviderUnavailable, Snapshot, timeout_or_unavailable,
 )
 from optionspilot.data.capabilities import IntervalSpec, YAHOO_CAPABILITIES
 
@@ -88,15 +88,23 @@ class YahooChartAdapter(HistoryAdapter):
     # window genuinely holds no bars — a 200 response whose `timestamp` array
     # is absent. That is exactly the property that makes this the primary.
     reports_empty_reliably = True
+    default_timeout = REQUEST_TIMEOUT
 
-    def __init__(self, *, timeout: float = REQUEST_TIMEOUT,
+    def __init__(self, config=None, *, timeout: float | None = None,
                  opener=None, hosts: tuple[str, ...] = HOSTS):
-        super().__init__()
-        self._timeout = timeout
+        super().__init__(config)
+        # An explicit `timeout=` wins over configuration; configuration wins
+        # over `default_timeout`. Tests use the first, users the second.
+        if timeout is not None:
+            self.timeout = timeout
         # Injected in tests so the whole adapter runs offline; in production
         # this is urllib's default opener.
         self._opener = opener or urllib.request.urlopen
         self._hosts = hosts
+
+    @property
+    def _timeout(self) -> float:
+        return self.timeout
 
     # ── transport ────────────────────────────────────────────────────────────
 
@@ -144,7 +152,12 @@ class YahooChartAdapter(HistoryAdapter):
                 last = exc              # malformed body: the other host may be fine
             except Exception as exc:  # noqa: BLE001 — timeouts, DNS, TLS, resets
                 last = exc
-        raise ProviderUnavailable(f"yahoo unreachable for {symbol}: {last}")
+        # A timeout is reported as its own kind: a provider that is SLOW and one
+        # that is BROKEN want different responses, and the ranking reacts to the
+        # difference. Both are still `ProviderUnavailable` subclasses, so every
+        # existing handler is unaffected.
+        raise timeout_or_unavailable(
+            f"yahoo unreachable for {symbol}: {last}", last or Exception())
 
     # ── HistoryAdapter contract ──────────────────────────────────────────────
 

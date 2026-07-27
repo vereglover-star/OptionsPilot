@@ -35,10 +35,11 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
 - `MarketDataProvider` ABC — `get_candles/get_quote/get_expirations/get_option_chain`.
 - Canonical candle frame: UTC index `ts`, columns `open high low close volume`
   (enforced by `base.validate_candles`).
-- `build_provider(cache_db)` — **the composition root**: assembles the shipped
-  chain (Yahoo JSON → yfinance → Stooq) with one cache and one diagnostics
-  recorder. The orchestrator calls this; nothing else needs to know which
-  providers exist or in what order.
+- `build_provider(cache_db, config=)` — **the composition root**: assembles the
+  shipped chain (Yahoo JSON → yfinance → Stooq) with one cache and one
+  diagnostics recorder. The orchestrator calls this; nothing else needs to know
+  which providers exist or in what order. `config` is the translated
+  `market_data:` section (see `config.py` below).
 - `capabilities.py` — `ProviderCapabilities`: what each provider can serve, per
   interval, including its real history depth **measured from now**
   (`YAHOO_INTERVALS`). Answers "can this request be served at all?" without
@@ -56,9 +57,24 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   daily/weekly/monthly only, decades deep.
 - `legacy.LegacyProviderAdapter` — wraps any plain `MarketDataProvider` (test
   fakes, backtest fixtures) into the same ladder.
+- `health.ProviderHealthMonitor` — **the single owner of a provider's
+  operational state**: counters (requests/successes/failures/empties/today),
+  latency (EWMA + p95 over a rolling window), the per-kind failure breakdown,
+  the rate-limit window, the circuit breaker, the rolling quality score, and
+  `rank()`. `COUNTS_AGAINST_HEALTH` is the one definition of which failures say
+  anything about a provider's health (range and symbol errors do not).
+  `snapshot()` is what the dashboard, the export and the benchmark all read.
+- `config.py` — `MarketDataConfig` / `ProviderConfig` / `CacheConfig`: every
+  operational knob (enabled, priority, timeout, retries, backoff, throttle,
+  breaker thresholds, quality floor, ranking, memo cap, cache retention).
+  Plain dataclasses because `data/` may not import `config/`; the pydantic
+  mirror is `config.settings.MarketDataConfigSection` and the translation
+  happens in `orchestrator.py`. Unknown keys raise; unknown providers do not.
 - `registry.ProviderRegistry` — ordering, eligibility (interval/symbol/depth
   checks *before* the network), and per-provider circuit breakers with
-  half-open recovery.
+  half-open recovery. Ordering is by `monitor.rank()` (health-aware; a cold
+  system reproduces the static priority order exactly), and `ranking()` /
+  `healthiest()` expose it. `dynamic_ranking: false` pins the static order.
 - `quality.py` — semantic validation returning a `HistoryReport`: OHLC
   consistency, ordering, duplicates, future timestamps, non-finite values, bad
   prints, interval conformance. Gaps are recorded, never penalised.
@@ -67,10 +83,29 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   four distinct "no data" conditions (`exhausted`/`empty`/`stale`/`failed`) are
   told apart. Returns a `HistoryResult`.
 - `diagnostics.py` — one `RequestTrace` per request in a bounded ring; served by
-  `GET /api/diagnostics/marketdata`.
+  `GET /api/diagnostics/marketdata`. `trace.log_line()` emits the one structured
+  `key=value` line per request (including `chain=` — every provider tried and
+  its verdict) that `logs/data.log` carries.
+- `report.py` — renders a health payload as the plain-text diagnostics report a
+  user pastes into a bug report. **It renders, it never computes**: every number
+  comes from the payload, so the text, the dashboard and the JSON export cannot
+  disagree. Carries no stack traces, paths or credentials by construction.
+- `replay.py` — `replay(service, trace)` re-runs a recorded request;
+  `compare_providers(registry, request)` asks **every** provider directly
+  (bypassing memo, cache, failover and breaker) and reports bars, latency,
+  quality and cross-provider disagreement. No separate recorder exists — the
+  diagnostics trace already holds everything replay needs.
+- `discovery.py` — measures a provider's real per-interval depth (ladder walk +
+  binary search), persists it via `CapabilityStore`, refreshes on a cadence, and
+  reports `drift()` against the shipped table. **Advisory and off by default**:
+  it does not rewrite `capabilities.py`. `scripts/marketdata_probe.py` calls
+  into it, so app and script measure depth identically.
 - `CandleCache` (`cache.py`) — durable SQLite history keyed
   (symbol, timeframe, ts), with provider attribution, atomic writes, integrity
   check on open, corruption quarantine + rebuild, and versioned migrations.
+  `CacheMetrics` tracks hits/misses/hit rate/stale reads/evictions/average age
+  and `provider_requests_saved`; optional `retention_days` pruning (off by
+  default) bounds the file.
 - `CachedProvider` (`cached.py`) — the `MarketDataProvider` face: candles go to
   `MarketDataService`; quotes/chains/expirations stay memoized (5s / 30s / 1h)
   over `YFinanceProvider` with in-flight dedup. `get_history()` returns the full

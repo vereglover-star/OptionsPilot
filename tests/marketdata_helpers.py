@@ -194,14 +194,15 @@ class ScriptedAdapter(HistoryAdapter):
 
     def __init__(self, name: str, script=None, *, priority: int = 100,
                  capabilities: ProviderCapabilities | None = None,
-                 timeframe: Timeframe = Timeframe.M5):
+                 timeframe: Timeframe = Timeframe.M5,
+                 config=None):
         self.provider_name = name
         self.provider_priority = priority
         self.capabilities = capabilities or UNLIMITED
         self.min_request_interval = 0.0
         self._script = list(script) if script is not None else [frame(20, timeframe)]
         self.calls: list[tuple] = []
-        super().__init__()
+        super().__init__(config)
 
     def _fetch_native(self, symbol, spec, start, end, prepost):
         self.calls.append((symbol, spec.native, start, end, prepost))

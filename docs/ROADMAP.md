@@ -9,6 +9,23 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.5.3 — Market data production readiness (2026-07-26, uncommitted)
+
+V0.5.2 built the subsystem; this made it **operable**, as infrastructure work
+rather than a feature. Provider health gained a single owner
+(`data/health.py`), the provider chain is ordered by measured health instead of
+a hard-coded constant (a cold system reproduces the old order exactly), and
+**Help ▸ Diagnostics** answers "why did that chart look like that?" from one
+page — with JSON/text export and per-request replay across every provider.
+Every operational knob moved into `config.yaml`'s `market_data:` section, so
+adding or retuning a provider needs no code change; the consolidation also
+surfaced and fixed two real accounting bugs (a provider serving unusable bars
+was recorded as *succeeding*, and a demoted success could never build a failure
+streak). Also: cache intelligence, structured request logging, advisory
+capability discovery, and a provider benchmark. **No new provider by design** —
+the point was to make adding one cheap. 880 → 1052 tests; stress 41 → 65;
+`chart_check` 49 → 52. Design: `docs/MARKET_DATA.md` §13–22.
+
 ### V0.5.2 — Market data & chart reliability (2026-07-26, uncommitted)
 
 Chart history — the last inconsistent subsystem — replaced rather than patched.

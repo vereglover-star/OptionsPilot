@@ -12,6 +12,25 @@ is. This file is the flat, actionable checklist version.
       the placeholder `LICENSE`, and run one manual end-to-end update QA on real
       Windows (`docs/AUTO_UPDATER.md` §7).
 
+- [x] **V0.5.3 Market-data production readiness** — done 2026-07-26. Made the
+      V0.5.2 subsystem *operable*: `data/health.py` (`ProviderHealthMonitor` —
+      one owner for counters, latency/p95, breaker, per-day totals and the
+      ranking score, replacing the split between `adapter.ProviderHealth` and
+      `registry._Breaker`), health-ranked provider ordering (cold ranks equal
+      priority, so the shipped order is unchanged; `dynamic_ranking: false`
+      pins it), **Help ▸ Diagnostics** with JSON/text export and per-request
+      replay, `data/config.py` + `market_data:` in `config.yaml` (every
+      operational knob, no code edit), cache intelligence, structured
+      `key=value` request logging, `data/discovery.py` (advisory capability
+      discovery, off by default) and `scripts/marketdata_benchmark.py`.
+      Fixed two real accounting bugs found by the consolidation: a provider
+      serving consistently-unusable bars was recorded as *succeeding* and never
+      tripped its breaker, and a demoted success could never build a failure
+      streak past 1. +172 tests (1052); stress 41 → 65 scenarios; `chart_check`
+      49 → 52 (three new checks drive the dashboard and a replay in a real
+      browser). No new provider, no version bump, no trading-behavior change.
+      Full design: `docs/MARKET_DATA.md` §13–22.
+
 - [x] **V0.5.2 Market-data subsystem** — done 2026-07-26. Replaced the chart
       history stack with a capability-driven, multi-provider architecture inside
       `optionspilot/data/`: `capabilities` (measured per-interval depth, from
@@ -34,8 +53,17 @@ is. This file is the flat, actionable checklist version.
 - [ ] **Optional: a second non-Yahoo intraday provider** — Tiingo or Twelve
       Data behind a free API key would make an entire Yahoo outage survivable at
       intraday resolution (Stooq only covers daily+). The chain is already built
-      for it: one adapter file plus one `default_registry()` entry. See
-      `docs/MARKET_DATA.md` §4 for the survey and §12 for the rationale.
+      for it: one adapter file plus one `default_registry()` entry, and since
+      V0.5.3 the whole operational half (dashboard row, breaker, config section,
+      replay, benchmark, ranking) comes for free. See `docs/MARKET_DATA.md` §4
+      for the survey, §21 for the step-by-step checklist.
+
+- [ ] **Optional: act on cross-provider disagreement.**
+      `quality.disagreement()` measures it, diagnostics record it, and
+      `compare_providers` surfaces it per request — but nothing acts on it,
+      deliberately: deciding which source is "right" is not something the data
+      layer can know. Worth revisiting only with a third independent intraday
+      source, where a majority vote would actually mean something.
 
 - [x] **V0.5.0 Auto-Updater 1.0** — done 2026-07-26. Self-contained
       `optionspilot/update/` subpackage (core + stdlib only, `urllib`, no new

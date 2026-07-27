@@ -126,18 +126,62 @@ class RequestTrace:
             "duration_ms": round(self.duration_ms, 1),
             "validation": self.validation,
             "attempts": [a.as_dict() for a in self.attempts],
+            "chain": self.fallback_chain(),
             "message": self.message,
             "earliest_available": (self.earliest_available.isoformat()
                                    if self.earliest_available else None),
         }
 
 
+    def fallback_chain(self) -> str:
+        """The providers consulted, in order, with each one's verdict —
+        `yahoo=RangeError > yfinance=ok`. One glance answers "who did we ask
+        and what did they say", which is the question a chart complaint always
+        turns into."""
+        if not self.attempts:
+            return "-"
+        return " > ".join(f"{a.provider}={a.outcome}" for a in self.attempts)
+
+    def log_line(self) -> str:
+        """One structured line per request, `key=value` throughout.
+
+        Deliberately greppable rather than JSON: `logs/data.log` is read by a
+        human looking at a user's bug report, and `outcome=failed` is something
+        you can find with Ctrl-F in Notepad. Every field the dashboard shows for
+        a request is here, so a log excerpt and a trace agree.
+        """
+        parts = [
+            f"req={self.id}",
+            f"symbol={self.symbol}",
+            f"tf={self.timeframe}",
+            f"outcome={self.outcome}",
+            f"provider={self.provider or '-'}",
+            f"bars={self.bars}",
+            f"duration_ms={self.duration_ms:.0f}",
+            f"cache={'hit' if self.cache_hit else 'miss'}",
+            f"memo={'hit' if self.memo_hit else 'miss'}",
+            f"retries={self.retries}",
+            f"fallbacks={self.fallbacks}",
+            f"chain={self.fallback_chain()}",
+        ]
+        if self.validation:
+            parts.append(f"quality={self.validation.get('score')}")
+            parts.append(f"usable={self.validation.get('usable')}")
+        if self.extended_hours:
+            parts.append("ext=1")
+        if self.message:
+            parts.append(f'reason="{self.message[:160]}"')
+        return " ".join(parts)
+
+
 class Diagnostics:
     """Bounded trace ring + running aggregates. Thread-safe."""
 
-    def __init__(self, max_traces: int = MAX_TRACES):
+    def __init__(self, max_traces: int = MAX_TRACES, *,
+                 structured_logging: bool = True):
         self._lock = threading.Lock()
         self._traces: deque[RequestTrace] = deque(maxlen=max_traces)
+        self._structured = structured_logging
         self._next_id = 1
         self._outcomes: dict[str, int] = {}
         self._provider_bars: dict[str, int] = {}
@@ -169,16 +213,18 @@ class Diagnostics:
                     self._provider_requests.get(trace.provider, 0) + 1
                 self._provider_bars[trace.provider] = \
                     self._provider_bars.get(trace.provider, 0) + trace.bars
-        # A failed or knowingly-degraded request is worth a log line; a normal
-        # one is not (the ring holds it either way).
+        # A failed or knowingly-degraded request is worth a WARNING; a normal
+        # one goes out at DEBUG (the ring holds it either way). Both carry the
+        # same structured line, so raising the log level to investigate an
+        # intermittent problem gives the same fields as the dashboard rather
+        # than a different, thinner message.
+        line = trace.log_line() if self._structured else (
+            f"history {trace.symbol} {trace.timeframe} -> {trace.outcome} "
+            f"in {trace.duration_ms:.0f}ms via {trace.provider or '-'}")
         if trace.outcome in (OUTCOME_FAILED, OUTCOME_STALE):
-            log.warning("history %s %s -> %s in %.0fms via %s: %s",
-                        trace.symbol, trace.timeframe, trace.outcome,
-                        trace.duration_ms, trace.provider or "-", trace.message)
+            log.warning("history %s", line)
         else:
-            log.debug("history %s %s -> %s (%d bars) in %.0fms via %s",
-                      trace.symbol, trace.timeframe, trace.outcome, trace.bars,
-                      trace.duration_ms, trace.provider or "-")
+            log.debug("history %s", line)
         return trace
 
     # ── reporting ────────────────────────────────────────────────────────────

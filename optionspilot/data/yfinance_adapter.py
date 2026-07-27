@@ -26,7 +26,7 @@ import pandas as pd
 
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.data.adapter import (
-    HistoryAdapter, ProviderUnavailable, Snapshot,
+    HistoryAdapter, ProviderUnavailable, Snapshot, timeout_or_unavailable,
 )
 from optionspilot.data.capabilities import IntervalSpec, YAHOO_CAPABILITIES
 
@@ -56,13 +56,20 @@ class YFinanceAdapter(HistoryAdapter):
     provider_priority = 20
     capabilities = YAHOO_CAPABILITIES
     min_request_interval = 0.15
+    default_timeout = REQUEST_TIMEOUT
 
-    def __init__(self, *, timeout: float = REQUEST_TIMEOUT, ticker_factory=None):
-        super().__init__()
-        self._timeout = timeout
+    def __init__(self, config=None, *, timeout: float | None = None,
+                 ticker_factory=None):
+        super().__init__(config)
+        if timeout is not None:
+            self.timeout = timeout
         # Injected in tests so this adapter is exercised without yfinance or a
         # network; production passes None and we import lazily.
         self._ticker_factory = ticker_factory
+
+    @property
+    def _timeout(self) -> float:
+        return self.timeout
 
     def _ticker(self, symbol: str):
         if self._ticker_factory is not None:
@@ -75,6 +82,7 @@ class YFinanceAdapter(HistoryAdapter):
         from optionspilot.data.yahoo_provider import yahoo_symbols
 
         errors: list[str] = []
+        last_exc: BaseException | None = None
         for candidate in yahoo_symbols(symbol):
             try:
                 raw = self._ticker(candidate).history(
@@ -84,6 +92,7 @@ class YFinanceAdapter(HistoryAdapter):
                 )
             except Exception as exc:  # noqa: BLE001 — timeouts, parse errors
                 errors.append(f"{candidate}: {exc}")
+                last_exc = exc
                 continue
             if raw is None or raw.empty:
                 errors.append(f"{candidate}: empty frame")
@@ -91,9 +100,13 @@ class YFinanceAdapter(HistoryAdapter):
             return _normalize(raw)
         # yfinance cannot distinguish "no data" from "request refused", so an
         # all-empty result becomes a retryable unavailability rather than a
-        # silent success with zero bars.
-        raise ProviderUnavailable(
-            f"yfinance returned no data for {symbol} {spec.native} ({'; '.join(errors)})")
+        # silent success with zero bars. A genuine timeout is reported as such,
+        # so provider health can tell "slow" from "broken".
+        message = (f"yfinance returned no data for {symbol} {spec.native} "
+                   f"({'; '.join(errors)})")
+        if last_exc is not None:
+            raise timeout_or_unavailable(message, last_exc)
+        raise ProviderUnavailable(message)
 
     def _probe(self) -> None:
         raw = self._ticker("SPY").history(period="1d", interval="1d",

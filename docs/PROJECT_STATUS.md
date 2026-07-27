@@ -5,12 +5,12 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-26, V0.5.2 Market Data & Chart Reliability. Full
-880-test `pytest` suite green (+229), HTML-id + doc checks green, JS `node --check`
-clean, `scripts/marketdata_stress.py` 41/41 offline + 47/47 with `--live`, and
-`scripts/chart_check.py` 49/49 in a real headless browser (it had been failing at
-check 12 before this work — that failure is how the memo-poisoning root cause was
-found). The 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not**
+**Last verified:** 2026-07-26, V0.5.3 Market Data Production Readiness. Full
+**1052-test** `pytest` suite green (+172), HTML-id + doc checks green,
+`scripts/marketdata_stress.py` **65/65** offline, and `scripts/chart_check.py`
+**52/52** in a real headless browser (three new checks drive the Help ▸
+Diagnostics dashboard and a live replay). `browser_check.py` and `pip check`
+green. The 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not**
 been run. The ISCC compile + real install/upgrade runs and a live end-to-end
 update remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
@@ -27,8 +27,22 @@ installed app now updates itself from GitHub Releases.
 
 ## Current phase
 
-**V0.5.2 Market Data & Chart Reliability, on branch `v3-ui` — awaiting user
-review.** Chart history was replaced rather than patched: a capability-driven,
+**V0.5.3 Market Data Production Readiness, on branch `v3-ui` — awaiting user
+review.** V0.5.2 built the market-data subsystem; V0.5.3 makes it *operable*.
+Provider health has one owner (`data/health.py`), the provider chain is ordered
+by **measured health** rather than a hard-coded constant (a cold system keeps
+the documented order exactly), and there is a **Help ▸ Diagnostics** dashboard
+with JSON/text export and per-request replay. Every operational knob — enabled,
+priority, timeout, retries, breaker thresholds, quality floor, cache retention,
+ranking on/off — moved into `config.yaml`'s `market_data:` section, so adding or
+retuning a provider needs no code change. The consolidation surfaced and fixed
+two real accounting bugs: a provider serving consistently-unusable bars was
+recorded as *succeeding* and never tripped its breaker, and a demoted success
+could never build a failure streak past 1. **No new provider, no version bump,
+no trading-behavior change.** Design: `docs/MARKET_DATA.md` §13–22.
+
+**Before that: V0.5.2 Market Data & Chart Reliability.** Chart history was
+replaced rather than patched: a capability-driven,
 multi-provider architecture (Yahoo chart JSON → yfinance → Stooq) with typed
 provider failures, circuit breakers, semantic validation, durable self-healing
 storage, and one diagnostics trace per request. The four conditions that used to
@@ -317,7 +331,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**880 tests, 100% passing** (`.\scripts\test.ps1`, ~45s). Frontend coverage
+**1052 tests, 100% passing** (`.\scripts\test.ps1`, ~45s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), and `scripts/chart_check.py` (chart alias, drawing, and
