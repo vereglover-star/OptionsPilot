@@ -124,11 +124,33 @@ class TestEachFault:
 
     def test_a_latency_fault_produces_real_measured_latency(self):
         """The ranking must demote it because the latency is REAL, not because
-        a number was written down somewhere."""
+        a number was written down somewhere.
+
+        This asserted `avg_latency_ms >= 50.0` against a fault armed for
+        exactly 0.05s — a tight enough margin that GitHub-hosted Windows
+        runners (whose default timer resolution is ~15.6ms, and whose
+        `time.sleep` can return a few ms short of the requested duration
+        under scheduler load) measured 47.0ms and failed, even though the
+        fault fired correctly. The behavior being proven is that the
+        latency is real and scales with what was armed — not that it hits
+        an exact millisecond floor — so this arms a longer, noise-dominant
+        duration and checks it against a wide tolerance and against a
+        same-process unfaulted baseline, rather than a threshold sized to
+        beat clock jitter by only a few percent.
+        """
+        baseline = ScriptedAdapter("alpha", [frame(20, Timeframe.M5)])
+        baseline.fetch_history(_request())
+
         adapter = ScriptedAdapter("alpha", [frame(20, Timeframe.M5)])
-        FAULTS.arm("alpha", FAULT_LATENCY, seconds=0.05)
+        seconds = 0.3
+        FAULTS.arm("alpha", FAULT_LATENCY, seconds=seconds)
         adapter.fetch_history(_request())
-        assert adapter.monitor.avg_latency_ms >= 50.0
+
+        # Comfortably below `seconds`, so ordinary scheduler slop can never
+        # trip it, but still an order of magnitude above the unfaulted
+        # baseline — the latency is genuinely being measured, not faked.
+        assert adapter.monitor.avg_latency_ms >= seconds * 1000 * 0.8
+        assert adapter.monitor.avg_latency_ms > baseline.monitor.avg_latency_ms * 10
         assert adapter.monitor.successes == 1
 
     def test_a_counted_fault_expires_by_itself(self):
