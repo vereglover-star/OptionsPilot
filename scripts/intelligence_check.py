@@ -102,6 +102,14 @@ def seed(root: Path) -> None:
         PRAGMA user_version = 1;
     """)
 
+    # V0.6.1: a scratch profile has never been onboarded, so the welcome
+    # dialog would sit over every assertion below. The onboarding flow itself
+    # is covered by scripts/guide_check.py.
+    (data / "settings.json").write_text(json.dumps({
+        "guide": {"onboarded": True, "completed": [], "dismissed": [],
+                  "features": {}, "reduce_motion": False, "tips": True,
+                  "version": 1}}, indent=2), encoding="utf-8")
+
     reviews = root / "data" / "coach"
     reviews.mkdir(parents=True, exist_ok=True)
 

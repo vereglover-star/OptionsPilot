@@ -5,6 +5,24 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.6.1 Intelligent user experience & interactive onboarding** — done
+      2026-07-28. The backend had become far more sophisticated than the
+      experience of using it: nothing was missing, everything was unexplained.
+      New `optionspilot/ui/guide.py` (pure domain layer: state validation, merge
+      semantics, feature-usage → tutorial recommendations) behind
+      `GET /api/guide` + `POST /api/guide/state`, with progress persisted in
+      `settings.json` rather than localStorage so a reinstall does not greet a
+      returning user as a beginner. In `index.html`: a data-driven tutorial
+      engine (11 walkthroughs, 52 steps, spotlight + floating card, advancing on
+      real clicks on real controls with the page left fully interactive), a
+      37-term plain-English glossary with adaptive hover tips, a searchable help
+      centre on `?`/`Ctrl+K`, per-screen Learn buttons, teaching empty states,
+      an app-wide reduced-motion switch, and **order-ticket guardrails** that
+      make the three combinations `OrderManager.place` refuses unassemblable —
+      each correction explaining what changed, why, and what to do instead.
+      Two defects found by the new browser suite and fixed. 1849 → 1908 tests;
+      new 135-check `scripts/guide_check.py`. Design: `docs/ONBOARDING.md`.
+
 - [x] **V0.6.0 Trading Intelligence Engine** — done 2026-07-28. The analytical
       brain: one layer that turns everything already recorded about completed
       trades into structured, evidence-backed insight every other part of the

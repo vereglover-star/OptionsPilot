@@ -88,6 +88,15 @@ def main() -> int:
 
             page.goto(base)
             page.wait_for_selector("#hero", timeout=20000)
+            # A scratch profile has never been onboarded, so this IS the real
+            # first-launch path (V0.6.1). Dismissing it here is coverage, not a
+            # workaround: if the welcome dialog ever failed to close, every
+            # click below would fail with "intercepts pointer events" — which
+            # is exactly how this check first caught it.
+            page.wait_for_selector("#gd-welcome.show", timeout=10000)
+            page.click("#gd-w-skip")
+            page.wait_for_selector("#gd-welcome.show", state="hidden",
+                                   timeout=5000)
             for tab in TABS:
                 page.click(f'nav button[data-tab="{tab}"]')
                 page.wait_for_selector(f"#tab-{tab}", state="visible", timeout=10000)

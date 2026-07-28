@@ -9,6 +9,25 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.6.1 — Intelligent UX & interactive onboarding (2026-07-28, uncommitted)
+
+Software that teaches itself. By V0.6.0 the backend was far more sophisticated
+than the experience of using it — nothing missing, everything unexplained.
+V0.6.1 adds a data-driven tutorial engine (11 walkthroughs, 52 steps; a step is a
+selector, a sentence and how it advances, so a new screen's walkthrough is data
+rather than code), a spotlight that leaves the page fully interactive so the user
+drives the real controls, a 37-term plain-English glossary with adaptive hover
+tips, a searchable help centre on `?`/`Ctrl+K`, per-screen Learn buttons,
+teaching empty states, an app-wide reduced-motion switch with full keyboard and
+screen-reader support, feature-aware tutorial suggestions in the Coach tab, and
+**order-ticket guardrails** that make the three combinations `OrderManager.place`
+refuses unassemblable. New `optionspilot/ui/guide.py` (pure domain layer) behind
+`GET /api/guide` + `POST /api/guide/state`, with progress in `settings.json`
+rather than localStorage. **No trading-behaviour change, no new dependency, no
+new tab, no validation weakened.** Two defects found by the new suite and fixed.
+1849 → 1908 tests; new 135-check `scripts/guide_check.py`. Design:
+`docs/ONBOARDING.md`.
+
 ### V0.6.0 — Trading Intelligence Engine (2026-07-28, uncommitted)
 
 The analytical brain, and the foundation the AI Coach is meant to become a

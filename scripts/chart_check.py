@@ -30,6 +30,7 @@ missing install a hard failure. Never touches the real data/ directory.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -58,6 +59,29 @@ def wait_for(url: str, timeout: float = 25.0) -> bool:
     return False
 
 
+
+def skip_onboarding(root) -> None:
+    """Mark the first-launch tour as already seen in a scratch profile.
+
+    V0.6.1 shows a welcome dialog on a profile that has never been onboarded,
+    and every check script here starts from exactly that state — so without
+    this they would each spend their run fighting a modal that is not their
+    subject. `scripts/guide_check.py` is where the welcome flow is tested.
+    """
+    data = root / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    settings = data / "settings.json"
+    doc = {}
+    if settings.exists():
+        try:
+            doc = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+    doc["guide"] = {"onboarded": True, "completed": [], "dismissed": [],
+                    "features": {}, "reduce_motion": False, "tips": True,
+                    "version": 1}
+    settings.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
 def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads clearest
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8800)
@@ -77,6 +101,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
         return 0
 
     scratch = Path(tempfile.mkdtemp(prefix="optionspilot-chart-"))
+    skip_onboarding(scratch)
     base = f"http://127.0.0.1:{args.port}"
     # `cwd=scratch` alone STOPPED isolating anything in V0.4.4, when the storage
     # root moved off the CWD to %LOCALAPPDATA%\OptionsPilot — so every run since

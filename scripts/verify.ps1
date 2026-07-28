@@ -66,6 +66,10 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: trading intelligence UI check"
     & $python "$PSScriptRoot\intelligence_check.py" @browserArgs
     $results["Trading intelligence UI check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: guided onboarding & help UI check"
+    & $python "$PSScriptRoot\guide_check.py" @browserArgs
+    $results["Guided onboarding UI check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

@@ -817,6 +817,45 @@ flowchart LR
 
 ---
 
+## 15b. Guided onboarding & contextual help (V0.6.1)
+
+Full design in `docs/ONBOARDING.md`. Shape only, here.
+
+```
+ui/guide.py          pure domain: state validation, merge semantics,
+   ▲                 feature-usage → tutorial recommendations
+   │                 (no I/O, no clock, no network)
+ui/server.py         GET /api/guide · POST /api/guide/state
+   │                 _guide_facts(): measures usage from the journal, the
+   ▼                 order book, the broker and the watchlist
+config/runtime.py    guide_state() / set_guide_state() → settings.json
+```
+
+Three boundaries are load-bearing:
+
+1. **Content lives in the frontend, state lives in the backend.** A tutorial
+   step is a CSS selector plus a sentence plus a JavaScript predicate, none of
+   which Python should hold; progress is user data, and belongs in
+   `settings.json` beside the watchlist rather than in the webview's
+   localStorage.
+2. **The contract between them is IDS, never prose.** A `Recommendation` names a
+   tutorial by id; the title comes from `GUIDE_TUTORIALS` at render time. Both
+   drift failures are silent and look implemented — a backend id the frontend
+   lacks renders as nothing, a feature key the frontend never records makes its
+   rule unfireable — so `tests/test_guide.py` asserts the catalogues match in
+   both directions, and `scripts/guide_check.py` asserts every declared step
+   selector resolves to a real element.
+3. **This layer recommends tutorials from feature usage; `intelligence/`
+   recommends behaviour from trades.** Neither crosses. "You have never placed a
+   limit order" is a fact about the software; "you should place more limit
+   orders" is a claim about the trader, and only the layer with a
+   false-discovery correction underneath it gets to make one.
+
+The order-ticket guardrails (`tkSyncTicket` in `index.html`) are a **second,
+earlier gate** in front of `OrderManager.place`, never a replacement for it —
+the inverse of the standing lesson that adding a gate function is not the same
+as the gate being active.
+
 ## 16. Known Limitations (documented deliberately, not oversights)
 
 - yfinance data is delayed (~15 min) and rate-limited; intraday history is limited

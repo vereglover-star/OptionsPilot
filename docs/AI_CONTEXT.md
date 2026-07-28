@@ -127,9 +127,12 @@ drift the way a `docs/` file might.
   rejection tests, `test_coach.py`'s `TestMissingContext`, `test_risk.py`'s
   `TestManualEntry`).
 - **Frontend test coverage is real but shallow.** `scripts/check_html_ids.py`
-  (static — every `$("id")` resolves) and `scripts/browser_check.py` (a
-  real headless browser visits every tab, fails on any console error) both
-  run as part of `scripts/verify.ps1`. Neither is deep per-flow regression
+  (static — every `$("id")` resolves), `scripts/browser_check.py` (a
+  real headless browser visits every tab, fails on any console error), and the
+  four focused browser suites — `chart_check.py`, `marketdata_check.py`,
+  `intelligence_check.py` and `guide_check.py` (129 checks over the guided
+  onboarding, help, glossary, empty states, accessibility and the order-ticket
+  guardrails) — all run as part of `scripts/verify.ps1`. Neither is deep per-flow regression
   coverage — any change to a specific flow (mode toggle, manual order
   placement, coach review rendering) still needs manual verification in a
   real browser (`scripts/dev.ps1`) before it's considered done.
@@ -349,6 +352,23 @@ into long-term memory:
    the extreme as a reported statistic. The same reasoning applies to any
    future "is this data what I asked for" test.
 
+20. **Never let the guided-onboarding layer make a claim about the trader**
+   (V0.6.1). `ui/guide.py` recommends **tutorials** from **feature usage** and
+   nothing else; behavioural claims belong to `intelligence/`, which measures
+   them from the trade record with a false-discovery correction underneath.
+   *"You have never placed a limit order"* is a fact about the software;
+   *"you should place more limit orders"* is a claim about the trader.
+   `test_no_rule_gives_trading_advice` sweeps every rule and asserts the line
+   holds. By the same rule, keep the two catalogues sharing **ids only** — a
+   `Recommendation` must never carry a tutorial's title, because that is a
+   second place tracking one fact and this project has paid for that twice.
+
+21. **Never let a UI guardrail become a reason to relax a real one** (V0.6.1).
+   `tkSyncTicket` stops a user assembling the three order combinations
+   `OrderManager.place` refuses, and `place` still refuses all three. The
+   long-standing lesson here is that adding a gate function is not the same as
+   the gate being active; the inverse is equally true, and cheaper to get wrong.
+
 ## Common mistakes to avoid
 
 Lessons the project has actually hit, not hypothetical ones:
@@ -405,7 +425,15 @@ Lessons the project has actually hit, not hypothetical ones:
 
 ## Current UI philosophy
 
-Dark, dense, brokerage-style — closer to a real trading terminal than a
+**Since V0.6.1 the first commitment is that the software teaches itself.** Every
+screen has a walkthrough behind a Learn button, every jargon term explains itself
+on hover, every empty state says what will fill it and offers the first step, and
+an action that cannot possibly succeed is not assemblable — when the UI removes
+an option it says what changed, why, and what to do instead. When a user becomes
+confused the question is never "where should we document this" but "why was the
+software able to let them." See `docs/ONBOARDING.md`.
+
+Otherwise: dark, dense, brokerage-style — closer to a real trading terminal than a
 typical SaaS dashboard. Tabular numerals everywhere numbers appear side by
 side. Skeleton loaders over blank states during fetches. DOM writes are
 diffed so unchanged sections never re-render (`setHTML` helper) — this

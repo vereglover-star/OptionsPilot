@@ -26,10 +26,14 @@ realism + live gate), `notify`, `logging`, `integrations`.
 yaml config, persisted to `data/settings.json`: `set_watchlist`,
 `set_pinned`, `save_favorites`, `set_mode` (trading_mode + custom tunables,
 validated through `EngineConfig`/`RiskConfig`), `set_operating_mode`
-(ai/human, independent of trading_mode). `apply(cfg)` overlays persisted
-choices onto a freshly loaded config at bootstrap; `_apply_mode` always
-preserves the caller's current `operating_mode` when restoring the baseline
-for a trading-mode switch. `MAX_WATCHLIST = 30`.
+(ai/human, independent of trading_mode), `guide_state`/`set_guide_state`
+(V0.6.1 — the guided-onboarding document, stored under the `guide` key).
+`apply(cfg)` overlays persisted choices onto a freshly loaded config at
+bootstrap; `_apply_mode` always preserves the caller's current `operating_mode`
+when restoring the baseline for a trading-mode switch. `MAX_WATCHLIST = 30`.
+The guide accessors are deliberately dumb storage: the vocabulary and the merge
+semantics belong to `ui/guide.py`, and `config/` must not import upward to reach
+them.
 
 ## Data (`optionspilot/data/`) — full design in `docs/MARKET_DATA.md`
 - `MarketDataProvider` ABC — `get_candles/get_quote/get_expirations/get_option_chain`.
@@ -432,6 +436,33 @@ by import, so it sits **below** the coach in the layering.
 - `ui.py` — pure formatting: `format_bytes/speed/eta`, safe
   `render_release_notes_html` (escape-first markdown subset), dialog payloads.
 
+## Guided onboarding (`ui/guide.py`, V0.6.1) — full design in `docs/ONBOARDING.md`
+Pure and deterministic (no I/O, no clock, no network). Owns three things the
+frontend cannot: durable progress, shape-validation of a user-editable
+preferences document, and which walkthrough to offer next.
+- `TUTORIALS` — the tutorial **ids** (11). The titles and steps live in
+  `index.html`; duplicating them here would be a second place tracking one fact.
+  `tests/test_guide.py::TestCatalogueContract` asserts the two id sets match in
+  both directions.
+- `KNOWN_FEATURES` — the feature keys the recommender reads. Others may be
+  recorded and are stored uninterpreted, so new instrumentation needs no backend
+  change.
+- `normalize_state` / `merge_state` — never raise. Unknown tutorial ids are
+  dropped, feature keys are shape-checked and capped (`MAX_FEATURE_KEYS`), and
+  merge semantics differ per field on purpose: completions **union** (a short
+  client list must not un-finish anything), features **increment**, settings
+  **replace**. A hand-edited `settings.json` costs a user their guide progress at
+  worst, never their app.
+- `GuideFacts` — measured by the caller from state that already exists (journal,
+  order book, broker, watchlist). `single_data_source` is `bool | None` because
+  "could not determine" and "no" are different answers and only `True` may fire a
+  rule.
+- `recommendations(state, facts)` → ranked `Recommendation`s, each carrying the
+  evidence that produced it. **Recommends tutorials from feature usage; never
+  trading behaviour** — that is `intelligence/`'s job, and a second, cruder path
+  to the same kind of claim is exactly the drift this codebase has paid for
+  twice.
+
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop, runtime)` — FastAPI app.
   `/api/scan` is non-blocking by default (background cycle; progress in the
@@ -450,7 +481,8 @@ by import, so it sits **below** the coach in the layering.
   (add/remove/reorder/pin/favorites/presets), `/api/symbols/search`,
   `/api/mode` (trading_mode switch), `/api/operating_mode` (ai/human
   switch), `/api/coach` (reviews + profile), `/api/risk/reset_halt`,
-  `/api/backtest` (job slot, GET/POST),
+  `/api/backtest` (job slot, GET/POST), `/api/guide` + `/api/guide/state`
+  (V0.6.1 — guided-onboarding progress and tutorial suggestions),
   `/api/update/{status,check,download,progress,cancel,apply,skip,settings}`
   (the self-updater, V0.5.0 — see `update/` above), `/ws` (2s status push),
   `/webhook/tradingview`. All orchestrator access serialized through
@@ -460,9 +492,15 @@ by import, so it sits **below** the coach in the layering.
   Charts (interactive candles/volume, EMA/VWAP/BB overlays, RSI/MACD
   subpanes, drawings persisted in localStorage, fullscreen), Trade (manual
   paper trading), Coach, Watchlist, Journal, Backtest, Learning, Settings.
-  Keyboard 1–9 switches tabs; F toggles chart fullscreen. Header has both
-  mode controls: the AI/Human segmented toggle and the trading-mode
-  segmented toggle.
+  Keyboard 1–9 switches tabs; F toggles chart fullscreen; `?`/`Ctrl+K` opens
+  the searchable help centre. Header has both mode controls (the AI/Human
+  segmented toggle and the trading-mode segmented toggle) plus a
+  **Learn: \<screen>** button that relabels on every tab switch.
+  **Guided onboarding (V0.6.1)** lives here too: `GUIDE_TUTORIALS` (11
+  walkthroughs, 52 steps), `GUIDE_TERMS` (37 glossary entries),
+  `GUIDE_FEATURES` (the instrumentation vocabulary) and the `Guide` module —
+  spotlight, floating card, help centre, adaptive tooltips, tutorial catalogue
+  and the order-ticket guardrails (`tkSyncTicket`). See `docs/ONBOARDING.md`.
 - `ui/desktop.py` — uvicorn thread + pywebview native window; single-
   instance guard (localhost port mutex); `--windowed` PyInstaller build has
   no console (see `core/logging_setup.py`'s `sys.stderr is None` check).

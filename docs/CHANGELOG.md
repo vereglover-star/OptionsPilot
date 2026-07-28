@@ -4,6 +4,105 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-28 — V0.6.1: intelligent user experience & interactive onboarding
+
+*1849 → **1908 tests** (+54); a new **135-check** headless-browser suite
+(`scripts/guide_check.py`, wired into `verify.ps1`). **No trading-behaviour
+change, no new runtime dependency, no new tab, and no validation weakened** —
+`OrderManager.place` still refuses exactly what it refused before; the ticket
+now simply stops you building the order it would refuse. Full design, decisions
+and limitations: `docs/ONBOARDING.md`.*
+
+**The problem.** By V0.6.0 the backend was substantially more sophisticated than
+the experience of using it. Nothing was missing; everything was unexplained. The
+app assumed a user who already knew what delta was, why a stop cannot be a buy
+order, and what "process score" meant — and for everyone else the honest answer
+to *"how do I learn this?"* was **read the docs or go and watch a video**, which
+is a design failure rather than a documentation gap. The rule this milestone was
+built on: when a user becomes confused, the question is not where to document
+it, but why the software was able to let them.
+
+**What was built.**
+
+1. **`optionspilot/ui/guide.py` — the domain layer.** Pure and deterministic
+   (no I/O, no clock, no network): state validation, merge semantics, and the
+   rules that turn measured feature usage into a suggested walkthrough. Progress
+   persists through `RuntimeSettings` into `settings.json` under a `guide` key —
+   **not localStorage** — for the same reason the watchlist does: a user who
+   reinstalls, restores a backup or clears their WebView2 profile should not be
+   greeted as a beginner. Two new endpoints, `GET /api/guide` and
+   `POST /api/guide/state`.
+
+2. **A data-driven tutorial engine, in `index.html`.** Eleven walkthroughs, 52
+   steps. A step is a selector, a sentence, how it advances (`Next`, or a real
+   click on the real control) and an optional `when` predicate, so **adding a
+   screen's walkthrough means adding data, not code** — which
+   `scripts/guide_check.py` makes testable by driving tutorials whose contents it
+   does not know. The page stays fully interactive during a tour: `#gd-ring` is
+   `pointer-events:none` and one enormous spread `box-shadow` does both the
+   dimming and the cutout, so the button the user presses is the real one.
+
+3. **Contextual help, four ways in.** A header **Learn: \<screen>** button that
+   relabels on every tab switch, a **?** beside dense panel headings, a
+   searchable help centre on **?** / **Ctrl+K** indexing every tutorial, all 37
+   glossary terms and three actions, and new **Help ▾** entries. `?` was
+   *re-pointed, not taken*: the keyboard-shortcut card is a result inside the
+   help centre and links back to it, so both directions still work.
+
+4. **A 37-term glossary with adaptive tooltips.** Three to five sentences of
+   plain English saying what the thing *tells you*, each with a concrete example,
+   no formulas. Two attributes on purpose: `data-learn` is hover **and** click
+   (inert text), `data-tip` is hover only (controls that already do something) —
+   without the split, clicking the EMA pill would open a glossary card instead of
+   switching on EMA.
+
+5. **Order-ticket guardrails.** `OrderManager.place` refuses a stop, target or
+   trail on the buy side, and a sell of a contract not held — and every one of
+   those was reachable in two clicks and discovered only on submit. Exit-only
+   order types are now **removed** while buying (not greyed), Sell to close is
+   disabled with nothing held, selecting a contract you do not hold re-arms the
+   buy side, quantity is clamped to the position size, and every correction
+   states **what changed, why, and what to do instead** in an `aria-live` line.
+   The backend validation is untouched and still authoritative.
+
+6. **Empty states that teach.** The Journal, working orders, open positions and
+   notifications now say what will fill them and offer the first step, instead of
+   "None."
+
+7. **Accessibility.** `html.gd-nomotion` is one switch for the whole app, fed by
+   the OS preference and overridable **in both directions**; full keyboard
+   navigation of tours and search; `role="dialog"` + `aria-live` on the
+   walkthrough card; `aria-hidden` on the decorative spotlight. `aria-modal` is
+   deliberately absent, because the page underneath really is interactive and
+   claiming otherwise would be a lie to assistive technology.
+
+8. **Feature-aware suggestions in the Coach tab**, from measured usage — *"all 6
+   orders you've placed so far were market orders"*. Kept rigorously separate
+   from the Trading Intelligence Engine's advice: **this layer recommends
+   tutorials from feature usage and never recommends trading behaviour**, which
+   is `intelligence/`'s job and is done there with a false-discovery correction
+   underneath it. A test sweeps every rule and asserts the line holds.
+
+**Two defects found while building it**, both by the new browser suite:
+
+* **A hidden panel kept live buttons.** `renderRecs` set the recommendations
+  panel to `display:none` when there was nothing to suggest but left the previous
+  markup inside it — leaving clickable controls for advice that had been
+  withdrawn, invisible to a user and very much not to a test.
+* **The first step of the tour threw the page to the bottom.** Step 1 highlighted
+  the PAPER TRADING badge, which is pinned to the foot of a full-height sidebar,
+  and `scrollIntoView({block:"center"})` obeyed. Fixed twice over: the step now
+  targets the sidebar itself, and the engine scrolls only when a target is *not
+  visible at all* rather than merely off-centre. Caught by screenshot review, not
+  by an assertion — the standing lesson in this repo about asserting what the
+  user sees.
+
+**Verified:** 1908 tests, 135/135 `guide_check`, 54/54 `intelligence_check`,
+46/46 `marketdata_check`, all `chart_check` checks, `browser_check` +
+`check_html_ids` + `check_docs` green, plus screenshot review of the welcome
+screen, both tour styles, the help centre, the glossary, the guardrail and three
+empty states.
+
 ## [Uncommitted] 2026-07-28 — V0.6.0: the Trading Intelligence Engine
 
 *1468 → **1849 tests** (+381); a new **54-check** headless-browser suite

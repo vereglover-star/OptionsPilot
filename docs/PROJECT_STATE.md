@@ -3,9 +3,43 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-28, after **V0.6.0 — the Trading Intelligence
-Engine** (branch `feature/providers`, uncommitted). 1468 → **1849 tests**
-(+381); a new **54-check** headless-browser suite
+**Last updated:** 2026-07-28, after **V0.6.1 — intelligent user experience &
+interactive onboarding** (branch `feature/providers`, uncommitted). 1849 →
+**1908 tests** (+54); a new **135-check** headless-browser suite
+(`scripts/guide_check.py`). Full design: **`docs/ONBOARDING.md`**.
+
+**What it is.** By V0.6.0 the backend had become substantially more sophisticated
+than the experience of using it: nothing was missing, everything was
+unexplained. V0.6.1 is the layer that teaches the app to explain itself — a
+data-driven tutorial engine (11 walkthroughs, 52 steps) that spotlights the
+*real* controls while leaving the page fully interactive, a 37-term plain-English
+glossary with adaptive hover tips, a searchable help centre on `?`/`Ctrl+K`,
+per-screen Learn buttons, teaching empty states, an app-wide reduced-motion
+switch, and **order-ticket guardrails** that make the three combinations
+`OrderManager.place` refuses unassemblable, each correction stating what changed,
+why, and what to do instead. **No trading-behaviour change, no new dependency, no
+new tab, and no validation weakened** — the backend gate is untouched and still
+authoritative.
+
+New module `optionspilot/ui/guide.py` — pure and deterministic — owns state
+validation, merge semantics and the rules that turn measured feature usage into a
+suggested walkthrough, behind `GET /api/guide` and `POST /api/guide/state`.
+Progress persists in `settings.json` rather than localStorage so a reinstall does
+not greet a returning user as a beginner. The contract between the two
+catalogues is **ids, never prose**, asserted in both directions by
+`tests/test_guide.py::TestCatalogueContract`; and the layer recommends
+*tutorials* from *feature usage* and never trading behaviour, which is
+`intelligence/`'s job.
+
+**Two defects found by the new browser suite**, each with a check that fails
+without its fix: a recommendations panel hidden with `display:none` that kept
+live clickable buttons for withdrawn advice, and a first tour step that threw the
+page to the bottom of the Dashboard because it highlighted an element pinned to
+the foot of a full-height sidebar.
+
+## Before that — V0.6.0, the Trading Intelligence Engine
+
+1468 → 1849 tests (+381); a new 54-check headless-browser suite
 (`scripts/intelligence_check.py`) and a performance benchmark
 (`scripts/intelligence_benchmark.py`). Full design:
 **`docs/TRADING_INTELLIGENCE.md`**.

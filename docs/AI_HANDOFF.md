@@ -142,7 +142,14 @@ notify/       → desktop toast / email notifications
 orchestrator.py → composes everything into one scan cycle; the only class
                    the UI and CLI actually drive
 ui/           → FastAPI app (server.py), pywebview shell (desktop.py),
-                   static/index.html (the entire frontend)
+                   static/index.html (the entire frontend), guide.py (the
+                   guided-onboarding domain layer, V0.6.1: state validation,
+                   merge semantics and feature-usage → tutorial
+                   recommendations; pure, no I/O. The tutorials themselves are
+                   DATA in index.html — a step is a CSS selector plus a
+                   sentence, which is not knowledge Python should hold. The two
+                   catalogues share IDS only, asserted in both directions by
+                   tests/test_guide.py. See docs/ONBOARDING.md)
 __main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / learn / selftest
                 (_bootstrap builds AppPaths + runs initialize_storage; selftest
                 verifies the storage layout is writable + the migration marker is
@@ -453,6 +460,8 @@ every shipped build**, and the `/api/marketdata/qa/*` endpoints return **404**
 | GET | `/api/intelligence/goals` | Active goals with computed progress, the suggested templates, and the metric vocabulary a custom goal may target (V0.6.0) |
 | POST | `/api/intelligence/goals` | Create/replace a goal. 422 with the precise reason if it names a metric, comparator or window that could never evaluate (V0.6.0) |
 | DELETE | `/api/intelligence/goals/{goal_id}` | Remove a goal; 404 if unknown (V0.6.0) |
+| GET | `/api/guide` | Guided-onboarding state, measured feature-usage facts, and which walkthrough to offer next (V0.6.1). Progress lives in `settings.json` under a `guide` key, **not** localStorage, so a reinstall or a cleared webview profile does not greet a returning user as a beginner |
+| POST | `/api/guide/state` | Merge a patch (`completed` / `dismissed` union, `features` increment, `onboarded` / `reduce_motion` / `tips` replace, `forget` resets) and return the full state plus fresh suggestions. Deliberately forgiving — an unknown id, an unusable feature key or a garbage body is ignored rather than rejected, because this endpoint records that someone finished a tour and failing it would be a 4xx in the middle of a celebration |
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
@@ -493,7 +502,8 @@ schema, so existing on-disk databases open unchanged):
   user_version` migrations; written alongside `journal.db`, safe to delete
   (regenerated only for new trades — it is not the system of record)
 - `data/settings.json` — runtime-mutable settings (watchlist, modes, updater
-  prefs). **Treated as ordinary user data**: backed up by `create_backup()`,
+  prefs, and since V0.6.1 the `guide` document: tutorials finished/skipped,
+  features used, motion and hint preferences). **Treated as ordinary user data**: backed up by `create_backup()`,
   small enough to open in Notepad, safe to share. That is exactly why API keys
   do not live here
 - `data/credentials.json` (V0.5.7) — **market-data API keys. The only file in
@@ -566,7 +576,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (1849 tests as of this writing, all passing)
+# Tests (1908 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -660,8 +670,8 @@ Windows 10/11 by default).
    options-only. Adding shares would need a new `OptionContract`-shaped
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
-5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (1849 tests cover this
+5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
+   exercises the FastAPI layer via `TestClient` (1908 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

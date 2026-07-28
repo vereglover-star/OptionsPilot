@@ -8,6 +8,8 @@ the dashboard, persisted to data/settings.json after every change:
   - trading_mode (conservative | high_risk | custom)
   - custom-mode overrides (min_confidence, risk_per_trade_pct,
     daily_trade_limit, max_contracts, min_risk_reward, max_daily_loss_pct)
+  - guided-onboarding state (tutorials finished/skipped, features used,
+    motion and hint preferences) — see ui/guide.py
 
 Changes mutate the *live* AppConfig objects that every component reads at
 call time (the orchestrator re-reads the watchlist each cycle, the gate and
@@ -208,6 +210,35 @@ class RuntimeSettings:
             self._doc["updates"] = current
             self._save()
             return dict(current)
+
+    # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
+    #
+    # Deliberately dumb storage: this store validates nothing about the shape of
+    # the document, because the vocabulary (tutorial ids, feature keys, merge
+    # semantics) belongs to `ui/guide.py` and `config/` must not import upward
+    # to reach it. The caller normalizes on read and on write — see
+    # `UIServer.guide_payload` / `UIServer.update_guide`.
+    #
+    # It lives here rather than in the webview's localStorage because a user who
+    # reinstalls, restores a backup, or clears the WebView2 profile should not
+    # be shown the first-launch tour again as though they were new.
+
+    def guide_state(self) -> dict:
+        """The persisted guide document, exactly as stored (possibly empty)."""
+        with self._lock:
+            stored = self._doc.get("guide")
+            return dict(stored) if isinstance(stored, dict) else {}
+
+    def set_guide_state(self, state: dict) -> dict:
+        """Replace the guide document wholesale and persist.
+
+        Replacement, not merge: merging is `guide.merge_state`'s job and doing
+        it in two places would give the two of them a chance to disagree.
+        """
+        with self._lock:
+            self._doc["guide"] = dict(state)
+            self._save()
+            return dict(self._doc["guide"])
 
     # ── persistence ──────────────────────────────────────────────────────────
 

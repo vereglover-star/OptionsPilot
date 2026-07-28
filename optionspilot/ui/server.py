@@ -52,6 +52,7 @@ from optionspilot.intelligence.performance import METRIC_SPECS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
+from optionspilot.ui import guide
 from optionspilot.update.models import UpdateError
 from optionspilot.update.service import UpdateService
 
@@ -840,6 +841,70 @@ class UIServer:
             self._journal_cache = cache
         return cache[1]
 
+    # ── guided onboarding (V0.6.1) ───────────────────────────────────────────
+
+    def _guide_facts(self) -> guide.GuideFacts:
+        """Measure how the app has been used. Call under self.lock.
+
+        Everything here is read from state that already exists — the journal,
+        the order book, the broker, the watchlist. Nothing is recorded specially
+        for the guide, and nothing here touches the network.
+        """
+        trades = self._all_trades()
+        orders = list(self.orch.orders.history(200)) + \
+            [o.to_dict() for o in self.orch.orders.working()]
+        kinds = {str(o.get("kind")) for o in orders if o.get("kind")}
+        try:
+            reviews = len(self.orch.coach.load_all())
+        except Exception:  # noqa: BLE001 — a missing/corrupt review dir must
+            reviews = 0    # not break onboarding; it is only a count here
+        return guide.GuideFacts(
+            closed_trades=len(trades),
+            manual_trades=sum(1 for t in trades if t.strategy == "manual"),
+            coach_reviews=reviews,
+            open_positions=len(self.orch.broker.get_positions()),
+            orders_placed=len(orders),
+            order_kinds_used=frozenset(kinds),
+            watchlist_size=len(self.cfg.data.watchlist),
+            single_data_source=self._single_data_source(),
+        )
+
+    def _single_data_source(self) -> bool | None:
+        """Is exactly one INDEPENDENT market-data source usable right now?
+
+        None when it cannot be determined — an injected provider double has no
+        chain to inspect, and answering False there would be a claim the data
+        does not support (and would silently suppress the recommendation that
+        matters most on a keyless install).
+        """
+        control = self.marketdata
+        if control is None:
+            return None
+        try:
+            failover = control.dashboard().get("failover") or {}
+        except Exception:  # noqa: BLE001 — diagnostics must never break a page
+            return None
+        spof = failover.get("single_point_of_failure")
+        return bool(spof) if isinstance(spof, bool) else None
+
+    def guide_payload(self) -> dict:
+        with self.lock:
+            state = self.runtime.guide_state()
+            facts = self._guide_facts()
+        return guide.payload(state, facts)
+
+    def update_guide(self, patch: dict | None) -> dict:
+        """Merge a client patch into the persisted guide state.
+
+        Returns the same shape as `guide_payload` so a client never has to make
+        a second request to find out what it should offer next.
+        """
+        with self.lock:
+            merged = guide.merge_state(self.runtime.guide_state(), patch or {})
+            self.runtime.set_guide_state(merged)
+            facts = self._guide_facts()
+        return guide.payload(merged, facts)
+
     def _setup_history(self) -> dict:
         """Measured win rate per setup quality from the journal — the honest
         'estimated probability of success' (n/a until enough history exists)."""
@@ -1385,6 +1450,26 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             "reviews": reviews[:50],
             "intelligence": _intelligence_payload(snapshot, full=False),
         }
+
+    # ── guided onboarding (V0.6.1) ───────────────────────────────────────
+    # The tutorials live in index.html; these two routes own the part the
+    # frontend cannot: durable progress, and which tutorial to offer next
+    # based on what the user has actually used.
+
+    @app.get("/api/guide")
+    def guide_view():
+        return server.guide_payload()
+
+    @app.post("/api/guide/state")
+    def guide_update(payload: dict | None = None):
+        """Merge a patch and return the full state plus fresh recommendations.
+
+        Deliberately forgiving: an unknown tutorial id, an unusable feature key
+        or a garbage body is ignored rather than rejected. This endpoint records
+        that someone finished a tour — failing it would be a 4xx in the middle
+        of a celebration, and nothing downstream depends on the write.
+        """
+        return server.update_guide(payload)
 
     # ── Trading Intelligence Engine ──────────────────────────────────────
     # Every route below projects the SAME snapshot. None of them analyses

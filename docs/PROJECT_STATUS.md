@@ -5,16 +5,17 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-28, **V0.6.0 — the Trading Intelligence Engine**.
-Full **1849-test** `pytest` suite green (+381), HTML-id + doc checks green,
-`scripts/marketdata_stress.py` **88/88** offline, `scripts/chart_check.py`
-**65/65**, `scripts/marketdata_check.py` **46/46** and the new
-`scripts/intelligence_check.py` **54/54** in a real headless browser,
-`browser_check.py` green, plus screenshot review of all four tabs the
-intelligence layer integrates with.
+**Last verified:** 2026-07-28, **V0.6.1 — intelligent user experience &
+interactive onboarding**. Full **1908-test** `pytest` suite green (+54), HTML-id
++ doc checks green, `scripts/marketdata_stress.py` **88/88** offline,
+`scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
+`scripts/intelligence_check.py` **54/54** and the new `scripts/guide_check.py`
+**135/135** in a real headless browser, `browser_check.py` green, plus
+screenshot review of the welcome screen, both tour styles, the help centre, the
+glossary, the order-ticket guardrail and three empty states.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 1849 tests run against canned
+against its real API with a real key — all 1908 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -355,7 +356,17 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. **Fixed in V0.5.2** (each reproduced from evidence before any code
+None open. **Fixed in V0.6.1** (both found by the new `scripts/guide_check.py`,
+both with a check that fails without the fix): (1) the Coach's "learn the app"
+panel was hidden by `display:none` when there was nothing to suggest but kept
+its previous markup, leaving live clickable buttons for advice that had been
+withdrawn; (2) the guided tour's first step highlighted the PAPER TRADING badge,
+which is pinned to the foot of a full-height sidebar, so `scrollIntoView` threw
+the page to the bottom of the Dashboard before the user had read a word — fixed
+by retargeting the step and by scrolling only when a target is not visible *at
+all* rather than merely off-centre.
+
+**Fixed in V0.5.2** (each reproduced from evidence before any code
 changed, each now covered by a regression test that fails without its fix):
 (1) intraday history depth was measured from the *request's end* instead of from
 *now*, so every scroll-back into older intraday data 422'd upstream, returned an
@@ -392,9 +403,12 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
+1. **Review V0.6.0 + V0.6.1 and decide on the commits.** Neither milestone is
+   committed. `docs/TRADING_INTELLIGENCE.md` and `docs/ONBOARDING.md` are the
+   review documents.
+2. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
    are committed there and verified; merging to `main` is the user's call.
-2. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
+3. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
    with persistence (H5), chart↔chain cross-links (N2), toast stacking
    (N4) — plus everything under "Long-term ideas."
 3. Then the standing scope decision: V2-5 (replay engine), V2-6
@@ -415,7 +429,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**1849 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
+**1908 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), `scripts/chart_check.py` (65 chart, drawing and history
@@ -424,9 +438,13 @@ Data Control Centre — key management, ordering, maintenance, quota display,
 accessibility and secret redaction, all offline) and
 `scripts/intelligence_check.py` (54 checks over the Trading Intelligence UI —
 score cards, evidence disclosures, unassessable-behaviour reasons, goals,
-per-trade journal analysis and lesson triggers, all offline) run
-automatically via `scripts/verify.ps1` — the browser checks are focused
-regressions, not exhaustive UI coverage (see `TODO.md`).
+per-trade journal analysis and lesson triggers, all offline) and
+`scripts/guide_check.py` (**135** checks over the guided onboarding, contextual
+help, glossary, help search, empty states, accessibility and the order-ticket
+guardrails — the spotlight assertions test that the highlight *intersects* the
+element it names, not that a step declared one) run automatically via
+`scripts/verify.ps1` — the browser checks are focused regressions, not
+exhaustive UI coverage (see `TODO.md`).
 
 ## Last verified date
 

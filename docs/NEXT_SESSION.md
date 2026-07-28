@@ -5,11 +5,130 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-28, end of V0.6.0 — the Trading Intelligence Engine.
+**Last updated:** 2026-07-28, end of V0.6.1 — intelligent user experience
+& interactive onboarding.
 
-## What was completed most recently? (V0.6.0 — the Trading Intelligence Engine)
+## What was completed most recently? (V0.6.1 — intelligent UX & onboarding)
 
-1468 → **1849 tests** (+381); a new **54-check** headless-browser suite
+1849 -> **1908 tests** (+54); a new **135-check** headless-browser suite
+(`scripts/guide_check.py`, wired into `verify.ps1`). **Not committed.**
+Full design, decisions and limitations: **`docs/ONBOARDING.md`** — read it before
+touching `optionspilot/ui/guide.py` or the guided-onboarding block in
+`index.html`.
+
+**The one thing to understand:** by V0.6.0 the backend had become substantially
+more sophisticated than the experience of using it. Nothing was missing;
+everything was unexplained. The app assumed a user who already knew what delta
+was, why a stop cannot be a buy order, and what "process score" meant — and for
+everyone else the honest answer to *how do I learn this?* was **read the docs or
+watch a video**, which is a design failure rather than a documentation gap. The
+rule the milestone was built on: when a user becomes confused, the question is
+not where to document it, but **why the software was able to let them.**
+
+**No trading-behaviour change, no new dependency, no new tab, and no validation
+weakened.** `OrderManager.place` refuses exactly what it refused before; the
+ticket now stops you building the order it would refuse.
+
+**New module:** `optionspilot/ui/guide.py` — pure and deterministic (no I/O, no
+clock, no network): state validation, merge semantics, and the rules that turn
+measured feature usage into a suggested walkthrough. Two endpoints,
+`GET /api/guide` and `POST /api/guide/state`. Progress persists through
+`RuntimeSettings` into `settings.json` under a `guide` key — **not
+localStorage** — so a reinstall, a restored backup or a cleared WebView2 profile
+does not greet a returning user as a beginner.
+
+**New frontend subsystem** in `index.html`: a data-driven tutorial engine (11
+walkthroughs, 52 steps), a 37-term plain-English glossary with adaptive hover
+tips, a searchable help centre on `?` / `Ctrl+K`, per-screen **Learn** buttons,
+teaching empty states, an app-wide reduced-motion switch, and the order-ticket
+guardrails.
+
+> ### ⚠ Five things here are load-bearing — read before changing any of them
+>
+> 1. **Ids are the contract; prose is not.** A `Recommendation` names a tutorial
+>    by **id only**, and the human title comes from `GUIDE_TUTORIALS` at render
+>    time. Two catalogues holding the same titles would be a second place
+>    tracking one fact — the failure paid for twice already (`data/health.py` in
+>    V0.5.3, the settings ranking in V0.5.7).
+>    `tests/test_guide.py::TestCatalogueContract` asserts the two id sets match
+>    **in both directions**, because a backend id the frontend lacks renders as
+>    nothing and a feature key the frontend never records makes its rule
+>    unfireable — and both LOOK implemented.
+> 2. **This layer recommends TUTORIALS from FEATURE usage. It never recommends
+>    trading behaviour.** That is `intelligence/`'s job, done from the trade
+>    record with a false-discovery correction underneath it. *"You have never
+>    placed a limit order"* is a fact about the software; *"you should place more
+>    limit orders"* is a claim about the trader.
+>    `test_no_rule_gives_trading_advice` sweeps every rule and asserts it.
+> 3. **The page stays interactive during a tour.** `#gd-ring` is
+>    `pointer-events:none` and one enormous spread `box-shadow` does both the
+>    dimming and the cutout. Every alternative — a modal, a pointer trap, a
+>    cloned "safe" control — turns a walkthrough into a slideshow, and what makes
+>    one stick is that the button the user pressed was the real one.
+> 4. **`data-learn` and `data-tip` are different on purpose.** `data-learn` is
+>    hover *and* click (inert text: labels, table headings). `data-tip` is hover
+>    only, for controls that already do something — without the split, clicking
+>    the EMA pill would open a glossary card instead of switching on EMA.
+> 5. **The UI guardrail is a second gate, never a replacement.** The `CLAUDE.md`
+>    lesson *"adding a gate function is not the same as the gate being active"*
+>    applies in reverse: adding a UI guardrail must never become a reason to
+>    relax `OrderManager.place`.
+
+> ### ⚠ Two defects found by the new browser suite — each is a lesson
+>
+> 1. **A hidden panel kept live buttons.** `renderRecs` set the recommendations
+>    panel to `display:none` when there was nothing to suggest but left the
+>    previous markup inside it — clickable controls for advice that had been
+>    withdrawn, invisible to a user and very much not to a test. **Hide the
+>    container *and* clear the body.**
+> 2. **The tour's first step threw the page to the bottom.** Step 1 highlighted
+>    the PAPER TRADING badge, pinned to the foot of a full-height sidebar, and
+>    `scrollIntoView({block:"center"})` obeyed. Fixed twice over: the step targets
+>    the sidebar itself, and the engine now scrolls only when a target is **not
+>    visible at all** rather than merely off-centre. Caught by *screenshot
+>    review*, not by an assertion — the standing lesson about asserting what the
+>    user sees.
+
+**The canonical browser assertion** in `guide_check.py` is not "a step declared a
+target" but: **the highlight rectangle must intersect the element it claims to
+highlight, and the explanation card must not sit on top of it.** Both were
+verified to fail by deliberately breaking the code that satisfies them.
+
+**Every other browser suite now seeds `guide.onboarded = true`** into its scratch
+profile, because a scratch profile has by definition never been onboarded and the
+welcome dialog would otherwise sit over every assertion. `browser_check.py` is
+the deliberate exception — it *clicks* the dialog away, so the genuine
+first-launch path is covered rather than avoided.
+
+**Verified:** 1908 tests, 135/135 `guide_check`, 54/54 `intelligence_check`,
+46/46 `marketdata_check`, `chart_check` green, `browser_check` +
+`check_html_ids` + `check_docs` green, plus screenshot review of the welcome
+screen, both tour styles, the help centre, the glossary, the guardrail and three
+empty states.
+
+**Honest limitations** (§10 of `ONBOARDING.md` has the full list): nothing knows
+whether a tutorial was *understood*, only that it was finished; feature marks are
+buffered and a hard kill can lose the last few; glossary search has no stemming
+or synonyms ("IV" finds implied volatility, "vol" does not); a tour cannot
+recover from the user navigating away mid-step (Esc and restart is the recovery);
+and `when` predicates are evaluated at tour start, so a panel that appears
+*during* a tour gains its step only on a restart.
+
+## What to do next
+
+Three candidates, in the order they would add most:
+
+1. **Review V0.6.0 and V0.6.1 and decide on the commits.** Neither milestone is
+   committed. `docs/TRADING_INTELLIGENCE.md` and `docs/ONBOARDING.md` are the
+   review documents.
+2. **Sign the installer** (the plan already sits in `update/validation.py`) —
+   removes SmartScreen warnings and closes the updater's last security gap.
+3. **Run the 84-item market-data manual QA** (`docs/QA_MARKET_DATA.md`), which
+   has still never been done by hand.
+
+## What was completed before that? (V0.6.0 — the Trading Intelligence Engine)
+
+1468 → **1849** test cases (+381); a new **54-check** headless-browser suite
 (`scripts/intelligence_check.py`, wired into `verify.ps1`) and a performance
 benchmark (`scripts/intelligence_benchmark.py`). **Not committed.**
 Full design, rules and limitations: **`docs/TRADING_INTELLIGENCE.md`** — read it
@@ -105,7 +224,8 @@ discovered patterns and the coaching reports; Journal gets finding badges and a
 lazily-loaded per-trade analysis; Learning gets triggered lessons that each say
 why they appeared and which statistic fired them.
 
-**Verified:** 1849 tests, 54/54 `intelligence_check`, 46/46 `marketdata_check`,
+**Verified:** the full suite at the time (1849), 54/54 `intelligence_check`,
+46/46 `marketdata_check`,
 65/65 `chart_check`, 88/88 stress, `browser_check` + `check_html_ids` +
 `check_docs` green, plus screenshot review of all four integrated tabs.
 
@@ -115,17 +235,6 @@ system does not have; R multiples require a recorded protective stop, so the mos
 useful risk metric is missing exactly for the traders who most need it; patterns
 are correlational, not causal; and all of it analyses **paper** trades, so
 slippage and the psychology of real money are not in the data.
-
-## What to do next
-
-Three candidates, in the order they would add most:
-
-1. **Review V0.6.0 and decide on the commit.** Nothing in this milestone is
-   committed. `docs/TRADING_INTELLIGENCE.md` is the review document.
-2. **Sign the installer** (the plan already sits in `update/validation.py`) —
-   removes SmartScreen warnings and closes the updater's last security gap.
-3. **Run the 84-item market-data manual QA** (`docs/QA_MARKET_DATA.md`), which
-   has still never been done by hand.
 
 ## What was completed before that? (V0.5.7 — the Market Data Control Centre)
 
@@ -194,7 +303,8 @@ a hand-edited `marketdata.json` with `providers` as a list raising an
 because a preferences file was edited badly), and a multi-minute capability
 probe that could not be stopped.
 
-**Verified:** 1849 tests, 46/46 `marketdata_check`, 65/65 `chart_check`, 88/88
+**Verified:** the full suite at the time (1849), 46/46 `marketdata_check`,
+65/65 `chart_check`, 88/88
 stress, `browser_check` + `check_html_ids` + `check_docs` green, plus a
 40-assertion adversarial audit.
 
