@@ -44,6 +44,11 @@ from optionspilot.data import symbols as symdir
 from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
 from optionspilot.engine.scorer import DEFAULT_WEIGHTS
+from optionspilot.intelligence import (
+    Goal, IntelligenceSnapshot, build_evidence_index, confidence_of,
+)
+from optionspilot.intelligence.goals import TEMPLATES as GOAL_TEMPLATES
+from optionspilot.intelligence.performance import METRIC_SPECS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
@@ -75,6 +80,74 @@ def _experience_dict(rec) -> dict:
 ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_EQUITY_POINTS = 2000
+
+# How much of each period series the intelligence payload carries. The snapshot
+# itself holds every period — a five-year daily series is thousands of points,
+# and shipping all of it to a browser that draws the last quarter is how a
+# status payload becomes a megabyte. Trimming happens HERE, at the transport
+# boundary, so nothing in `intelligence/` has to know a UI exists.
+PERIOD_LIMITS = {"day": 120, "week": 78, "month": 36, "quarter": 20, "year": 10}
+
+# Metrics the dashboard's compact summary carries. The full registry is
+# available from /api/intelligence; this is the headline row.
+SUMMARY_METRICS = (
+    "trades", "win_rate", "expectancy", "profit_factor", "avg_r", "total_pnl",
+    "max_drawdown", "consistency", "stop_discipline_rate", "avg_process_score",
+    "current_streak", "clean_trade_rate",
+)
+
+
+def _intelligence_payload(snapshot: IntelligenceSnapshot, *,
+                          full: bool = True) -> dict:
+    """JSON for one snapshot, with the period series trimmed to what a browser
+    will actually draw."""
+    doc = snapshot.to_dict()
+    doc["periods"] = {
+        name: series[-PERIOD_LIMITS.get(name, 60):]
+        for name, series in doc["periods"].items()
+    }
+    doc["overall_confidence"] = confidence_of(snapshot).name.lower()
+    if not full:
+        # The Coach tab renders behaviours, patterns, reports and the timeline;
+        # what it never draws is a time series, which is also the only part of
+        # the payload that grows without bound. So "not full" drops exactly
+        # that, and the coach still gets one analysis in one request.
+        doc.pop("periods", None)
+    return doc
+
+
+def _intelligence_summary(snapshot: IntelligenceSnapshot) -> dict:
+    """The compact dashboard projection — headline metrics, the scores, the top
+    few actions, goal progress and the newest report's summary line.
+
+    A projection of the same snapshot every other view reads, never a second
+    analysis: two screens disagreeing about the same trader is the failure this
+    whole layer exists to prevent.
+    """
+    doc = snapshot.to_dict()
+    return {
+        "generated": doc["generated"],
+        "trades_analyzed": snapshot.trades_analyzed,
+        "data_sufficiency": snapshot.data_sufficiency,
+        "overall_confidence": confidence_of(snapshot).name.lower(),
+        "span": {"start": snapshot.span_start, "end": snapshot.span_end},
+        "metrics": [snapshot.metrics[k].to_dict() for k in SUMMARY_METRICS
+                    if k in snapshot.metrics],
+        "scores": doc["scores"],
+        "recommendations": doc["recommendations"][:4],
+        "behaviors": [b for b in doc["behaviors"] if b["detected"]][:5],
+        "goals": doc["goals"],
+        "achievements": doc["achievements"],
+        "timeline": doc["timeline"][:6],
+        # Lessons are already capped at MAX_LESSONS by the curriculum engine,
+        # and the Learning tab renders the full set from this same projection
+        # rather than issuing a second request for the whole snapshot.
+        "lessons": doc["lessons"],
+        "risk": {"observations": snapshot.risk.get("observations", [])[:4],
+                 "assessable": snapshot.risk.get("assessable", False)},
+        "latest_report": doc["reports"][0] if doc["reports"] else None,
+        "notes": doc["notes"],
+    }
 
 
 class UIServer:
@@ -449,6 +522,85 @@ class UIServer:
             return {"error": f"no trace {trace_id} in the ring "
                              f"(it holds the most recent requests only)"}
         return mdreplay.replay(service, trace).as_dict()
+
+    # ── market data control centre (Settings ▸ Market Data) ──────────────────
+    #
+    # Every method here delegates to `data/control.py`. That is the whole
+    # design: the UI layer decides HTTP status codes and nothing else, so the
+    # control-centre logic is testable without a web server and cannot acquire
+    # a second implementation inside a route handler.
+    #
+    # None of these take `self.lock`. They touch the provider stack, which is
+    # thread-safe and independent of the orchestrator's mutable state — the
+    # same reasoning as `candles_payload` and `marketdata_diagnostics`. Taking
+    # the lock would mean a running scan could block the settings page, which
+    # is precisely when a user is most likely to be looking at it.
+
+    @property
+    def marketdata(self):
+        """The control plane, or None when the provider is not the real stack.
+
+        A test (or an embedding) that injects a `MarketDataProvider` double has
+        no registry to administer. Returning None rather than raising lets the
+        endpoints answer "not available for this provider" the same way the
+        diagnostics endpoint already does, instead of 500ing.
+        """
+        return getattr(self.orch, "marketdata", None)
+
+    def _no_control(self) -> dict:
+        return {"available": False,
+                "reason": "this provider does not expose market-data controls"}
+
+    def marketdata_dashboard(self) -> dict:
+        control = self.marketdata
+        return control.dashboard() if control else self._no_control()
+
+    def marketdata_set_key(self, name: str, api_key: str) -> dict:
+        control = self.marketdata
+        return (control.set_api_key(name, api_key) if control
+                else self._no_control())
+
+    def marketdata_remove_key(self, name: str) -> dict:
+        control = self.marketdata
+        return control.remove_api_key(name) if control else self._no_control()
+
+    def marketdata_set_enabled(self, name: str, enabled: bool) -> dict:
+        control = self.marketdata
+        return (control.set_enabled(name, enabled) if control
+                else self._no_control())
+
+    def marketdata_move(self, name: str, direction: str) -> dict:
+        control = self.marketdata
+        return control.move(name, direction) if control else self._no_control()
+
+    def marketdata_set_order(self, order: list[str]) -> dict:
+        control = self.marketdata
+        return control.set_order(order) if control else self._no_control()
+
+    def marketdata_reset_order(self) -> dict:
+        control = self.marketdata
+        return control.reset_order() if control else self._no_control()
+
+    def marketdata_set_ordering_mode(self, mode: str) -> dict:
+        control = self.marketdata
+        return (control.set_ordering_mode(mode) if control
+                else self._no_control())
+
+    def marketdata_test(self, name: str) -> dict:
+        control = self.marketdata
+        return control.test_connection(name) if control else self._no_control()
+
+    def marketdata_maintenance(self, action: str) -> dict:
+        control = self.marketdata
+        return control.start_maintenance(action) if control else self._no_control()
+
+    def marketdata_maintenance_status(self) -> dict:
+        control = self.marketdata
+        return control.maintenance_status() if control else self._no_control()
+
+    def marketdata_maintenance_cancel(self) -> dict:
+        control = self.marketdata
+        return control.cancel_maintenance() if control else self._no_control()
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
@@ -862,6 +1014,180 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             return JSONResponse(result, status_code=404)
         return result
 
+    # ── market data control centre ───────────────────────────────────────────
+    #
+    # Read is a GET and free; everything that CHANGES something or spends an
+    # upstream request is a POST. That split is not ceremony here: the
+    # dashboard is polled every few seconds while the settings tab is open, and
+    # a GET that could spend a metered request would turn an idle settings page
+    # into the thing that exhausts a 25-per-day key.
+
+    def _md(result: dict, *, missing: int = 400):
+        """One place that turns a control-plane dict into an HTTP response.
+
+        The control plane reports failures as `{"error": ...}` rather than by
+        raising, because most of them are user-input problems ("no such
+        provider", "that mode does not exist") and an exception-driven API
+        would make the caller's happy path the exceptional one. This maps them
+        to status codes so the frontend can still tell success from failure
+        without parsing prose.
+        """
+        if isinstance(result, dict) and result.get("available") is False:
+            return JSONResponse(result, status_code=501)
+        if isinstance(result, dict) and "error" in result:
+            return JSONResponse(result, status_code=missing)
+        return result
+
+    @app.get("/api/marketdata")
+    def marketdata_dashboard():
+        """The whole control centre in one payload: every provider's health,
+        credentials (masked), quota, capabilities and position in the order,
+        plus the failover picture, live recommendations and maintenance state.
+
+        Safe to poll — every number is a counter that already exists, and
+        nothing here touches the network."""
+        return server.marketdata_dashboard()
+
+    @app.post("/api/marketdata/providers/{name}/key")
+    def marketdata_set_key(name: str, payload: dict | None = None):
+        """Store an API key and apply it to the live provider immediately.
+
+        The key is written to `credentials.json` (owner-only, never exported)
+        and never echoed back — the response carries a mask. An environment
+        variable still takes precedence, and the response says so explicitly
+        when one is shadowing what was just saved.
+        """
+        return _md(server.marketdata_set_key(
+            name, str((payload or {}).get("api_key", ""))))
+
+    @app.delete("/api/marketdata/providers/{name}/key")
+    def marketdata_remove_key(name: str):
+        return _md(server.marketdata_remove_key(name))
+
+    @app.post("/api/marketdata/providers/{name}/enabled")
+    def marketdata_set_enabled(name: str, payload: dict | None = None):
+        """Switch a provider on or off without a restart."""
+        return _md(server.marketdata_set_enabled(
+            name, bool((payload or {}).get("enabled", True))))
+
+    @app.post("/api/marketdata/providers/{name}/test")
+    def marketdata_test(name: str):
+        """Run a real request against one provider and report what happened.
+
+        POST because it spends an upstream request — including a metered one.
+        End to end on purpose: transport, authentication, parsing and semantic
+        validation, so a provider whose response format has changed fails the
+        test rather than passing it."""
+        return _md(server.marketdata_test(name))
+
+    @app.post("/api/marketdata/providers/{name}/move")
+    def marketdata_move(name: str, payload: dict | None = None):
+        direction = str((payload or {}).get("direction", "up")).lower()
+        if direction not in ("up", "down"):
+            return JSONResponse({"error": "direction must be 'up' or 'down'"},
+                                status_code=400)
+        return _md(server.marketdata_move(name, direction))
+
+    @app.post("/api/marketdata/order")
+    def marketdata_set_order(payload: dict | None = None):
+        order = (payload or {}).get("order")
+        if not isinstance(order, list):
+            return JSONResponse({"error": "order must be a list of provider "
+                                          "names, best first"}, status_code=400)
+        return _md(server.marketdata_set_order([str(n) for n in order]))
+
+    @app.post("/api/marketdata/order/reset")
+    def marketdata_reset_order():
+        return _md(server.marketdata_reset_order())
+
+    @app.post("/api/marketdata/ordering_mode")
+    def marketdata_ordering_mode(payload: dict | None = None):
+        return _md(server.marketdata_set_ordering_mode(
+            str((payload or {}).get("mode", ""))))
+
+    @app.post("/api/marketdata/maintenance")
+    def marketdata_maintenance(payload: dict | None = None):
+        """Start one maintenance action on a background thread.
+
+        Returns immediately with the job's initial state; progress is polled
+        from the GET below. Several of these take tens of seconds and one takes
+        minutes, so a synchronous endpoint would hold a request open past any
+        sensible client timeout with no way to distinguish slow from dead."""
+        return _md(server.marketdata_maintenance(
+            str((payload or {}).get("action", ""))), missing=400)
+
+    @app.get("/api/marketdata/maintenance")
+    def marketdata_maintenance_status():
+        return server.marketdata_maintenance_status()
+
+    @app.delete("/api/marketdata/maintenance")
+    def marketdata_maintenance_cancel():
+        """Ask the running action to stop at its next checkpoint.
+
+        Cooperative rather than forcible: the actions long enough to want
+        cancelling are the ones spending upstream requests, and abandoning one
+        mid-flight would leave a provider's counters inconsistent with what it
+        actually served."""
+        return _md(server.marketdata_maintenance_cancel())
+
+    # ── developer QA (gated) ─────────────────────────────────────────────────
+    #
+    # `market_data.qa_mode` is false in every shipped build, and these return
+    # 404 — not 403 — while it is. A 403 confirms the endpoint exists, which is
+    # a small thing to hand an unattended local HTTP server; 404 says only that
+    # this build has no such route, which is functionally true.
+
+    def _qa_gate():
+        control = server.marketdata
+        if control is None or not control.config.qa_mode:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return None
+
+    @app.get("/api/marketdata/qa")
+    def marketdata_qa_state():
+        return _qa_gate() or server.marketdata.qa_state()
+
+    @app.post("/api/marketdata/qa/fault")
+    def marketdata_qa_fault(payload: dict | None = None):
+        """Arm a simulated failure against one provider.
+
+        The fault fires inside `HistoryAdapter.fetch_history`, in the exact
+        place a real transport failure occurs, so the health monitor, the
+        breaker, the ranking, the tier ladder and the frontend state machine
+        all behave identically to the genuine article."""
+        blocked = _qa_gate()
+        if blocked:
+            return blocked
+        data = payload or {}
+        count = data.get("count")
+        return _md(server.marketdata.qa_arm(
+            str(data.get("provider", "")), str(data.get("kind", "")),
+            count=int(count) if count else None,
+            seconds=float(data.get("seconds", 2.0))))
+
+    @app.delete("/api/marketdata/qa/fault")
+    def marketdata_qa_clear(provider: str | None = None):
+        return _qa_gate() or _md(server.marketdata.qa_clear(provider))
+
+    @app.post("/api/marketdata/qa/breaker")
+    def marketdata_qa_breaker(payload: dict | None = None):
+        blocked = _qa_gate()
+        if blocked:
+            return blocked
+        data = payload or {}
+        return _md(server.marketdata.qa_trip_breaker(
+            str(data.get("provider", "")), float(data.get("seconds", 30.0))))
+
+    @app.post("/api/marketdata/qa/reset")
+    def marketdata_qa_reset():
+        return _qa_gate() or _md(server.marketdata.qa_reset_health())
+
+    @app.post("/api/marketdata/qa/corrupt_cache")
+    def marketdata_qa_corrupt_cache():
+        """Prove the cache-corruption recovery path on a COPY of the real
+        cache file. The user's own cache is never touched."""
+        return _qa_gate() or _md(server.marketdata.qa_corrupt_cache())
+
     @app.get("/api/status")
     def status():
         return server.status_payload()
@@ -880,8 +1206,15 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         with server.lock:
             trades = server._all_trades()[-last:]
             stats = server.orch.journal.stats()
+            # Which intelligence findings each row is evidence for. Built from
+            # the snapshot the rest of the app already has, so the journal list
+            # can flag "this trade contributed to 2 findings" without a second
+            # analysis or a per-row request.
+            findings = build_evidence_index(server.orch.intelligence_snapshot())
         return {
             "stats": stats,
+            "findings": {tid: labels for tid, labels in findings.items()
+                         if any(t.id == tid for t in trades)},
             "trades": [{
                 "id": t.id, "symbol": t.symbol, "contract": t.contract_symbol,
                 "direction": t.direction.value, "quantity": t.quantity,
@@ -1038,11 +1371,96 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         # sufficient cache key.
         dashboard = server._coach_dashboard(reviews)
         reviews.sort(key=lambda r: r.get("trade_id", ""), reverse=True)
+        # V0.6.0: the Coach also serves the intelligence layer's view of the
+        # same trader. The two are deliberately kept side by side rather than
+        # merged — `dashboard` is the per-review scorecard aggregation the coach
+        # has always produced, `intelligence` is the cross-trade analysis, and
+        # they answer different questions over different windows. The Coach tab
+        # renders both and labels which is which.
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
         return {
             "profile": CoachProfile(reviews).build(),
             "dashboard": dashboard,
             "reviews": reviews[:50],
+            "intelligence": _intelligence_payload(snapshot, full=False),
         }
+
+    # ── Trading Intelligence Engine ──────────────────────────────────────
+    # Every route below projects the SAME snapshot. None of them analyses
+    # anything itself; the engine caches on a fingerprint the orchestrator
+    # owns, so a page that polls four of these costs one analysis at most.
+
+    @app.get("/api/intelligence")
+    def intelligence_view(full: bool = True):
+        """The complete analysis — metrics, behaviours, patterns, scores,
+        goals, recommendations, lessons, timeline, achievements, reports."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return {
+            **_intelligence_payload(snapshot, full=full),
+            "duration_ms": round(server.orch.intelligence.last_duration_ms, 1),
+        }
+
+    @app.get("/api/intelligence/summary")
+    def intelligence_summary():
+        """The dashboard projection: headline metrics, scores, top actions,
+        goals, achievements and the latest report summary."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return _intelligence_summary(snapshot)
+
+    @app.get("/api/intelligence/trade/{trade_id}")
+    def intelligence_trade(trade_id: str):
+        """Everything the analysis already knows about ONE trade — the patterns
+        it belongs to, the habits it is evidence for, where its result sits in
+        the trader's distribution, and how comparable trades performed."""
+        with server.lock:
+            return server.orch.intelligence.trade_insight(trade_id)
+
+    @app.get("/api/intelligence/reports")
+    def intelligence_reports():
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return {"reports": [r.to_dict() for r in snapshot.reports]}
+
+    @app.get("/api/intelligence/goals")
+    def intelligence_goals():
+        """Active goals with computed progress, plus the suggested templates and
+        the metric vocabulary a custom goal may target."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+            active = {g.id for g in server.orch.intelligence.list_goals()}
+        return {
+            "goals": [g.to_dict() for g in snapshot.goals],
+            "templates": [{**t.to_dict(), "added": t.id in active}
+                          for t in GOAL_TEMPLATES],
+            "metrics": [{"key": key, "label": label, "unit": unit,
+                         "higher_is_better": higher}
+                        for key, (label, unit, higher, _) in METRIC_SPECS.items()],
+        }
+
+    @app.post("/api/intelligence/goals")
+    def intelligence_goal_add(payload: dict):
+        try:
+            goal = Goal.from_dict(payload)
+            if goal is None:
+                raise ValueError("a goal needs an id, a metric and a numeric target")
+            with server.lock:
+                server.orch.intelligence.add_goal(goal)
+                snapshot = server.orch.intelligence_snapshot(force=True)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"goals": [g.to_dict() for g in snapshot.goals]}
+
+    @app.delete("/api/intelligence/goals/{goal_id}")
+    def intelligence_goal_remove(goal_id: str):
+        with server.lock:
+            removed = server.orch.intelligence.remove_goal(goal_id)
+            snapshot = server.orch.intelligence_snapshot(force=True)
+        if not removed:
+            return JSONResponse({"error": f"no goal {goal_id!r}"}, status_code=404)
+        return {"goals": [g.to_dict() for g in snapshot.goals]}
 
     @app.get("/api/experience")
     def experience_view():

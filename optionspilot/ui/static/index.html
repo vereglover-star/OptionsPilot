@@ -356,6 +356,180 @@ tr.atm-marker td::before, tr.atm-marker td::after { content:"—"; margin:0 8px;
 .diag-replay { background:var(--surface-2); border:1px solid var(--baseline);
   border-radius:var(--r-md); padding:10px 12px; margin-top:8px; }
 
+/* ── Market Data Control Centre (Settings ▸ Market data) ────────────────────
+   One provider = one card. Everything about that provider — what it is, how it
+   is doing, whether it is configured, how much budget is left, and every action
+   you can take on it — lives inside its own card, because the question a user
+   arrives with is always about ONE provider ("why isn't Finnhub being used?")
+   and an answer spread across four separate tables is not an answer.
+
+   Every state colour is paired with a word. Nothing in this panel is conveyed
+   by colour alone: `.md-badge` always carries its label, and the meter bars are
+   always accompanied by the numbers they represent. */
+.md-head { display:flex; align-items:flex-start; justify-content:space-between;
+  gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+.md-head .hint { margin:4px 0 0; max-width:62ch; }
+
+/* the failover summary — "what happens if the one you are using dies" */
+.md-summary { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:14px; }
+.md-stat { background:var(--surface-2); border:1px solid var(--baseline);
+  border-radius:var(--r-md); padding:9px 13px; min-width:132px; }
+.md-stat .k { color:var(--muted); font-size:var(--fs-xs); text-transform:uppercase;
+  letter-spacing:.4px; }
+.md-stat .v { font-size:var(--fs-lg); font-weight:650; margin-top:3px;
+  font-variant-numeric:tabular-nums; }
+.md-stat.warn { border-color:var(--warn); }
+.md-stat.warn .v { color:var(--warn); }
+
+/* recommendations — advice, never bare observations */
+.md-rec { display:flex; gap:10px; align-items:flex-start; padding:10px 12px;
+  border:1px solid var(--baseline); border-left-width:3px;
+  border-radius:var(--r-sm); background:var(--surface-2); margin-bottom:8px; }
+.md-rec.critical { border-left-color:var(--bad); background:var(--bad-soft); }
+.md-rec.warning  { border-left-color:var(--warn); background:var(--warn-soft); }
+.md-rec.info     { border-left-color:var(--accent); }
+.md-rec .ic { font-size:var(--fs-lg); line-height:1.2; flex-shrink:0; }
+.md-rec b { display:block; margin-bottom:2px; }
+.md-rec p { color:var(--ink-2); font-size:var(--fs-md); line-height:1.5; }
+.md-rec a { color:var(--accent); }
+
+/* provider cards */
+.md-cards { display:grid; gap:12px;
+  grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); }
+.md-card { background:var(--surface-2); border:1px solid var(--baseline);
+  border-radius:var(--r-md); padding:13px 15px; display:flex;
+  flex-direction:column; gap:9px; }
+.md-card.off { opacity:.62; }
+.md-card-top { display:flex; align-items:center; gap:9px; }
+.md-card-top .pos { color:var(--muted); font-variant-numeric:tabular-nums;
+  font-size:var(--fs-sm); min-width:1.4em; }
+.md-card-top .name { font-weight:650; font-size:var(--fs-base); }
+.md-card-top .grow { flex:1; }
+.md-badge { font-size:var(--fs-xs); font-weight:600; padding:2px 9px;
+  border-radius:var(--r-pill); border:1px solid var(--baseline);
+  color:var(--muted); white-space:nowrap; }
+.md-badge.healthy      { color:var(--good); border-color:var(--good); }
+.md-badge.degraded     { color:var(--warn); border-color:var(--warn); }
+.md-badge.rate_limited { color:var(--warn); border-color:var(--warn); }
+.md-badge.offline      { color:var(--bad);  border-color:var(--bad); }
+.md-badge.circuit_open { color:var(--bad);  border-color:var(--bad); }
+.md-badge.unavailable  { color:var(--bad);  border-color:var(--bad); }
+/* Deliberately NOT red. Nothing is broken and nothing needs fixing — the key
+   works and the plan is too small — so a danger colour would push the user
+   towards regenerating a key that was never the problem. */
+.md-badge.premium_required { color:var(--warn); border-color:var(--warn); }
+.md-badge.missing_key  { color:var(--ink-2); border-color:var(--baseline); }
+.md-badge.disabled     { color:var(--muted); border-color:var(--baseline); }
+.md-badge.testing, .md-badge.connecting { color:var(--accent); border-color:var(--accent); }
+.md-why { color:var(--ink-2); font-size:var(--fs-md); line-height:1.5; }
+.md-tags { display:flex; gap:6px; flex-wrap:wrap; }
+.md-tag { font-size:var(--fs-xs); color:var(--muted); background:var(--surface);
+  border:1px solid var(--grid); border-radius:var(--r-sm); padding:1px 7px; }
+.md-metrics { display:grid; grid-template-columns:auto 1fr; gap:3px 12px;
+  font-size:var(--fs-sm); }
+.md-metrics span { color:var(--muted); }
+.md-metrics b { font-weight:500; font-variant-numeric:tabular-nums; }
+
+/* quota meter — always beside the numbers it represents, never instead */
+.md-meter { height:6px; border-radius:4px; background:var(--surface);
+  border:1px solid var(--grid); overflow:hidden; }
+.md-meter > span { display:block; height:100%; background:var(--accent);
+  transition:width var(--t-med); }
+.md-meter.warn > span { background:var(--warn); }
+.md-meter.full > span { background:var(--bad); }
+
+/* API key row */
+.md-key { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+.md-key input { flex:1 1 170px; min-width:0; background:var(--surface);
+  border:1px solid var(--baseline); color:var(--ink); border-radius:var(--r-sm);
+  padding:6px 9px; font-size:var(--fs-md); font-family:ui-monospace, monospace; }
+.md-key .stored { font-family:ui-monospace, monospace; font-size:var(--fs-md);
+  color:var(--ink-2); letter-spacing:.5px; }
+.md-actions { display:flex; gap:6px; flex-wrap:wrap; align-items:center;
+  margin-top:auto; padding-top:2px; }
+.md-actions .btn { padding:5px 10px; font-size:var(--fs-sm); }
+.md-actions .spacer { flex:1; }
+.md-result { font-size:var(--fs-sm); line-height:1.5; border-radius:var(--r-sm);
+  padding:7px 10px; border:1px solid var(--baseline); background:var(--surface); }
+.md-result.ok  { border-color:var(--good); color:var(--ink); }
+.md-result.bad { border-color:var(--bad); }
+.md-result .act { display:block; color:var(--muted); margin-top:3px; }
+
+/* an on/off switch that is a real checkbox underneath (keyboard + SR support) */
+.md-switch { display:inline-flex; align-items:center; gap:7px; cursor:pointer;
+  font-size:var(--fs-sm); color:var(--muted); }
+.md-switch input { position:absolute; opacity:0; width:0; height:0; }
+.md-switch .track { width:32px; height:18px; border-radius:var(--r-pill);
+  background:var(--surface-3); border:1px solid var(--baseline); position:relative;
+  transition:background var(--t-fast), border-color var(--t-fast); flex-shrink:0; }
+.md-switch .track::after { content:""; position:absolute; top:2px; left:2px;
+  width:12px; height:12px; border-radius:50%; background:var(--muted);
+  transition:transform var(--t-fast), background var(--t-fast); }
+.md-switch input:checked + .track { background:var(--accent-soft); border-color:var(--accent); }
+.md-switch input:checked + .track::after { transform:translateX(14px); background:var(--accent); }
+.md-switch input:focus-visible + .track { outline:2px solid var(--accent); outline-offset:2px; }
+
+/* the live dashboard table */
+.md-scroll { overflow-x:auto; }
+.md-tbl { width:100%; border-collapse:collapse; font-size:var(--fs-sm);
+  font-variant-numeric:tabular-nums; }
+.md-tbl caption { text-align:left; color:var(--muted); font-size:var(--fs-sm);
+  padding-bottom:6px; }
+.md-tbl th, .md-tbl td { text-align:left; padding:5px 9px; white-space:nowrap;
+  border-bottom:1px solid var(--grid); }
+.md-tbl th { color:var(--muted); font-weight:500; position:sticky; top:0;
+  background:var(--surface); }
+
+/* maintenance */
+.md-tools { display:grid; gap:8px;
+  grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); }
+.md-tool { text-align:left; display:flex; flex-direction:column; gap:3px;
+  padding:9px 12px; }
+.md-tool .t { font-weight:600; font-size:var(--fs-md); }
+.md-tool .d { color:var(--muted); font-size:var(--fs-xs); line-height:1.45;
+  white-space:normal; font-weight:400; }
+.md-tool .cost { color:var(--warn); font-size:var(--fs-xs); }
+.md-job { margin-top:12px; border:1px solid var(--baseline); background:var(--surface-2);
+  border-radius:var(--r-md); padding:11px 13px; }
+.md-job .lbl { display:flex; justify-content:space-between; gap:10px;
+  font-size:var(--fs-md); margin-bottom:7px; }
+.md-job pre { max-height:220px; overflow:auto; margin-top:9px; padding:8px 10px;
+  background:var(--page); border-radius:var(--r-sm); color:var(--ink-2);
+  font-size:var(--fs-xs); line-height:1.55; white-space:pre-wrap; }
+.md-bar { height:6px; border-radius:4px; background:var(--surface);
+  border:1px solid var(--grid); overflow:hidden; }
+.md-bar > span { display:block; height:100%; background:var(--accent);
+  transition:width var(--t-med); }
+
+/* education + QA */
+.md-learn { color:var(--ink-2); font-size:var(--fs-md); line-height:1.65; }
+.md-learn h4 { font-size:var(--fs-md); color:var(--ink); margin:14px 0 5px; }
+.md-learn h4:first-child { margin-top:4px; }
+.md-learn p { margin-bottom:8px; max-width:74ch; }
+.md-learn dl { display:grid; grid-template-columns:auto 1fr; gap:4px 14px;
+  margin:6px 0 10px; max-width:74ch; }
+.md-learn dt { color:var(--ink); font-weight:600; white-space:nowrap; }
+.md-learn dd { color:var(--ink-2); }
+.md-qa { border:1px solid var(--warn); background:var(--warn-soft);
+  border-radius:var(--r-md); padding:12px 14px; margin-top:14px; }
+.md-qa h3 { font-size:var(--fs-md); margin-bottom:4px; }
+.md-qa .row { display:flex; gap:6px; flex-wrap:wrap; align-items:center;
+  margin-top:9px; }
+.md-qa select { background:var(--surface); color:var(--ink); border-radius:var(--r-sm);
+  border:1px solid var(--baseline); padding:5px 8px; font-size:var(--fs-sm); }
+
+details.md-sec { border-top:1px solid var(--baseline); margin-top:14px;
+  padding-top:10px; }
+details.md-sec > summary { cursor:pointer; font-size:var(--fs-md); font-weight:600;
+  color:var(--ink-2); padding:3px 0; list-style:revert; }
+details.md-sec > summary:hover { color:var(--ink); }
+details.md-sec > div { padding-top:11px; }
+
+@media (max-width:720px) {
+  .md-cards { grid-template-columns:1fr; }
+  .md-summary .md-stat { flex:1 1 44%; min-width:0; }
+}
+
 /* ── update panel in Settings ───────────────────────────────────────────── */
 .upd-settings-row { display:flex; justify-content:space-between; align-items:center;
   gap:12px; padding:8px 0; border-bottom:1px solid var(--baseline); }
@@ -503,6 +677,22 @@ pre.cfg { background:var(--surface-2); border-radius:10px; padding:14px; overflo
              background:var(--baseline); }
 .wbar .fill { position:absolute; top:0; bottom:0; border-radius:5px; opacity:.75; }
 .hint { color:var(--muted); font-size:var(--fs-sm); margin-top:8px; }
+/* Explainability disclosure. Native <details> so "Why?" works with no JS, no
+   focus management of our own, and correct keyboard/screen-reader behaviour. */
+.ev { margin-top:5px; }
+.ev > summary { cursor:pointer; color:var(--accent); font-size:var(--fs-xs);
+  list-style:none; display:inline-block; padding:1px 0; }
+.ev > summary::-webkit-details-marker { display:none; }
+.ev > summary:hover { text-decoration:underline; }
+.ev > summary:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.ev-list { margin:6px 0 2px; padding-left:14px; border-left:2px solid var(--grid);
+  color:var(--muted); font-size:var(--fs-xs); line-height:1.6; }
+.ev-list b { color:var(--ink-2); font-variant-numeric:tabular-nums; }
+.ev-ids { color:var(--muted); font-size:var(--fs-xs); word-break:break-all; }
+/* Progress bar shared by goals and achievements. */
+.prog { height:6px; background:var(--grid); border-radius:4px; overflow:hidden; margin-top:4px; }
+.prog > i { display:block; height:100%; background:var(--accent); }
+.prog.met > i { background:var(--good); }
 .empty { color:var(--muted); padding:14px 4px; }
 h3.sub { font-size:var(--fs-sm); color:var(--muted); margin:14px 0 8px; text-transform:uppercase; letter-spacing:.5px; }
 
@@ -663,6 +853,32 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
   <section id="tab-dashboard">
     <div class="hero" id="hero"></div>
     <div class="cards" id="cards"></div>
+
+    <!-- Trading Intelligence Engine — every figure below is a projection of one
+         analysis (/api/intelligence/summary); nothing here computes its own. -->
+    <div class="panel" id="intel-panel" style="display:none">
+      <h2>Trading intelligence
+        <span class="hint" style="display:inline" id="intel-meta"></span></h2>
+      <div class="cards" id="intel-scores"></div>
+      <div class="grid2">
+        <div>
+          <h3 class="sub">What to do next</h3>
+          <div id="intel-actions"><div class="empty">—</div></div>
+          <h3 class="sub">Risk</h3>
+          <div id="intel-risk"><div class="empty">—</div></div>
+        </div>
+        <div>
+          <h3 class="sub">Goals</h3>
+          <div id="intel-goals"></div>
+          <h3 class="sub">Achievements</h3>
+          <div id="intel-achievements"></div>
+        </div>
+      </div>
+      <h3 class="sub">Your progress</h3>
+      <div id="intel-timeline"><div class="empty">—</div></div>
+      <div class="hint" id="intel-notes"></div>
+    </div>
+
     <div class="dash-grid">
       <div class="dash-main">
         <div class="panel">
@@ -903,6 +1119,33 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
         </div>
       </div>
     </div>
+    <!-- The intelligence layer's view of the same trader. Deliberately beside
+         the review scorecard above rather than merged into it: the scorecard
+         aggregates per-trade reviews, this analyses across trades, and they
+         answer different questions over different windows. -->
+    <div id="intel-coach" style="display:none">
+      <div class="grid2">
+        <div class="panel">
+          <h2>Measured behaviour <span class="hint" style="display:inline">— click any
+            finding to see the evidence behind it</span></h2>
+          <div id="intel-behaviors"></div>
+          <div class="hint" id="intel-unassessable"></div>
+        </div>
+        <div class="panel">
+          <h2>Where your edge lives</h2>
+          <div id="intel-patterns"></div>
+          <div class="hint">Discovered by testing every recorded dimension of your
+            trades against your own baseline. A pattern is only shown once it
+            clears a sample floor and a significance test — a 100% win rate over
+            four trades is not an edge.</div>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>Coaching report</h2>
+        <div id="intel-reports"></div>
+      </div>
+    </div>
+
     <div class="grid2">
       <div class="panel">
         <h2>Recurring patterns — your personal coaching</h2>
@@ -1008,6 +1251,13 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
 
   <!-- LEARNING -->
   <section id="tab-learning" style="display:none">
+    <!-- Lessons are never a default reading list: each one appears because a
+         measured weakness triggered it, and says which statistic did. -->
+    <div class="panel" id="intel-lessons-panel" style="display:none">
+      <h2>Recommended for you <span class="hint" style="display:inline">— chosen by
+        your own numbers, not by a syllabus</span></h2>
+      <div id="intel-lessons"></div>
+    </div>
     <div class="panel">
       <h2>Evidence weights <span class="hint" id="weights-ver"></span></h2>
       <div id="weights"></div>
@@ -1051,6 +1301,135 @@ button#ch-follow.active { background:var(--accent-soft); border-color:var(--acce
         </div>
       </details>
     </div>
+    <!-- ── Market Data Control Centre ─────────────────────────────────────
+         Read the panel top to bottom and it answers, in order: is anything
+         wrong (recommendations), what would happen if the current source died
+         (failover summary), how is the order decided (ordering mode), and then
+         one card per provider with everything about that provider in it.
+         Tools, the raw dashboard, the explainer and the QA panel are collapsed
+         by default so the common case stays short. -->
+    <div class="panel" id="md-panel">
+      <div class="md-head">
+        <div>
+          <h2 style="margin-bottom:0">Market data</h2>
+          <p class="hint">Where your charts and scans get their prices. Several
+            providers are configured so that one failing does not stop the app —
+            if the first cannot answer, the next one is asked automatically.</p>
+        </div>
+        <label class="md-switch" title="Refresh this panel every few seconds">
+          <input type="checkbox" id="md-live" checked>
+          <span class="track"></span>Live
+        </label>
+      </div>
+      <div id="md-recs"></div>
+      <div class="md-summary" id="md-summary"></div>
+
+      <div id="md-order-wrap" style="margin-bottom:14px">
+        <div style="font-size:var(--fs-md); font-weight:600; margin-bottom:6px">
+          Provider order</div>
+        <span class="seg" id="md-mode" role="group"
+              aria-label="How the provider order is decided"></span>
+        <p class="hint" id="md-mode-why" style="margin-top:7px"></p>
+      </div>
+
+      <div class="md-cards" id="md-providers">
+        <p class="hint">Loading providers…</p>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap">
+        <button class="btn" id="md-reset-order">Reset to default order</button>
+        <button class="btn" id="md-refresh">Refresh now</button>
+      </div>
+      <p class="hint" id="md-status" role="status" aria-live="polite"
+         style="margin-top:8px"></p>
+
+      <details class="md-sec" id="md-dash-sec">
+        <summary>Live provider dashboard</summary>
+        <div class="md-scroll" id="md-dashboard"></div>
+      </details>
+
+      <details class="md-sec" id="md-tools-sec">
+        <summary>Maintenance &amp; recovery tools</summary>
+        <div>
+          <div class="md-tools" id="md-tools"></div>
+          <div id="md-job" aria-live="polite"></div>
+        </div>
+      </details>
+
+      <details class="md-sec">
+        <summary>How market data works</summary>
+        <div class="md-learn">
+          <h4>Why there is more than one provider</h4>
+          <p>Free market-data feeds go down, rate-limit by IP address, and
+            occasionally return bad numbers. One source means one bad afternoon
+            takes your charts with it. OptionsPilot keeps a chain of providers
+            and asks them in order — the first that answers with usable bars
+            wins, and the rest are never contacted.</p>
+
+          <h4>What happens when one fails</h4>
+          <p>The failure is classified (unreachable, timed out, rate-limited,
+            key rejected, or answered-with-unusable-data) and the next provider
+            is asked immediately. After a few consecutive failures a provider is
+            taken out of rotation for a cooling-off period that doubles each
+            time, so a dead source costs one failed request rather than being
+            retried on every chart tick. When the cooldown ends it gets exactly
+            one probe request — recovery is automatic and never needs a
+            restart.</p>
+          <p>A refusal that is a <em>correct answer to an impossible question</em>
+            — asking for 5-minute bars from last spring, which no free provider
+            keeps — is not counted against a provider's health. Only genuine
+            failures move it down the order.</p>
+
+          <h4>Why some providers need an API key</h4>
+          <p>Yahoo and Stooq are open endpoints. Finnhub, Twelve Data and Alpha
+            Vantage require you to register — free, no card — and issue a key
+            that identifies your requests so they can meter them. Nothing here
+            costs money; the keys exist so the provider can enforce a free
+            tier.</p>
+          <p><b>Your keys never leave this machine.</b> They are stored in a
+            separate file with owner-only permissions, shown only as
+            <code>••••••••abcd</code>, and are stripped from every diagnostics
+            export, report and log line — so a bug report is always safe to
+            share.</p>
+
+          <h4>Why Yahoo is first</h4>
+          <p>It is the fastest of the free sources, needs no key, has no
+            metered budget to spend, and reports <em>why</em> it refused a
+            request rather than returning an empty result — which is what lets
+            the app tell "there is no data" apart from "I could not reach the
+            data". That distinction is the difference between a chart that
+            explains itself and one that is silently blank.</p>
+          <p>Yahoo and yfinance are two independent pieces of code reaching the
+            <em>same</em> servers, so they do not protect you from a Yahoo
+            outage. Adding one keyed provider is what buys a genuinely
+            independent source.</p>
+
+          <h4>The words on this page</h4>
+          <dl>
+            <dt>Unlimited</dt>
+            <dd>No published request budget. Fair use still applies — sustained
+              hammering can get an IP throttled.</dd>
+            <dt>Rate limited</dt>
+            <dd>A published allowance per minute and/or per day. The app counts
+              requests <em>before</em> sending them and stops asking once the
+              budget is spent, so you get a clear explanation instead of a wall
+              of errors.</dd>
+            <dt>Paid</dt>
+            <dd>Not used here. Every provider in this build runs on its free
+              tier; a paid plan only raises the numbers under Budget.</dd>
+            <dt>Real-time</dt>
+            <dd>Prices as they trade. None of the free tiers offer this for US
+              equities.</dd>
+            <dt>Delayed (poll-only)</dt>
+            <dd>Prices lag the market (typically 15 minutes) and arrive only
+              when the app asks for them, rather than being streamed. This is
+              why the forming candle updates on a timer.</dd>
+          </dl>
+        </div>
+      </details>
+
+      <div id="md-qa"></div>
+    </div>
+
     <div class="panel">
       <h2>Software updates <span class="upd-badge" id="upd-badge">Update available</span></h2>
       <div class="upd-settings-row">
@@ -1269,13 +1648,15 @@ function switchTab(name) {
   sec.style.display = "";
   sec.style.animation = "none"; void sec.offsetWidth; sec.style.animation = "";
   $("tab-title").textContent = b.querySelector(".lbl").textContent;
+  if (name === "dashboard") Intel.enterDashboard();
   if (name === "charts") loadChart();
   if (name === "trade") loadTrade();
   if (name === "coach") loadCoach();
   if (name === "watchlist") loadWatchlist();
   if (name === "journal") loadJournal();
   if (name === "learning") loadLearning();
-  if (name === "settings") loadConfig();
+  if (name === "settings") { loadConfig(); MarketData.enter(); }
+  else MarketData.leave();
 }
 document.querySelectorAll("nav button").forEach(b =>
   b.onclick = () => switchTab(b.dataset.tab));
@@ -1534,6 +1915,9 @@ async function loadJournal() {
         `<span class="v small">${fmt$(st.avg_win)} / ${fmt$(st.avg_loss)}</span>`]]
       .map(([k,v,c]) => `<div class="card"><div class="k">${k}</div><div class="v ${c||""}">${v}</div></div>`).join("");
   window._journal = d.trades;
+  // Which intelligence findings each row is evidence for. Comes down with the
+  // journal payload (one shared snapshot) rather than a request per row.
+  window._journalFindings = d.findings || {};
   // cumulative P&L curve, oldest -> newest (the API returns newest first)
   $("journal-curve-panel").style.display = d.trades.length >= 2 ? "" : "none";
   if (d.trades.length >= 2) {
@@ -1567,22 +1951,37 @@ function renderJournalTable() {
     : `<table><tr><th scope="col">Entry</th><th scope="col">Symbol</th><th scope="col">Dir</th><th scope="col" class="num">Qty</th>
        <th scope="col" class="num">In</th><th scope="col" class="num">Out</th><th scope="col" class="num">P&L</th>
        <th scope="col" class="num">Conf</th><th scope="col">Exit reason</th></tr>` +
-      idx.map(({ t, i }) => `<tr class="expandable" onclick="toggleReasons(${i})">
-        <td>${new Date(t.entry_ts).toLocaleString()}</td><td>${t.symbol}</td>
+      idx.map(({ t, i }) => {
+        const found = (window._journalFindings || {})[t.id] || [];
+        const badge = found.length
+          ? ` <span class="badge" title="${esc(found.join("; "))}"
+               style="border-color:var(--warn);color:var(--warn)">${found.length}</span>`
+          : "";
+        return `<tr class="expandable" onclick="toggleReasons(${i})">
+        <td>${new Date(t.entry_ts).toLocaleString()}</td><td>${t.symbol}${badge}</td>
         <td><span class="chip ${t.direction}">${t.direction}</span></td>
         <td class="num">${t.quantity}</td><td class="num">${t.entry_price.toFixed(2)}</td>
         <td class="num">${t.exit_price.toFixed(2)}</td>
         <td class="num ${cls(t.pnl)}">${fmt$(t.pnl)}</td>
         <td class="num">${t.confidence.toFixed(0)}%</td><td>${esc(t.exit_reason)}</td></tr>
         <tr id="reasons-${i}" style="display:none"><td colspan="9">
-          <div class="reasons">${t.entry_reasons.map(esc).join("\n")}</div></td></tr>`).join("") + "</table>";
+          <div class="reasons">${t.entry_reasons.map(esc).join("\n")}</div>
+          <div id="jintel-${i}"></div></td></tr>`;
+      }).join("") + "</table>";
 }
 $("jf-sym").oninput = renderJournalTable;
 $("jf-dir").onchange = renderJournalTable;
 $("jf-res").onchange = renderJournalTable;
 window.toggleReasons = i => {
   const r = $("reasons-" + i);
-  r.style.display = r.style.display === "none" ? "" : "none";
+  const opening = r.style.display === "none";
+  r.style.display = opening ? "" : "none";
+  // Fetch the per-trade analysis lazily, once, on first expand — a journal of
+  // 200 rows must not issue 200 requests to render.
+  if (opening) {
+    const t = (window._journal || [])[i];
+    if (t) Intel.tradeInsight(t.id, "jintel-" + i);
+  }
 };
 
 /* ── backtest ─────────────────────────────────────────────────────────── */
@@ -1659,10 +2058,351 @@ async function pollBacktest() {
   drawEquity($("bt-dd"), dd, 0);
 }
 
+/* ── Trading Intelligence Engine (V0.6.0) ───────────────────────────────────
+   Every panel this module draws is a projection of ONE analysis. It never
+   computes a statistic, never derives a ranking and never re-sorts a list the
+   backend already ordered — the whole point of the intelligence layer is that
+   an insight is generated once, and a page that recomputed its own would
+   eventually disagree with the Coach about the same trader.
+
+   Three rendering rules follow from the engine's own contract:
+     • A null value renders as "—", never as 0. "Not measurable" and "zero" are
+       different statements and the engine is careful to distinguish them.
+     • Every finding gets a "Why?" disclosure carrying the measured evidence,
+       including the trade IDs behind it. If a claim cannot show its working it
+       should not be on screen.
+     • Unassessable behaviours are shown WITH their reason, not hidden. Silence
+       would read as "you don't do this", which is a claim the data can't make.
+------------------------------------------------------------------------------ */
+const Intel = (() => {
+  let summary = null;          // /api/intelligence/summary
+  let timer = null;
+
+  const REFRESH_MS = 60000;    // the analysis only moves when a trade closes
+
+  const num = v => (v === null || v === undefined) ? "—" : v;
+  const one = v => (v === null || v === undefined) ? "—" : (+v).toFixed(1);
+
+  /* Unit-aware metric formatting. The unit comes from the metric registry, so
+     the UI never has to know that win_rate is a percentage and avg_r is not. */
+  function metric(m) {
+    if (!m || m.value === null || m.value === undefined) return "—";
+    const v = m.value;
+    if (m.unit === "%") return v.toFixed(0) + "%";
+    if (m.unit === "$") return fmt$(v);
+    if (m.unit === "R") return v.toFixed(2) + "R";
+    if (m.unit === "min") return v >= 120
+      ? (v / 60).toFixed(1) + "h" : v.toFixed(0) + "m";
+    if (m.unit === "trades" || m.unit === "days") return v.toFixed(0);
+    return Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2);
+  }
+
+  function evidenceValue(e) {
+    if (e.value === null || e.value === undefined) return "—";
+    return typeof e.value === "number"
+      ? (Number.isInteger(e.value) ? e.value : e.value.toFixed(3)) : esc(e.value);
+  }
+
+  /* The "Why?" disclosure: the measured facts behind one claim, plus the exact
+     trades they were counted over. */
+  function why(evidence, label = "Why?") {
+    if (!evidence || !evidence.length) return "";
+    const rows = evidence.map(e => {
+      const ids = (e.trade_ids || []).length
+        ? `<div class="ev-ids">trades: ${e.trade_ids.map(esc).join(", ")}</div>` : "";
+      const detail = e.detail ? ` — ${esc(e.detail)}` : "";
+      const sample = e.sample ? ` <span style="opacity:.7">(over ${e.sample} trades)</span>` : "";
+      return `<li>${esc(e.label)}: <b>${evidenceValue(e)}</b>${detail}${sample}${ids}</li>`;
+    }).join("");
+    return `<details class="ev"><summary>${esc(label)}</summary>
+      <ul class="ev-list">${rows}</ul></details>`;
+  }
+
+  // NB: `.notif .b` is `white-space: pre-line`, so a template literal broken
+  // across source lines renders those breaks. This string stays on one line.
+  function impactLine(im) {
+    if (!im || im.delta === null || im.delta === undefined) return "";
+    const change = (im.pct_change === null || im.pct_change === undefined)
+      ? "" : ` (${im.pct_change > 0 ? "+" : ""}${im.pct_change.toFixed(0)}%)`;
+    return `<div class="b" style="margin-top:3px"><b>${fmt$(im.baseline)} → ${fmt$(im.adjusted)}${change}</b> — ${esc(im.basis)}. Measured over the trades you actually took, not a forecast.</div>`;
+  }
+
+  function bar(fraction, met) {
+    const w = Math.max(0, Math.min(1, fraction || 0)) * 100;
+    return `<div class="prog${met ? " met" : ""}"><i style="width:${w}%"></i></div>`;
+  }
+
+  /* ── dashboard ─────────────────────────────────────────────────────── */
+
+  function renderScores(d) {
+    $("intel-scores").innerHTML = (d.scores || []).map(s => {
+      const col = scoreVar(s.value);
+      const val = s.value === null ? "—" : Math.round(s.value);
+      return `<div class="card" title="${esc(s.explanation)}">
+        <div class="k">${esc(s.label)} <span style="opacity:.7">${esc(s.grade)}</span></div>
+        <div class="v small" style="color:${col}">${val}</div>
+        <div style="margin-top:5px">${confBadge(s.confidence)}</div></div>`;
+    }).join("") || `<div class="empty">—</div>`;
+  }
+
+  function renderActions(d) {
+    const recs = d.recommendations || [];
+    $("intel-actions").innerHTML = recs.length ? recs.map(r =>
+      // No impactLine() here: a recommendation's rationale ALREADY ends with
+      // the counterfactual sentence (recommend._rationale builds it, because
+      // the report writer needs it as prose too). Rendering both printed the
+      // same numbers twice under every action.
+      `<div class="notif ${r.severity === "positive" ? "trade_closed" : "risk_limit"}">
+        <div class="t">${esc(r.action)} ${confBadge(r.confidence)}</div>
+        <div class="b">${esc(r.rationale)}</div>
+        ${why(r.evidence, "Why this?")}</div>`).join("")
+      : `<div class="empty">Nothing measurable is worth changing right now.
+         Keep the process identical and let the sample grow.</div>`;
+  }
+
+  function renderRisk(d) {
+    const risk = d.risk || {};
+    const obs = risk.observations || [];
+    $("intel-risk").innerHTML = !risk.assessable
+      ? `<div class="empty">No closed trades to assess risk from yet.</div>`
+      : (obs.length ? obs.map(o =>
+          `<div class="notif ${o.severity === "positive" ? "trade_closed" : "risk_limit"}">
+            <div class="b">${esc(o.headline)}</div>
+            ${why(o.evidence)}</div>`).join("")
+        : `<div class="empty">No risk observations — exposure looks controlled.</div>`);
+  }
+
+  function renderGoals(d) {
+    const goals = d.goals || [];
+    $("intel-goals").innerHTML = goals.length ? goals.map(g =>
+      `<div style="margin:0 0 10px">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:var(--fs-sm)">
+          <span>${g.met ? "✓ " : ""}${esc(g.label)}</span>
+          <span class="${g.met ? "up" : ""}">${Math.round((g.progress || 0) * 100)}%</span></div>
+        ${bar(g.progress, g.met)}
+        <div class="hint" style="margin-top:3px">${esc(g.detail)}</div></div>`).join("")
+      : `<div class="empty">No goals set. A goal targets a measured number over a
+         window, so progress is computed rather than self-reported.</div>`;
+  }
+
+  function renderAchievements(d) {
+    const list = d.achievements || [];
+    $("intel-achievements").innerHTML = list.length ? list.map(a =>
+      `<div style="margin:0 0 9px;opacity:${a.earned ? 1 : .72}">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:var(--fs-sm)">
+          <span>${a.earned ? "🏆 " : ""}${esc(a.title)}
+            <span style="opacity:.6">${esc(a.tier)}</span></span>
+          <span>${a.earned ? esc(a.earned_on) : Math.round((a.progress || 0) * 100) + "%"}</span></div>
+        ${a.earned ? "" : bar(a.progress, false)}
+        <div class="hint" style="margin-top:3px">${esc(a.detail)}</div></div>`).join("")
+      : `<div class="empty">—</div>`;
+  }
+
+  function renderTimeline(d) {
+    const entries = d.timeline || [];
+    $("intel-timeline").innerHTML = entries.length ? entries.map(t => {
+      const mark = t.kind === "improvement" ? "▲" : t.kind === "decline" ? "▼"
+        : t.kind === "streak" ? "◆" : "•";
+      const c = t.kind === "improvement" ? "up" : t.kind === "decline" ? "down" : "";
+      return `<div style="margin:0 0 8px">
+        <div style="font-size:var(--fs-sm)"><span class="${c}">${mark}</span>
+          ${esc(t.headline)}</div>
+        <div class="hint" style="margin-top:2px">${esc(t.detail)}</div>
+        ${why(t.evidence)}</div>`;
+    }).join("")
+      : `<div class="empty">Not enough history to measure change yet. Two
+         comparable months are needed before anything here is a real trend.</div>`;
+  }
+
+  function renderMeta(d) {
+    const span = d.span || {};
+    const parts = [`${d.trades_analyzed} trades analysed`];
+    if (span.start && span.end) parts.push(`${span.start} → ${span.end}`);
+    parts.push(`data ${d.data_sufficiency}`);
+    parts.push(`confidence ${d.overall_confidence}`);
+    $("intel-meta").textContent = "— " + parts.join(" · ");
+    $("intel-notes").innerHTML = (d.notes || []).map(n => `• ${esc(n)}`).join("<br>");
+  }
+
+  async function loadSummary() {
+    try {
+      summary = await (await fetch("/api/intelligence/summary")).json();
+    } catch (e) { return; }
+    $("intel-panel").style.display = "";
+    renderMeta(summary);
+    renderScores(summary);
+    renderActions(summary);
+    renderRisk(summary);
+    renderGoals(summary);
+    renderAchievements(summary);
+    renderTimeline(summary);
+    renderLessons(summary);
+  }
+
+  /* ── coach tab ─────────────────────────────────────────────────────── */
+
+  function renderBehaviors(intel) {
+    const all = intel.behaviors || [];
+    const assessable = all.filter(b => b.assessable);
+    const detected = assessable.filter(b => b.detected);
+    const clean = assessable.filter(b => !b.detected);
+    const blind = all.filter(b => !b.assessable);
+
+    const trendMark = b => b.trend === "improving"
+      ? ` <span class="up" style="font-size:var(--fs-xs)">▲ improving</span>`
+      : b.trend === "declining"
+      ? ` <span class="down" style="font-size:var(--fs-xs)">▼ getting worse</span>` : "";
+
+    $("intel-behaviors").innerHTML = detected.length ? detected.map(b =>
+      `<div class="notif risk_limit">
+        <div class="t">${esc(b.label)} ${confBadge(b.confidence)}${trendMark(b)}</div>
+        <div class="b">${esc(b.summary)}</div>
+        ${impactLine(b.impact)}
+        ${why(b.evidence)}</div>`).join("")
+      : (assessable.length
+        ? `<div class="empty">None of the ${assessable.length} behaviours the
+           system can measure showed a repeated problem.</div>`
+        : `<div class="empty">Not enough recorded history to assess behaviour yet.</div>`);
+
+    if (clean.length) {
+      $("intel-behaviors").innerHTML +=
+        `<div class="hint" style="margin-top:10px">Clean:
+          ${clean.map(b => esc(b.label)).join(" · ")}</div>`;
+    }
+
+    // Unassessable behaviours are listed WITH the reason. Hiding them would
+    // read as "you don't do this", which is a claim the data cannot make.
+    $("intel-unassessable").innerHTML = blind.length
+      ? `<b>Cannot be assessed:</b><br>` + blind.map(b =>
+          `${esc(b.label)} — ${esc(b.unassessable_reason)}`).join("<br>")
+      : "";
+  }
+
+  function renderPatterns(intel) {
+    const pats = intel.patterns || [];
+    $("intel-patterns").innerHTML = pats.length ? pats.map(p =>
+      `<div class="notif ${p.kind === "strength" ? "trade_closed" : "risk_limit"}">
+        <div class="t">${esc(p.dimension_label)} — ${esc(p.bucket)}
+          ${confBadge(p.confidence)}</div>
+        <div class="b">${(p.win_rate * 100).toFixed(0)}% win rate over ${p.trades}
+          trades against ${(p.baseline_win_rate * 100).toFixed(0)}% elsewhere,
+          and ${fmt$(p.expectancy)} per trade against
+          ${fmt$(p.baseline_expectancy)}.</div>
+        ${why(p.evidence)}</div>`).join("")
+      : `<div class="empty">No condition has reached significance against your own
+         baseline yet — your results are evenly spread rather than concentrated.</div>`;
+  }
+
+  function renderReports(intel) {
+    const reports = intel.reports || [];
+    $("intel-reports").innerHTML = reports.length ? reports.map(r =>
+      `<details class="ev" style="margin-bottom:12px" ${r.kind === "weekly" ? "open" : ""}>
+        <summary style="font-size:var(--fs-md);color:var(--ink)">${esc(r.title)}
+          <span class="hint" style="display:inline">— ${r.trades} trades</span></summary>
+        <div style="margin-top:8px">
+          <div class="b" style="color:var(--ink-2);font-size:var(--fs-sm)">${esc(r.summary)}</div>
+          ${r.sections.map(s => `<h3 class="sub">${esc(s.heading)}</h3>` +
+            s.body.map(line => `<div class="hint" style="margin-top:4px">${esc(line)}</div>`).join("")
+          ).join("")}
+        </div></details>`).join("")
+      : `<div class="empty">No period has enough closed trades to report on yet.</div>`;
+  }
+
+  function renderCoach(intel) {
+    if (!intel) return;
+    $("intel-coach").style.display = "";
+    renderBehaviors(intel);
+    renderPatterns(intel);
+    renderReports(intel);
+  }
+
+  /* ── learning tab ──────────────────────────────────────────────────── */
+
+  function renderLessons(d) {
+    const lessons = (d && d.lessons) || [];
+    $("intel-lessons-panel").style.display = lessons.length ? "" : "none";
+    if (!lessons.length) return;
+    $("intel-lessons").innerHTML = lessons.map(x =>
+      `<div class="notif" style="margin-bottom:10px">
+        <div class="t">${esc(x.title)}
+          <span class="hint" style="display:inline">— ${esc(x.topic)} ·
+            ${x.minutes} min</span> ${confBadge(x.confidence)}</div>
+        <div class="b"><b>Why this lesson:</b> ${esc(x.why)}</div>
+        <div class="b"><b>What it fixes:</b> ${esc(x.problem)}</div>
+        ${impactLine(x.impact)}
+        ${why(x.triggered_by, "Which statistic triggered it?")}</div>`).join("");
+  }
+
+  /* ── journal tab ───────────────────────────────────────────────────── */
+
+  async function tradeInsight(tradeId, mountId) {
+    const el = $(mountId);
+    if (!el || el.dataset.loaded === "1") return;
+    el.dataset.loaded = "1";
+    let d;
+    try {
+      d = await (await fetch("/api/intelligence/trade/"
+                             + encodeURIComponent(tradeId))).json();
+    } catch (e) { el.innerHTML = ""; return; }
+    if (!d.available) { el.innerHTML = `<div class="hint">${esc(d.reason || "")}</div>`; return; }
+
+    const obs = (d.observations || []).map(o =>
+      `<div class="hint" style="margin-top:3px"><b>${esc(o.label)}:</b>
+        ${esc(o.detail)}</div>`).join("");
+    const habits = (d.behaviors || []).length
+      ? `<h3 class="sub">This trade is evidence for</h3>` +
+        d.behaviors.map(b => `<div class="hint">${esc(b.label)} —
+          ${b.occurrences} of ${b.sample} recent trades
+          (${Math.round(b.rate * 100)}%)</div>`).join("")
+      : "";
+    const pats = (d.patterns || []).length
+      ? `<h3 class="sub">Conditions it shares with your record</h3>` +
+        d.patterns.map(p => `<div class="hint">${esc(p.dimension_label)}
+          ${esc(p.bucket)} — ${(p.win_rate * 100).toFixed(0)}% win rate over
+          ${p.trades} trades (${p.kind})</div>`).join("")
+      : "";
+    const cohort = d.cohort
+      ? `<div class="hint" style="margin-top:6px">Compared with
+         ${esc(d.cohort.label)}: ${d.cohort.trades} trades,
+         ${d.cohort.win_rate}% win rate, ${fmt$(d.cohort.expectancy)} per trade.</div>`
+      : "";
+    const rank = d.percentile === null || d.percentile === undefined ? ""
+      : `<div class="hint">This result ranks above ${d.percentile.toFixed(0)}% of
+         your closed trades.</div>`;
+    const recs = (d.recommendations || []).length
+      ? `<h3 class="sub">What to change</h3>` +
+        d.recommendations.map(r => `<div class="hint">${esc(r.action)}</div>`).join("")
+      : "";
+
+    el.innerHTML = `<div style="margin-top:8px;border-top:1px solid var(--grid);padding-top:8px">
+      <h3 class="sub">What the analysis makes of this trade</h3>
+      ${rank}${obs}${cohort}${habits}${pats}${recs}</div>`;
+  }
+
+  /* ── lifecycle ─────────────────────────────────────────────────────── */
+
+  function enterDashboard() {
+    loadSummary();
+    if (timer) clearInterval(timer);
+    // A settings-style page polling from a hidden tab is meaningful traffic in
+    // the system it reports on; skip the tick unless the dashboard is showing.
+    timer = setInterval(() => {
+      if (document.visibilityState === "visible" &&
+          $("tab-dashboard").style.display !== "none") loadSummary();
+    }, REFRESH_MS);
+  }
+
+  return { loadSummary, enterDashboard, renderCoach, renderLessons,
+           tradeInsight, get summary() { return summary; } };
+})();
+
 /* ── learning ─────────────────────────────────────────────────────────── */
 let _lrnLoaded = false;
 async function loadLearning() {
   if (!_lrnLoaded) { $("weights").innerHTML = skel(6); _lrnLoaded = true; }
+  // Lesson recommendations ride on the same snapshot projection the dashboard
+  // uses, so opening Learning directly still populates them.
+  Intel.loadSummary();
   const d = await (await fetch("/api/learning")).json();
   $("weights-ver").textContent = d.weights_version ? `(learned v${d.weights_version})` : "(no learned weights yet)";
   // deviation bar: how far learning has moved each weight from its default
@@ -2033,7 +2773,7 @@ const CH = {
   pendingPoint: null, pendingNote: null, previewPt: null,
   tradeLines: [], gen: 0, dataSig: "", cache: new Map(),
   viewport: null, historyLoading: false, historyExhausted: false,
-  historyArmed: false, restoringViewport: false,
+  historyArmed: false, restoringViewport: 0,
   fetchCtl: null, histCtl: null,   // V3.3.1: AbortControllers for in-flight fetches
   state: "idle", stateDetail: "",  // V0.5.2: the explicit load state machine
   earliest: null,                  // oldest bar any provider can serve for this tf
@@ -2181,6 +2921,25 @@ function chInit() {
   host.addEventListener("pointerdown", chPointerDown, true);
   host.addEventListener("pointermove", chPointerMove, true);
   window.addEventListener("pointerup", chPointerUp, true);
+  // A resize changes bar spacing without any move going through
+  // chMoveViewport, so the invariants have to be re-asserted here too —
+  // shrinking the window while zoomed in was measured leaving 4 bars of 281
+  // on screen (width 2.3).
+  // A resize deliberately does NOT re-clamp the viewport, and that is a
+  // decision rather than an omission. Clamping here was implemented and then
+  // removed: dragging the PRICE axis changes the width of its own labels, so
+  // the canvas resizes by a few pixels mid-gesture, and re-asserting the
+  // viewport there re-invalidated the chart and snapped the user's manual
+  // price scale back — the drawing overlay visibly stopped tracking the drag
+  // (chart_check "overlay tracks a vertical price-axis drag"). It also let a
+  // resize masquerade as a scroll into older bars and fire a real
+  // /api/candles request.
+  //
+  // What is lost is small and self-correcting: shrinking the window while
+  // already zoomed in to a handful of bars leaves the view narrow until the
+  // next genuine viewport move (any symbol/timeframe switch, Reset, Latest, or
+  // a scroll) re-applies the invariants. Breaking manual price scaling to buy
+  // that back is a bad trade.
   new ResizeObserver(() => chDrawRender()).observe(host);
   CH.main.subscribeCrosshairMove(chLegend);
 }
@@ -2300,14 +3059,77 @@ const chViewport = () => {
    "history loading intermittently fails/freezes" — confirmed by instrumenting
    the real callback timing. Deferring the reset two animation frames keeps
    the flag true until after that callback has definitely fired. */
+/* ── viewport invariants ──────────────────────────────────────────────────
+   The time axis has had a single owner since V3.2.2, but "owned" only meant
+   "moved from one place" — nothing said what a LEGAL viewport is. Every move
+   was free to leave the user looking at two candles, and several routinely
+   did: chScrollToLatest carried the previous view's width onto a new symbol,
+   chApplyFocal maps a date window onto a coarser resolution (a 2-hour window
+   is 24 bars at 5m and 2 at 1h, so 5m→15m→1h→1d ratchets the view narrower
+   every step with no way back but Reset), and a window resize re-derives bar
+   spacing with no floor at all. lightweight-charts accepts all of it — a
+   2.3-bar range is perfectly legal and completely useless.
+
+   So the invariants are explicit, and enforced in the one place every
+   programmatic move already goes through:
+
+     V1  the logical range is finite and has positive width
+     V2  at least CH_MIN_VISIBLE_BARS bars are on screen (or all of them,
+         when the series is shorter than that)
+     V3  the range intersects the data at all
+
+   These bind PROGRAMMATIC moves only. A user's own wheel-zoom or drag reaches
+   the library directly and is never clamped — deliberately deep-zooming to
+   three candles is a legitimate thing to want, and an app that fights it is
+   worse than one that occasionally shows too few. */
+const CH_MIN_VISIBLE_BARS = 12;
+function chClampViewport() {
+  if (!CH.main) return;
+  const n = CH.data?.candles?.length || 0;
+  if (!n) return;
+  const ts = CH.main.timeScale();
+  const lr = ts.getVisibleLogicalRange?.();
+  if (!lr || lr.from == null || lr.to == null) return;
+  let { from, to } = lr;
+  if (!isFinite(from) || !isFinite(to) || to <= from) {   // V1
+    ts.fitContent();
+    return;
+  }
+  const want = Math.min(n, CH_MIN_VISIBLE_BARS);
+  const onScreen = Math.min(to, n - 1) - Math.max(from, 0);
+  if (onScreen >= want - 0.5 && to > 0 && from < n) return;   // V2 + V3 hold
+  if (to <= 0 || from >= n) {                              // V3: nothing on screen
+    ts.fitContent();
+    return;
+  }
+  // V2: widen around the centre of what the user was looking at, then slide
+  // back inside the series so the widening cannot itself push bars off-screen.
+  const mid = (from + to) / 2;
+  const half = Math.max(want, to - from) / 2;
+  from = mid - half; to = mid + half;
+  if (from < 0) { to -= from; from = 0; }
+  if (to > n - 1) { from -= (to - (n - 1)); to = n - 1; }
+  ts.setVisibleLogicalRange({ from: Math.max(0, from), to });
+}
 function chMoveViewport(fn) {
   if (!CH.main) return;
-  CH.restoringViewport = true;
+  // A DEPTH COUNTER, not a boolean. Guarded moves overlap in practice — a
+  // ResizeObserver fires mid-layout while a render's move is still settling —
+  // and with a boolean the first `finally` to land cleared the flag while the
+  // other move was still in flight. The next range-change was then read as a
+  // user pan, which re-armed history loading and fired a spurious /api/candles
+  // fetch (caught by chart_check double-fulfilling a route stub). Counting
+  // means the guard lifts only when the LAST move has settled.
+  CH.restoringViewport += 1;
   try {
     fn();
+    // Inside the guard window on purpose: the clamp is itself a programmatic
+    // move and must not be read back as a user pan (which would re-arm history
+    // loading and switch Auto Follow off — V3.2.2 Bug 2/3).
+    chClampViewport();
   } finally {
     requestAnimationFrame(() => requestAnimationFrame(() => {
-      CH.restoringViewport = false;
+      CH.restoringViewport = Math.max(0, CH.restoringViewport - 1);
     }));
   }
 }
@@ -2334,12 +3156,20 @@ function chSetAutoFollow(on) {
    off before the animation even finished. Computing the same destination
    with a single non-animated setVisibleLogicalRange sidesteps the problem
    instead of chasing the animation's frame count. */
-function chScrollToLatest() {
+function chScrollToLatest({ freshWidth = false } = {}) {
   const ts = CH.main.timeScale();
   const n = CH.data?.candles?.length;
   if (!n) { ts.scrollToRealTime(); return; }
   const lr = ts.getVisibleLogicalRange();
-  const width = (lr && lr.to > lr.from) ? (lr.to - lr.from) : Math.min(n - 1, 100);
+  const DEFAULT = Math.min(n - 1, 100);
+  // `freshWidth`: a SYMBOL switch starts from a sane default rather than
+  // inheriting the previous symbol's zoom. Auto Follow means "keep the newest
+  // bar in view", not "carry my zoom level onto every other instrument" — and
+  // carrying it is exactly the reported "switching symbols keeps a strange
+  // zoom level". A refresh or a live tail on the SAME symbol still preserves
+  // the user's width, which is the whole point of Auto Follow.
+  let width = (!freshWidth && lr && lr.to > lr.from) ? (lr.to - lr.from) : DEFAULT;
+  width = Math.max(width, Math.min(n - 1, CH_MIN_VISIBLE_BARS));
   const to = n - 1;
   ts.setVisibleLogicalRange({ from: to - width, to });
 }
@@ -2358,6 +3188,82 @@ function chToggleAutoFollow() {
    a symbol/tf switch, preserve the live viewport on a same-key refresh); the
    payload cache deliberately does NOT persist or restore per-key viewports
    (that was Bug 3: a stale per-tf zoom snapping back on switch). */
+/* ── price-scale ownership ────────────────────────────────────────────────
+   The TIME axis has had a single owner (chMoveViewport) since V3.2.2. The
+   PRICE axis had none, and that was the last way the canvas could go silently
+   blank: lightweight-charts turns `autoScale` OFF permanently the first time
+   the user drags the right-hand price axis, and NOTHING ever turned it back
+   on — not a symbol switch, not a timeframe switch, not Reset view, not a
+   restart of the chart. The pinned band then survives every subsequent load,
+   so a chart of a $290 ETF drawn on a band left over from a $750 one renders
+   its candles entirely off-screen while the volume histogram (which lives on
+   its own "vol" scale) keeps painting. Backend healthy, CH.data perfect,
+   console clean, canvas empty — reproduced end to end, and the exact shape of
+   the "IWM shows only volume bars" report.
+
+   Ownership rule, mirroring the time axis:
+     • a genuine symbol/timeframe switch RESETS to autoscale — the previous
+       band described different data and means nothing here;
+     • a same-key refresh / history prepend PRESERVES it — a manual price
+       scale is a deliberate act and must survive the data moving under it;
+     • Reset view and Latest reset it — they are the "get me back" controls;
+     • and chEnsurePriceVisible below is the last-resort net. */
+function chAutoScalePrice() {
+  if (!CH.main) return;
+  try {
+    CH.main.priceScale("right").applyOptions({ autoScale: true });
+    CH.rsiChart?.priceScale("right").applyOptions({ autoScale: true });
+    CH.macdChart?.priceScale("right").applyOptions({ autoScale: true });
+  } catch (e) { /* a price scale that isn't there yet needs no reset */ }
+}
+/* Are the on-screen candles completely outside the visible price band?
+   Dragging the price axis SCALES around the centre, so a user can never push
+   the data they are looking at fully off-screen on purpose — a zero-overlap
+   band therefore always means a stale pinned scale from OTHER data, which is
+   safe (and required) to recover from automatically. Deliberate zooming, a
+   flat series and a partially-clipped view are all left alone. */
+function chPriceStranded() {
+  if (!CH.main || !CH.candle || !CH.data?.candles?.length) return false;
+  if (CH.main.priceScale("right").options().autoScale) return false;
+  const host = $("ch-main");
+  const h = host?.clientHeight;
+  if (!h) return false;
+  let top, bot;
+  try { top = CH.candle.coordinateToPrice(0); bot = CH.candle.coordinateToPrice(h); }
+  catch (e) { return false; }
+  if (top == null || bot == null || !isFinite(top) || !isFinite(bot)) return false;
+  const lr = CH.main.timeScale().getVisibleLogicalRange?.();
+  const c = CH.data.candles;
+  const from = Math.max(0, Math.floor(lr?.from ?? 0));
+  const to = Math.min(c.length - 1, Math.ceil(lr?.to ?? c.length - 1));
+  let lo = Infinity, hi = -Infinity;
+  for (let i = from; i <= to; i++) {
+    if (!c[i]) continue;
+    if (c[i].low < lo) lo = c[i].low;
+    if (c[i].high > hi) hi = c[i].high;
+  }
+  if (lo === Infinity) return false;          // nothing on screen to judge
+  return hi < Math.min(top, bot) || lo > Math.max(top, bot);
+}
+/* Run after a render has been laid out (coordinateToPrice needs a paint).
+   Turning autoscale back on is strictly better than leaving the user with a
+   blank canvas and no affordance to fix it. */
+function chEnsurePriceVisible(onSwitch) {
+  // ONLY after a genuine symbol/timeframe switch. On a same-key render the
+  // user may have just scaled the price axis by hand, and a "stranded" reading
+  // taken mid-gesture would snap their scale back — measured as a price-axis
+  // drag that the drawing overlay stopped tracking, because the scale kept
+  // being reset underneath it. After a switch there is no such ambiguity: the
+  // only thing that can put the new symbol's candles outside the band is a
+  // band left over from the previous one, which is the bug this net exists for.
+  if (!onSwitch) return;
+  requestAnimationFrame(() => {
+    if (!chPriceStranded()) return;
+    console.warn("chart: candles were outside the pinned price band — "
+                 + "restoring price autoscale");
+    chAutoScalePrice();
+  });
+}
 function chViewportStranded() {
   if (!CH.main || !CH.data?.candles?.length) return false;
   // Use the LOGICAL range, not the time range (which returns null in
@@ -2392,7 +3298,9 @@ function chApplyFocal(focal) {
   const ts = CH.main.timeScale();
   const c = CH.data?.candles;
   if (!focal || !c?.length) { ts.fitContent(); return; }
-  const n = c.length, MIN_BARS = 12, clamp = v => Math.max(0, Math.min(n - 1, v));
+  // one floor for the whole chart — see CH_MIN_VISIBLE_BARS
+  const n = c.length, MIN_BARS = CH_MIN_VISIBLE_BARS,
+        clamp = v => Math.max(0, Math.min(n - 1, v));
   let from = chLogicalAt(focal.t0), to = chLogicalAt(focal.t1);
   if (from == null || to == null) { ts.fitContent(); return; }
   // Clamp EACH endpoint to the nearest real bar first. The destination
@@ -2415,12 +3323,14 @@ function chApplyFocal(focal) {
 function chResetView() {
   if (!CH.main) return;
   chSetAutoFollow(false);   // "fit everything" is a deliberate look-at-history action
+  chAutoScalePrice();       // …on BOTH axes: "reset the view" means the whole view
   chMoveViewport(() => CH.main.timeScale().fitContent());
   chDrawRender();
 }
 function chGoToLatest() {
   if (!CH.main) return;
   chSetAutoFollow(true);    // Latest re-enables Auto Follow (Bug 3)
+  chAutoScalePrice();
   chMoveViewport(chScrollToLatest);
   chDrawRender();
 }
@@ -2433,26 +3343,70 @@ function chGoToLatest() {
    future provider; the fast path (already-clean data, the normal case) is a
    single O(n) scan with no allocation. Kept bars carry their indicator values
    by original index so every series stays 1:1 with candles. */
+// A bar the renderer can actually draw. `high >= low` is the same invariant
+// quality.validate_history enforces on the service path; asserting it here too
+// means a LEGACY provider (which only goes through the shape-level
+// validate_candles) can't hand the canvas geometrically impossible candles
+// that lightweight-charts accepts and then paints as nothing.
+const chBarUsable = b => b != null
+  && Number.isFinite(b.time)
+  && Number.isFinite(b.open) && Number.isFinite(b.high)
+  && Number.isFinite(b.low) && Number.isFinite(b.close)
+  && b.high >= b.low;
 function chEnsureMonotonic(d) {
   const c = d?.candles;
-  if (!c || c.length < 2) return d;
-  let clean = true;
-  for (let i = 1; i < c.length; i++) if (c[i].time <= c[i - 1].time) { clean = false; break; }
+  if (!c || !c.length) return d;
+  // Two distinct hazards, both of which used to end in a silently blank canvas:
+  //
+  //   1. A bar whose OHLC is null/NaN is not an error to lightweight-charts —
+  //      it is WHITESPACE. setData() accepts it, the series draws nothing, the
+  //      price scale ignores it, and the render reports success. A payload of
+  //      such bars produced a chart with volume and no candles, `state=complete`
+  //      and (asynchronously, from the library's own paint frame) a stray
+  //      "Value is null". Dropping them here is the same policy the backend's
+  //      validate_candles already applies — this is the display-side twin.
+  //   2. Out-of-order bars. The old scan kept only bars strictly newer than the
+  //      previous KEPT one, so a payload that arrived fully reversed collapsed
+  //      to a SINGLE candle and still reported success. Sorting is what the
+  //      caller actually meant; only genuine duplicates should be discarded.
+  //
+  // The fast path (already-clean data, the normal case) stays a single O(n)
+  // scan with no allocation. Kept bars carry their indicator values by original
+  // index so every series stays 1:1 with candles.
+  let clean = chBarUsable(c[0]);
+  for (let i = 1; clean && i < c.length; i++)
+    clean = chBarUsable(c[i]) && c[i].time > c[i - 1].time;
   if (clean) return d;
-  console.warn("chart: payload had non-monotonic/duplicate bar times — sanitizing");
-  const keep = [];
+  let keep = [];
+  for (let i = 0; i < c.length; i++) if (chBarUsable(c[i])) keep.push(i);
+  const dropped = c.length - keep.length;
+  keep.sort((x, y) => c[x].time - c[y].time || x - y);
+  const ordered = [];
   let last = -Infinity;
-  for (let i = 0; i < c.length; i++) if (c[i].time > last) { keep.push(i); last = c[i].time; }
+  for (const i of keep) if (c[i].time > last) { ordered.push(i); last = c[i].time; }
+  console.warn(`chart: payload sanitized — dropped ${dropped} unusable bar(s), `
+             + `${keep.length - ordered.length} duplicate/out-of-order bar(s)`);
   const indicators = {};
   for (const name in (d.indicators || {})) {
     const s = d.indicators[name] || [];
-    indicators[name] = keep.map(i => (s[i] == null ? null : s[i]));
+    indicators[name] = ordered.map(i => (s[i] == null ? null : s[i]));
   }
-  return { ...d, candles: keep.map(i => c[i]), indicators };
+  return { ...d, candles: ordered.map(i => c[i]), indicators };
 }
 function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
                           focal = null, fit = false} = {}) {
-  d = chEnsureMonotonic(d);   // never feed dup/out-of-order bars to the renderer
+  const rawBars = d?.candles?.length || 0;
+  d = chEnsureMonotonic(d);   // never feed unusable/dup/out-of-order bars to the renderer
+  // Sanitizing away EVERY bar is a failure, not a successful empty chart: the
+  // provider answered with something, and none of it can be drawn. Say so
+  // instead of painting a blank canvas and reporting "complete".
+  if (rawBars && !d.candles.length) {
+    console.error(`chart: all ${rawBars} bars were undrawable (non-finite or geometrically impossible OHLC)`);
+    chSetState("failed", "unusable-bars");
+    chOverlay("error", "The data feed returned bars this chart can't draw. "
+                     + "Retry, or try another timeframe.");
+    return false;
+  }
   // Is this the same (symbol·tf) already on screen? If so we are preserving
   // the user's live viewport (a refresh or history prepend) and must never
   // yank it — the stranded safety net below only runs on a genuine switch /
@@ -2485,6 +3439,7 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
       CH.dataKey = null;         // fall back to a full repaint next tick
       return false;
     }
+    // (no net on a tail update: same key, so the user owns the price scale)
     const entry = chCacheEntry(key);
     entry.data = d; entry.sig = CH.dataSig;
     chStale(chStaleAsOf(d)); chLegend(null);
@@ -2511,6 +3466,11 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
   // chMaybeLoadHistory unguarded and prepend history mid-switch (the V3.2.1
   // corruption) if it weren't gated for that whole span.
   let renderFailed = false;
+  // A genuine switch brings a different price universe on screen; any price
+  // band the user pinned on the PREVIOUS data is meaningless for this one and
+  // would render the new candles off-screen (see chAutoScalePrice). A same-key
+  // refresh/history prepend deliberately keeps the manual scale.
+  if (!sameKey) chAutoScalePrice();
   chMoveViewport(() => {
     try {
       CH.candle.setData(d.candles);
@@ -2525,6 +3485,11 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
       console.error("chart render failed:", e);
       CH.dataKey = null;                       // force a clean repaint on retry
       chOverlay("error", `Chart renderer error: ${e.message}`);
+      // …and the state machine must say so. It used to be left on whatever
+      // non-terminal value the caller had set ("rendering"), so an automated
+      // reader — and the "no silent failures" contract — saw a chart that was
+      // permanently mid-render rather than one that had failed.
+      chSetState("failed", "renderer");
       renderFailed = true;
       return;
     }
@@ -2534,7 +3499,7 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
     //   time        — history prepend: bar times are stable across the prepend
     //   keepLogical — same-key refresh/live: don't move under the user (Bug 2)
     //   fit         — symbol switch / first paint: a sensible default
-    if (CH.autoFollow) chScrollToLatest();
+    if (CH.autoFollow) chScrollToLatest({ freshWidth: !sameKey && !focal });
     else if (focal) chApplyFocal(focal);
     else if (time) CH.main.timeScale().setVisibleRange(time);
     else if (keepLR) CH.main.timeScale().setVisibleLogicalRange(keepLR);
@@ -2547,6 +3512,7 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
       CH.main.timeScale().fitContent();
   });
   if (renderFailed) return false;
+  chEnsurePriceVisible(!sameKey);   // last-resort net: candles must end up ON SCREEN
   const entry = chCacheEntry(key);
   entry.data = d;
   entry.sig = CH.dataSig;
@@ -2934,7 +3900,7 @@ async function loadChart(symbol) {
     if (firstPaint) chOverlay("error", timedOut
       ? "Data is taking too long — the feed may be busy. Retrying automatically…"
       : "Couldn't reach the data service. Check your connection and retry.");
-    else chStale(CH.data.candles[CH.data.candles.length - 1].time);
+    else chStale(CH.data?.candles?.length ? CH.data.candles[CH.data.candles.length - 1].time : null);
     return;
   }
   clearTimeout(timer);
@@ -2959,7 +3925,7 @@ async function loadChart(symbol) {
     }
     if (firstPaint) chOverlay("error", msg);
     else { toast(msg, false);
-           chStale(CH.data.candles[CH.data.candles.length - 1].time); }
+           chStale(CH.data?.candles?.length ? CH.data.candles[CH.data.candles.length - 1].time : null); }
     return;
   }
   // Cache stores the freshly-fetched BASE window (a later revisit paints light,
@@ -2984,7 +3950,13 @@ async function loadChart(symbol) {
     return;
   }
   chSetState("rendering");
-  chRenderData(out, viewOpts());
+  // Honour the render's verdict. chRenderData returns false when the renderer
+  // threw or when the payload sanitized down to nothing, and it has already
+  // set a "failed" state and raised the error overlay — unconditionally
+  // stamping "complete" here overwrote that with a lie, leaving the state
+  // machine (which the regression suite and a human reading `data-ch-state`
+  // both trust) reporting success over a visibly broken chart.
+  if (!chRenderData(out, viewOpts())) return;
   chSetState(d.stale ? "cached" : "complete",
              d.provider ? `via ${d.provider}` : "");
 }
@@ -3133,17 +4105,36 @@ function chOverlayLoop() {
 }
 requestAnimationFrame(chOverlayLoop);
 
+/* `indicators` is contractually a plain object of parallel arrays. When a
+   payload sends null (or an array, or a scalar) `Object.keys` throws from
+   chApplyIndicators — INSIDE chRenderData's try, which wiped the entire chart
+   to the red error overlay because one optional accessory was malformed. Every
+   reader goes through here so the degenerate case is "no indicators drawn",
+   never "no chart drawn". */
+const chInds = () => {
+  const v = CH.data?.indicators;
+  return (v && typeof v === "object" && !Array.isArray(v)) ? v : {};
+};
+/* An indicator series is a parallel array to `candles`. A series LONGER than
+   candles used to throw ("Cannot read properties of undefined") from inside
+   chRenderData's try, which wiped the whole chart to the red error overlay —
+   a broken accessory killing the primary content. Bound the walk by both
+   lengths and skip non-finite values: a mismatched or dirty indicator now
+   draws short instead of taking the candles down with it. */
 const chSeriesData = name => {
-  const vals = CH.data.indicators[name];
-  if (!vals) return [];
+  const vals = chInds()[name];
+  const cs = CH.data?.candles;
+  if (!vals || !cs) return [];
+  const n = Math.min(vals.length, cs.length);
   const out = [];
-  for (let i = 0; i < vals.length; i++)
-    if (vals[i] !== null) out.push({ time: CH.data.candles[i].time, value: vals[i] });
+  for (let i = 0; i < n; i++)
+    if (vals[i] !== null && Number.isFinite(vals[i]) && cs[i])
+      out.push({ time: cs[i].time, value: vals[i] });
   return out;
 };
 
 function chApplyIndicators() {
-  const ind = CH.inds, names = Object.keys(CH.data.indicators);
+  const ind = CH.inds, names = Object.keys(chInds());
   const emaNames = names.filter(n => n.startsWith("ema")).slice(0, 3);
   emaNames.forEach((n, i) => CH.overlays["ema" + i].setData(ind.ema ? chSeriesData(n) : []));
   CH.overlays.vwap.setData(ind.vwap ? chSeriesData("vwap") : []);
@@ -3166,7 +4157,7 @@ function chApplyIndicators() {
 }
 
 function chLegend(param) {
-  if (!CH.data) return;
+  if (!CH.data?.candles?.length) return;   // never index [-1] on an empty payload
   const cs = CH.data.candles;
   let i = cs.length - 1;
   if (param && param.time !== undefined && CH.timeIndex.has(param.time))
@@ -3180,9 +4171,17 @@ function chLegend(param) {
     `<span class="${cls(chg)}">${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%</span>`,
     `Vol <b>${compact(c.volume)}</b>`,
   ];
-  const at = name => { const v = CH.data.indicators[name]?.[i]; return v == null ? null : v; };
+  // Only FINITE numbers reach the formatters below: a provider that sends an
+  // indicator value as a string (or a NaN) used to raise an uncaught
+  // "v.toFixed is not a function" straight out of the crosshair handler, which
+  // no try/catch in the render path covers — the legend froze mid-update on
+  // every mouse move. A bad indicator now simply doesn't appear.
+  const at = name => {
+    const v = chInds()[name]?.[i];
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  };
   if (CH.inds.ema) {
-    const emaNames = Object.keys(CH.data.indicators).filter(n => n.startsWith("ema")).slice(0, 3);
+    const emaNames = Object.keys(chInds()).filter(n => n.startsWith("ema")).slice(0, 3);
     for (const n of emaNames) { const v = at(n); if (v !== null)
       bits.push(`${n.toUpperCase()} <b>${v.toFixed(2)}</b>`); }
   }
@@ -4297,6 +5296,10 @@ async function loadCoach() {
   document.querySelectorAll("#coach-reviews tr.expandable").forEach(tr =>
     tr.onclick = () => { const row = $("rev-" + tr.dataset.i);
                          row.style.display = row.style.display ? "" : "none"; });
+
+  // The intelligence layer's cross-trade view of the same trader, served in the
+  // same response so the Coach tab costs one request and one analysis.
+  Intel.renderCoach(d.intelligence);
 }
 
 function reviewDetail(r) {
@@ -4576,6 +5579,643 @@ const Updater = (() => {
   return {init};
 })();
 
+/* ── Market Data Control Centre (Settings ▸ Market data) ──────────────────
+   A live view over GET /api/marketdata plus the small set of POSTs that change
+   something. Like the diagnostics modal it computes nothing: every number is
+   rendered straight from the payload, so this page, the JSON export and the
+   text report can never disagree about a figure.
+
+   Three rules this module follows, each learned from a way a settings page
+   goes wrong:
+
+   1. **Polling stops when the panel is not on screen.** A settings page that
+      keeps fetching from a background tab becomes a meaningful share of the
+      traffic in the system it is reporting on — and on a metered provider,
+      traffic is budget.
+   2. **A re-render never steals what the user is doing.** Auto-refresh is
+      skipped entirely while focus is inside the panel, and `<details>` open
+      state and half-typed key inputs are preserved across every render. A
+      panel that wiped an API key box mid-paste would be worse than no
+      auto-refresh at all.
+   3. **A failed action says what failed.** Every POST reports through the same
+      status line (`#md-status`, an aria-live region), so a screen-reader user
+      and a sighted user learn the outcome at the same moment. */
+const MarketData = (() => {
+  let data = null;          // last payload
+  let timer = null;         // poll handle
+  let jobTimer = null;      // faster poll while a maintenance job runs
+  let active = false;       // is the Settings tab on screen?
+  let busy = false;         // a POST is in flight — suppress the poll
+  const POLL_MS = 5000;
+  const JOB_POLL_MS = 700;
+  const drafts = {};        // half-typed API keys, keyed by provider
+
+  const num = (v, dp = 0) =>
+    (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(dp);
+  const pct = v => (v === null || v === undefined) ? "—" : (v * 100).toFixed(1) + "%";
+  const ago = s => {
+    if (s === null || s === undefined) return "never";
+    if (s < 90) return Math.round(s) + "s ago";
+    if (s < 5400) return Math.round(s / 60) + "m ago";
+    if (s < 172800) return (s / 3600).toFixed(1) + "h ago";
+    return (s / 86400).toFixed(1) + "d ago";
+  };
+  const when = iso => {
+    if (!iso) return "never";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  };
+  const say = (msg, ok = true) => {
+    const el = $("md-status");
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = ok ? "" : "var(--bad)";
+  };
+
+  /* ── lifecycle ─────────────────────────────────────────────────────── */
+
+  function enter() { active = true; load(); schedule(); }
+  function leave() { active = false; stop(); }
+  function stop() {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (jobTimer) { clearInterval(jobTimer); jobTimer = null; }
+  }
+  function schedule() {
+    stop();
+    if (!active || !$("md-live").checked) return;
+    timer = setInterval(() => {
+      // Never refresh over the top of someone typing, and never while the
+      // browser tab is hidden — a background tab polling a metered provider's
+      // dashboard is pure waste.
+      if (busy || document.hidden || panelHasFocus()) return;
+      load();
+    }, POLL_MS);
+  }
+  function panelHasFocus() {
+    const a = document.activeElement;
+    return !!(a && $("md-panel") && $("md-panel").contains(a) &&
+              (a.tagName === "INPUT" || a.tagName === "SELECT" ||
+               a.tagName === "TEXTAREA"));
+  }
+
+  async function load() {
+    let payload;
+    try {
+      const res = await fetch("/api/marketdata");
+      payload = await res.json();
+    } catch (e) {
+      $("md-providers").innerHTML =
+        '<p class="hint">Could not reach the market-data settings endpoint.</p>';
+      return;
+    }
+    if (payload.available === false) {
+      $("md-providers").innerHTML = '<p class="hint">' +
+        esc(payload.reason || "not available for this provider") + "</p>";
+      $("md-summary").innerHTML = "";
+      return;
+    }
+    data = payload;
+    render();
+  }
+
+  /* ── rendering ─────────────────────────────────────────────────────── */
+
+  function render() {
+    if (!data) return;
+    captureDrafts();
+    $("md-recs").innerHTML = recommendations();
+    $("md-summary").innerHTML = summary();
+    $("md-mode").innerHTML = modes();
+    $("md-mode-why").textContent = modeExplanation();
+    $("md-providers").innerHTML = (data.providers || []).map(card).join("") ||
+      '<p class="hint">No providers are registered in this build.</p>';
+    $("md-dashboard").innerHTML = dashboardTable();
+    $("md-tools").innerHTML = tools();
+    $("md-job").innerHTML = job();
+    $("md-qa").innerHTML = data.qa_mode ? qaPanel() : "";
+    restoreDrafts();
+    bind();
+  }
+
+  // A half-typed key must survive an auto-refresh. Captured before the innerHTML
+  // that would destroy it, restored after.
+  function captureDrafts() {
+    document.querySelectorAll("#md-providers input[data-key-for]").forEach(el => {
+      if (el.value) drafts[el.dataset.keyFor] = el.value;
+    });
+  }
+  function restoreDrafts() {
+    document.querySelectorAll("#md-providers input[data-key-for]").forEach(el => {
+      const draft = drafts[el.dataset.keyFor];
+      if (draft) el.value = draft;
+    });
+  }
+
+  function recommendations() {
+    const list = data.recommendations || [];
+    if (!list.length) return "";
+    const icon = {critical: "⛔", warning: "⚠️", info: "💡"};
+    return list.map(r =>
+      '<div class="md-rec ' + esc(r.severity) + '">' +
+        '<span class="ic" aria-hidden="true">' + (icon[r.severity] || "•") + "</span>" +
+        "<div><b>" + esc(r.title) + "</b><p>" + esc(r.detail) +
+        (r.signup_url
+          ? ' <a href="' + esc(r.signup_url) + '" target="_blank" ' +
+            'rel="noopener noreferrer">Get a free key →</a>'
+          : "") +
+        "</p></div></div>").join("");
+  }
+
+  function summary() {
+    const f = data.failover || {};
+    const c = data.cache || {};
+    const r = data.requests || {};
+    const spof = f.single_point_of_failure;
+    return [
+      ["Serving now", esc(f.primary || "—"), false],
+      ["Falls back to", esc(f.next || "nothing"), !f.next],
+      ["Independent sources", esc(f.independent_count ?? 0), spof],
+      ["Usable providers", esc(f.usable_count ?? 0) + " of " +
+        esc((data.providers || []).length), false],
+      ["Requests served", pct(r.success_rate), false],
+      ["Cached bars", Number(c.bars || 0).toLocaleString(), false],
+    ].map(([k, v, warn]) =>
+      '<div class="md-stat' + (warn ? " warn" : "") + '">' +
+      '<div class="k">' + k + '</div><div class="v">' + v + "</div></div>").join("");
+  }
+
+  function modes() {
+    return (data.ordering_modes || []).map(m =>
+      '<button data-mode="' + esc(m.mode) + '"' +
+      (m.mode === data.ordering_mode ? ' class="on" aria-pressed="true"'
+                                     : ' aria-pressed="false"') +
+      ">" + esc(m.label) + "</button>").join("");
+  }
+  function modeExplanation() {
+    const m = (data.ordering_modes || []).find(x => x.mode === data.ordering_mode);
+    return m ? m.explanation : "";
+  }
+
+  function card(p) {
+    const cred = p.credential || {};
+    const feed = p.feed || {};
+    const first = data.order.indexOf(p.name) === 0;
+    const last = data.order.indexOf(p.name) === data.order.length - 1;
+    return '<div class="md-card' + (p.enabled ? "" : " off") + '">' +
+      '<div class="md-card-top">' +
+        '<span class="pos">' + esc(p.position ?? "—") + "</span>" +
+        '<span class="name">' + esc(p.name) + "</span>" +
+        '<span class="grow"></span>' +
+        '<span class="md-badge ' + esc(p.health_state) + '" ' +
+          'data-badge-for="' + esc(p.name) + '">' +
+          esc(label(p.health_state)) + "</span>" +
+      "</div>" +
+      '<div class="md-tags">' +
+        tag(feed.cost) + tag(feed.limits) + tag(feed.latency) + tag(feed.key) +
+      "</div>" +
+      // The plain-English explanation is NOT optional and NOT a tooltip: a
+      // badge alone tells a user they have a problem without telling them what
+      // it is, which is the failure this whole panel exists to prevent.
+      '<p class="md-why">' + esc(p.health_detail || "") + why(p) + "</p>" +
+      quota(p) +
+      metrics(p) +
+      keyRow(p, cred, feed) +
+      (p.last_test ? testResult(p.last_test) : "") +
+      '<div class="md-actions">' +
+        '<button class="btn" data-test="' + esc(p.name) + '">Test connection</button>' +
+        '<label class="md-switch"><input type="checkbox" data-enable="' +
+          esc(p.name) + '"' + (p.enabled ? " checked" : "") +
+          ' aria-label="Use ' + esc(p.name) + ' for market data">' +
+          '<span class="track"></span>' + (p.enabled ? "On" : "Off") + "</label>" +
+        '<span class="spacer"></span>' +
+        '<button class="btn" data-move="up" data-name="' + esc(p.name) + '"' +
+          (first ? " disabled" : "") + ' aria-label="Move ' + esc(p.name) +
+          ' up one place">▲</button>' +
+        '<button class="btn" data-move="down" data-name="' + esc(p.name) + '"' +
+          (last ? " disabled" : "") + ' aria-label="Move ' + esc(p.name) +
+          ' down one place">▼</button>' +
+      "</div>" +
+    "</div>";
+  }
+
+  const tag = v => v ? '<span class="md-tag">' + esc(v) + "</span>" : "";
+
+  // The backend's `status_detail` is appended only when it adds something the
+  // human-facing `health_detail` does not. For `disabled` and `missing_key`
+  // the two say the same thing in different words ("Switched off here…" then
+  // "disabled in configuration"), and repeating a sentence makes the panel
+  // read like a machine. For a cooldown or a quota it carries the live number,
+  // which is exactly what the user came for.
+  const STATIC_DETAIL = {disabled: 1, missing_key: 1, unknown: 1, healthy: 1};
+  const why = p => (p.status_detail && p.status !== "ok"
+                    && !STATIC_DETAIL[p.health_state])
+    ? " <em>" + esc(p.status_detail) + "</em>" : "";
+  const label = state => ({
+    healthy: "Healthy", degraded: "Degraded", offline: "Offline",
+    disabled: "Disabled", missing_key: "API key missing",
+    rate_limited: "Rate limited", circuit_open: "Out of rotation",
+    unavailable: "Unavailable", premium_required: "Paid plan required",
+    testing: "Testing…", connecting: "Connecting…",
+    unknown: "Not used yet",
+  }[state] || state);
+
+  function quota(p) {
+    const q = p.quota;
+    if (!q || !q.metered) return "";
+    const cls = q.exhausted ? " full" : (q.warning ? " warn" : "");
+    const used = q.per_day
+      ? esc(q.used_today) + " / " + esc(q.per_day) + " requests today"
+      : esc(q.used_today) + " requests today";
+    const minute = (q.remaining_this_minute === null ||
+                    q.remaining_this_minute === undefined)
+      ? "" : " · " + esc(q.remaining_this_minute) + " left this minute";
+    return '<div><div class="md-meter' + cls + '"><span style="width:' +
+      Math.round(Math.min(1, q.pressure || 0) * 100) + '%"></span></div>' +
+      '<div class="md-metrics" style="margin-top:4px"><span>Budget</span><b>' +
+      used + minute + "</b></div></div>";
+  }
+
+  function metrics(p) {
+    const rows = [
+      ["Latency", num(p.avg_latency_ms) + " ms avg · " +
+                  num(p.p95_latency_ms) + " ms p95"],
+      ["Success rate", pct(p.success_rate) + " of " + esc(p.requests) +
+                       " request(s)"],
+      ["Today", esc(p.requests_today) + " request(s), " +
+                esc(p.failures_today) + " failed"],
+      ["Data quality", num(p.data_quality_score, 1) + " / 100"],
+      ["Last success", ago(p.seconds_since_success)],
+      ["Rank", num(p.rank, 1) + " (priority " + esc(p.priority) + ")"],
+    ];
+    if (p.breaker_trips) rows.push(["Breaker trips", esc(p.breaker_trips)]);
+    if (p.last_error) rows.push(["Last error", esc(p.last_error)]);
+    return '<div class="md-metrics">' +
+      rows.map(([k, v]) => "<span>" + k + "</span><b>" + v + "</b>").join("") +
+      "</div>";
+  }
+
+  function keyRow(p, cred, feed) {
+    if (!cred.required) return "";
+    const has = cred.masked_key;
+    const env = cred.env_vars || [];
+    return '<div>' +
+      '<div class="md-key">' +
+        (has ? '<span class="stored" title="Only the last four characters are ' +
+               'ever shown">' + esc(cred.masked_key) + "</span>" : "") +
+        '<input type="password" data-key-for="' + esc(p.name) + '" ' +
+          'placeholder="' + (has ? "Replace API key…" : "Paste API key…") + '" ' +
+          'autocomplete="off" spellcheck="false" ' +
+          'aria-label="API key for ' + esc(p.name) + '">' +
+        '<button class="btn primary" data-save-key="' + esc(p.name) + '">Save</button>' +
+        (has ? '<button class="btn" data-remove-key="' + esc(p.name) +
+               '">Remove</button>' : "") +
+      "</div>" +
+      '<p class="hint" style="margin-top:5px">' +
+        (cred.env_overrides
+          ? "⚠️ The environment variable <code>" + esc(env[0] || "") +
+            "</code> is set and overrides the stored key."
+          : cred.source === "environment"
+            ? "Provided by the environment variable <code>" +
+              esc(env[0] || "") + "</code>."
+            : cred.source === "config"
+              ? "Provided by <code>config.yaml</code>."
+              : has
+                ? "Added " + esc(when(cred.configured_at)) + " · last worked " +
+                  esc(when(cred.last_success_at))
+                : (feed.free_tier_serves_history === false
+                    // Said BEFORE they register, not after a 403.
+                    ? "⚠️ This provider's free plan does not include historical "
+                      + "prices, so a free key cannot be used for charts. "
+                    : "Free, no card required. ") +
+                  (cred.signup_url
+                    ? '<a href="' + esc(cred.signup_url) + '" target="_blank" ' +
+                      'rel="noopener noreferrer">Get a key →</a>' : "")) +
+      "</p></div>";
+  }
+
+  function testResult(t) {
+    return '<div class="md-result ' + (t.ok ? "ok" : "bad") + '">' +
+      (t.ok ? "✔ " : "✖ ") + esc(t.message) +
+      (t.ok ? " " + esc(t.bars) + " bars in " + num(t.latency_ms) + " ms." : "") +
+      (t.detail ? " <em>" + esc(t.detail) + "</em>" : "") +
+      (t.ok ? "" : '<span class="act">' + esc(t.action || "") + "</span>") +
+      "</div>";
+  }
+
+  /* The raw dashboard: every measured column, for when the cards are not
+     enough. Collapsed by default because it is a diagnostic, not a control. */
+  function dashboardTable() {
+    const cols = [
+      ["Provider", p => esc(p.name)],
+      ["Rank", p => num(p.rank, 1)],
+      ["Priority", p => esc(p.priority)],
+      ["State", p => esc(label(p.health_state))],
+      ["Enabled", p => p.enabled ? "yes" : "no"],
+      ["Key", p => p.credential.required
+                   ? (p.credential.masked_key ? p.credential.source : "missing")
+                   : "not needed"],
+      ["Avg ms", p => num(p.avg_latency_ms)],
+      ["p95 ms", p => num(p.p95_latency_ms)],
+      ["Success", p => pct(p.success_rate)],
+      ["Recent fail", p => pct(p.recent_failure_rate)],
+      ["Breaker", p => esc(p.state) +
+                       (p.circuit_open_for ? " (" + num(p.circuit_open_for) + "s)" : "")],
+      ["Quota left", p => (p.quota && p.quota.metered)
+        ? (p.quota.remaining_today ?? p.quota.remaining_this_minute ?? "—")
+        : "unlimited"],
+      ["Today", p => esc(p.requests_today)],
+      ["Last success", p => ago(p.seconds_since_success)],
+      ["Last failure", p => esc(when(p.last_failure_at))],
+      ["Quality", p => num(p.data_quality_score, 1)],
+      ["Intraday", p => p.capability.intraday ? "yes" : "no"],
+      ["Daily", p => p.capability.daily ? "yes" : "no"],
+      ["Weekly", p => p.capability.weekly ? "yes" : "no"],
+      ["Monthly", p => p.capability.monthly ? "yes" : "no"],
+      ["Intervals", p => esc((p.capability.intervals || []).join(" "))],
+    ];
+    const head = cols.map(([h]) => '<th scope="col">' + h + "</th>").join("");
+    const body = (data.providers || []).map(p =>
+      "<tr>" + cols.map(([, f]) => "<td>" + f(p) + "</td>").join("") + "</tr>"
+    ).join("");
+    return '<table class="md-tbl"><caption>Every measured figure, refreshed ' +
+      'live. Ranked best first — the top row is asked before the others.' +
+      "</caption><thead><tr>" + head + "</tr></thead><tbody>" + body +
+      "</tbody></table>";
+  }
+
+  function tools() {
+    return ((data.maintenance || {}).actions || []).map(a =>
+      '<button class="btn md-tool" data-action="' + esc(a.action) + '">' +
+        '<span class="t">' + esc(a.label) + "</span>" +
+        '<span class="d">' + esc(a.description) + "</span>" +
+        (a.spends_requests
+          ? '<span class="cost">Uses live provider requests</span>' : "") +
+      "</button>").join("");
+  }
+
+  function job() {
+    const j = (data.maintenance || {}).job || {};
+    if (!j.state || j.state === "idle") return "";
+    const pctDone = Math.round((j.progress || 0) * 100);
+    const summaryText = j.state === "error"
+      ? "Failed: " + esc(j.error)
+      : esc((j.summary || {}).message || j.step || "");
+    return '<div class="md-job">' +
+      '<div class="lbl"><b>' + esc(j.label || j.action) + "</b><span>" +
+        (j.state === "running" ? esc(j.step) : esc(j.state)) + " · " +
+        esc(j.elapsed_seconds) + "s" +
+        (j.cancellable
+          ? ' <button class="btn" id="md-job-cancel" style="padding:2px 8px;' +
+            'font-size:var(--fs-xs);margin-left:6px">Stop</button>' : "") +
+        "</span></div>" +
+      '<div class="md-bar"><span style="width:' + pctDone + '%"></span></div>' +
+      '<p class="hint" style="margin-top:7px">' + summaryText + "</p>" +
+      ((j.lines || []).length
+        ? "<pre>" + esc(j.lines.join("\n")) + "</pre>" : "") +
+    "</div>";
+  }
+
+  function qaPanel() {
+    const qa = data.qa || {};
+    const providers = (qa.providers || []).map(n =>
+      '<option value="' + esc(n) + '">' + esc(n) + "</option>").join("");
+    const faults = (qa.available_faults || []).map(f =>
+      '<option value="' + esc(f.kind) + '" title="' + esc(f.description) + '">' +
+      esc(f.kind) + "</option>").join("");
+    const armed = Object.entries(qa.faults || {});
+    return '<div class="md-qa"><h3>Developer QA mode</h3>' +
+      '<p class="hint">Only shown because <code>market_data.qa_mode</code> is ' +
+      'enabled. Faults fire in the same place a real failure would, so the ' +
+      'breaker, the ranking and the chart behave exactly as they would in ' +
+      'production. Nothing here survives a restart.</p>' +
+      '<div class="row">' +
+        '<label class="hint" for="md-qa-provider">Provider</label>' +
+        '<select id="md-qa-provider">' + providers + "</select>" +
+        '<label class="hint" for="md-qa-fault">Fault</label>' +
+        '<select id="md-qa-fault">' + faults + "</select>" +
+        '<button class="btn" id="md-qa-arm">Arm</button>' +
+        '<button class="btn" id="md-qa-clear">Clear all</button>' +
+      "</div>" +
+      '<div class="row">' +
+        '<button class="btn" id="md-qa-breaker">Trip breaker (30s)</button>' +
+        '<button class="btn" id="md-qa-reset">Reset all health</button>' +
+        '<button class="btn" id="md-qa-corrupt">Cache corruption drill</button>' +
+      "</div>" +
+      (armed.length
+        ? '<p class="hint" style="margin-top:9px">Armed: ' +
+          armed.map(([n, f]) => esc(n) + " → " + esc(f.kind) +
+            (f.remaining === null ? " (until cleared)"
+                                  : " (" + esc(f.remaining) + " left)")).join(", ") +
+          "</p>"
+        : "") +
+    "</div>";
+  }
+
+  /* ── actions ───────────────────────────────────────────────────────── */
+
+  async function post(url, body, {method = "POST"} = {}) {
+    busy = true;
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: body ? {"Content-Type": "application/json"} : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || out.error) {
+        say(out.error || ("Request failed (" + res.status + ")"), false);
+        return null;
+      }
+      return out;
+    } catch (e) {
+      say("Could not reach the server.", false);
+      return null;
+    } finally {
+      busy = false;
+    }
+  }
+
+  function bind() {
+    const panel = $("md-panel");
+    panel.querySelectorAll("[data-save-key]").forEach(b =>
+      b.onclick = () => saveKey(b.dataset.saveKey));
+    panel.querySelectorAll("input[data-key-for]").forEach(el => {
+      el.oninput = () => { drafts[el.dataset.keyFor] = el.value; };
+      // Enter is what a user pastes-and-presses. Without this the key box is
+      // the one input in the app that silently does nothing on Enter.
+      el.onkeydown = e => { if (e.key === "Enter") saveKey(el.dataset.keyFor); };
+    });
+    panel.querySelectorAll("[data-remove-key]").forEach(b =>
+      b.onclick = () => removeKey(b.dataset.removeKey));
+    panel.querySelectorAll("[data-test]").forEach(b =>
+      b.onclick = () => testProvider(b.dataset.test, b));
+    panel.querySelectorAll("[data-enable]").forEach(el =>
+      el.onchange = () => setEnabled(el.dataset.enable, el.checked));
+    panel.querySelectorAll("[data-move]").forEach(b =>
+      b.onclick = () => move(b.dataset.name, b.dataset.move));
+    panel.querySelectorAll("#md-mode button").forEach(b =>
+      b.onclick = () => setMode(b.dataset.mode));
+    panel.querySelectorAll("[data-action]").forEach(b =>
+      b.onclick = () => runAction(b.dataset.action));
+    if (data && data.qa_mode) bindQA();
+  }
+
+  async function saveKey(name) {
+    const input = document.querySelector('input[data-key-for="' + name + '"]');
+    const value = (input && input.value || "").trim();
+    if (!value) { say("Paste a key first.", false); return; }
+    const out = await post("/api/marketdata/providers/" + name + "/key",
+                           {api_key: value});
+    if (!out) return;
+    delete drafts[name];
+    if (input) input.value = "";
+    say(out.message);
+    toast(out.env_overrides ? "Key saved, but an environment variable "
+                            : "API key saved", !out.env_overrides);
+    load();
+  }
+
+  async function removeKey(name) {
+    const out = await post("/api/marketdata/providers/" + name + "/key", null,
+                           {method: "DELETE"});
+    if (!out) return;
+    say(out.message);
+    load();
+  }
+
+  async function testProvider(name, button) {
+    // The badge goes to "Testing…" immediately: a live request can take
+    // seconds, and a button that looks inert for five seconds gets pressed
+    // again, which spends a second metered request to learn the same thing.
+    const badge = document.querySelector('[data-badge-for="' + name + '"]');
+    if (badge) { badge.className = "md-badge testing"; badge.textContent = "Testing…"; }
+    if (button) button.disabled = true;
+    say("Testing " + name + "…");
+    const out = await post("/api/marketdata/providers/" + name + "/test");
+    if (button) button.disabled = false;
+    if (!out) { load(); return; }
+    say(out.message + (out.ok ? "" : " " + (out.action || "")), out.ok);
+    toast(out.ok ? name + " connected (" + Math.round(out.latency_ms) + " ms)"
+                 : name + ": " + out.message, out.ok);
+    load();
+  }
+
+  async function setEnabled(name, enabled) {
+    const out = await post("/api/marketdata/providers/" + name + "/enabled",
+                           {enabled});
+    if (!out) { load(); return; }
+    say(name + (enabled ? " will be used for market data."
+                        : " will not be asked for data."));
+    load();
+  }
+
+  async function move(name, direction) {
+    const out = await post("/api/marketdata/providers/" + name + "/move",
+                           {direction});
+    if (!out) return;
+    if (out.moved) say("Moved " + name + " " + direction + ".");
+    load();
+  }
+
+  async function setMode(mode) {
+    const out = await post("/api/marketdata/ordering_mode", {mode});
+    if (!out) return;
+    say(out.explanation);
+    load();
+  }
+
+  async function resetOrder() {
+    const out = await post("/api/marketdata/order/reset");
+    if (!out) return;
+    say("Restored the default provider order.");
+    load();
+  }
+
+  async function runAction(action) {
+    const out = await post("/api/marketdata/maintenance", {action});
+    if (!out) return;
+    say("Started: " + action.replace(/_/g, " "));
+    $("md-tools-sec").open = true;
+    watchJob();
+  }
+
+  /* While a job runs, poll faster than the dashboard does — a progress bar
+     that advances every five seconds reads as a hung one. */
+  function watchJob() {
+    if (jobTimer) clearInterval(jobTimer);
+    jobTimer = setInterval(async () => {
+      let j;
+      try {
+        j = await (await fetch("/api/marketdata/maintenance")).json();
+      } catch (e) { clearInterval(jobTimer); jobTimer = null; return; }
+      if (data) { data.maintenance = data.maintenance || {}; data.maintenance.job = j; }
+      $("md-job").innerHTML = job();
+      // Re-bound on every tick because the button is re-rendered with the job
+      // card; a handler bound once would be attached to a discarded element.
+      const stop = $("md-job-cancel");
+      if (stop) stop.onclick = async () => {
+        stop.disabled = true;
+        const out = await post("/api/marketdata/maintenance", null,
+                               {method: "DELETE"});
+        if (out) say(out.message);
+      };
+      if (j.state !== "running") {
+        clearInterval(jobTimer); jobTimer = null;
+        say((j.summary && j.summary.message) || j.error || "Finished.",
+            j.state !== "error");
+        load();
+      }
+      // A cancelled job's terminal state is "cancelled", not "error" — nothing
+      // went wrong, so it must not be reported in red.
+    }, JOB_POLL_MS);
+  }
+
+  function bindQA() {
+    const arm = $("md-qa-arm");
+    if (!arm) return;
+    arm.onclick = async () => {
+      const out = await post("/api/marketdata/qa/fault", {
+        provider: $("md-qa-provider").value, kind: $("md-qa-fault").value,
+        seconds: 3});
+      if (out) { say("Armed " + $("md-qa-fault").value + " on " +
+                     $("md-qa-provider").value + "."); load(); }
+    };
+    $("md-qa-clear").onclick = async () => {
+      const out = await post("/api/marketdata/qa/fault", null, {method: "DELETE"});
+      if (out) { say("Cleared " + out.cleared + " armed fault(s)."); load(); }
+    };
+    $("md-qa-breaker").onclick = async () => {
+      const out = await post("/api/marketdata/qa/breaker",
+                             {provider: $("md-qa-provider").value, seconds: 30});
+      if (out) { say($("md-qa-provider").value + " is out of rotation for 30s."); load(); }
+    };
+    $("md-qa-reset").onclick = async () => {
+      const out = await post("/api/marketdata/qa/reset");
+      if (out) { say(out.message); load(); }
+    };
+    $("md-qa-corrupt").onclick = async () => {
+      const out = await post("/api/marketdata/qa/corrupt_cache");
+      if (out) say(out.message);
+    };
+  }
+
+  function init() {
+    $("md-refresh").onclick = load;
+    $("md-reset-order").onclick = resetOrder;
+    $("md-live").onchange = () => {
+      schedule();
+      say($("md-live").checked ? "Live updates on." : "Live updates paused.");
+    };
+    // A hidden tab must not poll. `visibilitychange` covers minimising and
+    // switching browser tabs, which the tab-switch hook alone cannot see.
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && active) load();
+    });
+  }
+
+  return {init, enter, leave, refresh: load};
+})();
+
 /* ── market-data diagnostics (Help ▸ Diagnostics) ────────────────────────
    A read-only view over GET /api/diagnostics/marketdata. It computes nothing:
    every number shown is rendered straight from that payload, which is the same
@@ -4635,16 +6275,42 @@ const Diagnostics = (() => {
       tr.onclick = () => replay(Number(tr.dataset.trace)));
   }
 
+  // The status vocabulary is decided by the backend (health.STATUS_*) so the
+  // page, the JSON export and the text report cannot disagree about WHY a
+  // provider is unavailable. This maps it to a pill; it invents nothing.
+  const STATUS_PILL = {
+    ok:                       ["ok",   "healthy"],
+    disabled:                 ["",     "disabled"],
+    missing_api_key:          ["",     "no API key"],
+    auth_failure:             ["bad",  "key rejected"],
+    premium_required:         ["warn", "paid plan required"],
+    quota_exceeded:           ["warn", "quota spent"],
+    rate_limited:             ["warn", "rate limited"],
+    temporarily_unavailable:  ["bad",  "out of rotation"],
+  };
+
   function statePill(p) {
-    if (p.state === "open")
-      return '<span class="diag-pill bad">out of rotation' +
-        (p.circuit_open_for ? " · " + num(p.circuit_open_for) + "s" : "") + "</span>";
-    if (p.rate_limited_for)
-      return '<span class="diag-pill warn">rate limited · ' +
-        num(p.rate_limited_for) + "s</span>";
-    if (p.state === "half_open")
-      return '<span class="diag-pill warn">probing</span>';
+    const entry = STATUS_PILL[p.status];
+    if (entry) {
+      const [cls, label] = entry;
+      return '<span class="diag-pill ' + cls + '">' + esc(label) + "</span>";
+    }
+    // A payload from an older build: fall back to the breaker state.
+    if (p.state === "open") return '<span class="diag-pill bad">out of rotation</span>';
+    if (p.state === "half_open") return '<span class="diag-pill warn">probing</span>';
     return '<span class="diag-pill ok">healthy</span>';
+  }
+
+  function quotaRow(p) {
+    const q = p.quota;
+    if (!q || !q.metered) return "";
+    const limits = [q.per_minute ? q.per_minute + "/min" : null,
+                    q.per_day ? q.per_day + "/day" : null]
+                   .filter(Boolean).join(" · ") || "no published limit";
+    const left = (q.remaining_today === null || q.remaining_today === undefined)
+      ? "unlimited" : q.remaining_today + " left today";
+    return kv("Budget", esc(q.used_today) + " used · " + esc(left) +
+                        " (" + esc(limits) + ")");
   }
 
   function providers() {
@@ -4660,8 +6326,19 @@ const Diagnostics = (() => {
         "</div>" +
         '<div class="dc-rank">rank ' + num(p.rank, 2) +
           " · configured priority " + esc(p.priority) + "</div>" +
+        // Why it cannot be used, in the backend's own words — plus where to
+        // get a key when that is the answer, so the user is told the remedy
+        // rather than only the symptom.
+        (p.status && p.status !== "ok"
+          ? '<div class="diag-err">' + esc(p.status_detail || p.status) +
+            (p.status === "missing_api_key" && p.signup_url
+              ? ' · <a href="' + esc(p.signup_url) + '" target="_blank" ' +
+                'rel="noopener noreferrer">get a key</a>'
+              : "") + "</div>"
+          : "") +
         '<div class="diag-meter"><span style="width:' + q + '%"></span></div>' +
         '<div class="diag-kv">' +
+          quotaRow(p) +
           kv("Success rate", pct(p.success_rate)) +
           kv("Latency", num(p.avg_latency_ms) + " ms avg · " +
                         num(p.p95_latency_ms) + " ms p95") +
@@ -4673,8 +6350,14 @@ const Diagnostics = (() => {
           kv("Timeouts", esc(p.timeouts)) +
           kv("Validation fails", esc(p.validation_failures)) +
           kv("Rate limits", esc(p.rate_limits)) +
+          (p.requires_api_key
+            ? kv("Auth / quota fails",
+                 esc(p.auth_failures || 0) + " / " + esc(p.quota_failures || 0))
+            : "") +
           kv("Breaker trips", esc(p.breaker_trips)) +
           kv("Last success", ago(p.seconds_since_success)) +
+          kv("Feed", (p.realtime ? "real-time" : "delayed / poll-only") +
+                     (p.requires_api_key ? " · API key required" : " · no key")) +
           kv("Serves", esc((p.intervals || []).join(", ") || "—")) +
         "</div>" +
         (p.last_error
@@ -4825,6 +6508,10 @@ refresh();
 connectWS();
 Updater.init();
 Diagnostics.init();
+MarketData.init();
+// The Dashboard is the landing tab and switchTab() never runs for it at
+// startup, so its intelligence panel has to be kicked here.
+Intel.enterDashboard();
 </script>
 </body>
 </html>

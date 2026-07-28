@@ -9,6 +9,63 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.6.0 — Trading Intelligence Engine (2026-07-28, uncommitted)
+
+The analytical brain, and the foundation the AI Coach is meant to become a
+presentation layer over. Everything the app records about completed trades lived
+in four unrelated stores with four aggregation paths and no answer to the
+questions a trader actually asks. V0.6.0 collapses that into one pipeline:
+`build_facts()` joins journal + experience + coach into a `TradeFact` once, ten
+engines run over it, and the Dashboard, Coach, Journal and Learning tabs all
+project from a single `IntelligenceSnapshot`. New subpackage
+`optionspilot/intelligence/` (17 modules) covering a 38-metric registry, 22
+behavioural detectors, automatic edge discovery over 19 dimensions with
+false-discovery control, eight self-explaining composite scores, measurable
+goals, 16 triggered lessons, a ranked action list derived entirely from evidence,
+an improvement timeline, ten earned achievements, and weekly/monthly prose
+reports. Imports `core` only, so it sits *below* the coach in the layering.
+**No trading-behaviour change, no new dependency, no new tab; never consulted
+before a trade.** Four defects found by self-audit (a grade-A score earned by an
+absence of data, thirteen "patterns" from random noise, a circular dimension, and
+`nan%` in the narrative). 1468 → 1849 tests; new 54-check
+`scripts/intelligence_check.py` and `scripts/intelligence_benchmark.py`
+(50,000 trades in 2.9 s, flat per-trade cost). Design:
+`docs/TRADING_INTELLIGENCE.md`.
+
+### V0.5.7 — Market Data Control Centre (2026-07-27, uncommitted)
+
+The user-facing management layer over the market-data subsystem. V0.5.2–V0.5.6
+built something production-grade and left its owner unable to see or steer any
+of it: every real question ("why isn't Finnhub used?", "is my key working?",
+"how many requests are left?", "what happens when Yahoo dies?") was answerable
+only from `logs/data.log`, and every setting needed a `config.yaml` edit and a
+restart. New: `data/control.py` (the administration surface, composed *over*
+the registry), `data/credentials.py` (owner-only key storage, environment-first
+resolution, masked everywhere but `resolve()`), `data/faults.py` (QA-mode fault
+injection, 404-gated, off in every shipped build), the `/api/marketdata/*`
+surface, and a Settings ▸ Market data panel with per-provider cards, a
+21-column live dashboard, three ordering modes, connection tests, eight
+maintenance actions with progress and cancellation, automatic recommendations
+and a plain-English explainer. **No trading-behaviour change, no new
+dependency, identical shipped defaults.** Five defects found by self-audit.
+1257 → 1468 tests; new 46-check `scripts/marketdata_check.py`. Design:
+`docs/MARKET_DATA.md` §29–41.
+
+### V0.5.4 — Enterprise provider expansion (2026-07-26, uncommitted)
+
+Three keyed providers — **Finnhub, Twelve Data, Alpha Vantage** — behind the
+existing keyless chain, making a Yahoo-wide outage survivable at *intraday*
+resolution for the first time. Each adapter is ~150 lines implementing four
+methods; health, breakers, ranking, config, replay, benchmark and diagnostics
+were all inherited, which is the V0.5.3 extensibility claim being cashed. New
+machinery: `data/http_adapter.py` (shared keyed transport + the timezone
+contract) and `data/ratelimit.py` (request budgeting — Alpha Vantage allows 25
+requests/DAY, persisted across restarts, with budget pressure feeding the
+ranking so load moves before a provider is spent). **With no API keys the app
+behaves exactly as in V0.5.3.** Keys are redacted from every export. Two
+pre-existing defects fixed. 1052 → 1232 tests; stress 65 → 88. Design:
+`docs/MARKET_DATA.md` §23–27.
+
 ### V0.5.3 — Market data production readiness (2026-07-26, uncommitted)
 
 V0.5.2 built the subsystem; this made it **operable**, as infrastructure work

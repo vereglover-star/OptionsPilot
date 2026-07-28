@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from optionspilot.core.models import Timeframe
+from optionspilot.data.base import SESSION_TZ
 from optionspilot.data.adapter import (
     HistoryRequest, ProviderRangeError, ProviderRateLimited,
     ProviderSymbolError, ProviderUnavailable,
@@ -65,13 +66,26 @@ class TestParsing:
         assert out.index.tz is not None
         assert out["close"].iloc[0] == 100.5
 
-    def test_daily_bars_land_at_midnight_utc_like_every_other_source(self):
+    def test_daily_bars_land_on_the_shared_exchange_midnight_convention(self):
         """The cache is keyed on the bar's timestamp, so a daily bar written by
         Stooq and one written by Yahoo must land on the same key or the two
-        would double-store and disagree."""
+        double-store and the frame's spacing stops looking like 1d.
+
+        The premise was right; the constant was wrong. This asserted 00:00
+        **UTC** while Yahoo wrote 13:30 UTC and yfinance 04:00 UTC, so the
+        "same key" it promised never existed — measured on a real cache, SPY
+        held 6,517 daily rows for ~3,258 trading days and every symbol on 1D
+        was stuck behind "the cached bars failed validation and were
+        discarded". `base.session_index` is now the one convention: midnight in
+        the exchange's zone.
+        """
         out = adapter(stooq_csv(3)).fetch_history(req(), now=NOW)
-        assert (out.index.hour == 0).all()
-        assert (out.index.minute == 0).all()
+        local = out.index.tz_convert(SESSION_TZ)
+        assert (local.hour == 0).all()
+        assert (local.minute == 0).all()
+        # the CSV's calendar dates must survive; a UTC-midnight stamp read in
+        # exchange time lands on the previous day
+        assert [str(d.date()) for d in local][:2] == ["2026-07-20", "2026-07-21"]
 
     def test_a_malformed_row_is_skipped_not_fatal(self):
         lines = stooq_csv(4).strip().splitlines()

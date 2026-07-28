@@ -5,12 +5,192 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.6.0 Trading Intelligence Engine** — done 2026-07-28. The analytical
+      brain: one layer that turns everything already recorded about completed
+      trades into structured, evidence-backed insight every other part of the
+      app consumes rather than recomputes. The app knew a lot about its trader
+      and knew it in four unrelated places (`journal.db`, `experience.db`,
+      `data/coach/*.json`, `learning/weights.json`), with no answer at all to
+      *what am I good at, what keeps costing me money, am I improving, what
+      should I learn next*. New subpackage `optionspilot/intelligence/`
+      (17 modules): `facts.py` (the one join → `TradeFact`), `stats.py` (every
+      formula), `performance.py` (a 38-metric registry), `behavior.py` (22
+      detectors), `patterns.py` (automatic edge discovery over 19 dimensions
+      with Benjamini–Hochberg false-discovery control), `risk.py`,
+      `confidence.py` (8 self-explaining composite scores), `goals.py`,
+      `curriculum.py` (16 triggered lessons), `recommend.py`, `timeline.py`,
+      `achievements.py`, `reports.py`, `engine.py`, `store.py`. New
+      `/api/intelligence/*` surface; Dashboard, Coach, Journal and Learning all
+      project from one snapshot. Imports `core` only, so it sits *below* the
+      coach. **No trading-behaviour change, no new dependency, no new tab.**
+      Four defects found by self-audit, each with a regression test.
+      1468 → 1849 tests; new 54-check `scripts/intelligence_check.py` and
+      `scripts/intelligence_benchmark.py`. Design:
+      `docs/TRADING_INTELLIGENCE.md`.
+
+- [ ] **Capture MFE/MAE per trade.** `ExperienceRecord` models maximum
+      favourable/adverse excursion and nothing populates them, because both need
+      intrabar data the app does not have on delayed per-cycle quotes. Until
+      they exist, the intelligence layer cannot answer "how much of the move did
+      you capture?" — one of the most useful exit-quality questions there is.
+      Wants a tick recorder or a streaming provider.
+
+- [ ] **Record the signal-to-entry latency.** It is the missing input for the
+      one behaviour the engine permanently declines to assess (hesitation), and
+      it would also make "entering too late" measurable directly rather than by
+      the RSI proxy. Nothing currently timestamps when a setup first appeared.
+
+- [x] **V0.5.7 Market Data Control Centre** — done 2026-07-27. The entire
+      user-facing management layer over the V0.5.2–V0.5.6 market-data
+      subsystem, which was production-grade and completely unsteerable: every
+      real user question was answered only by reading `logs/data.log` or by
+      editing `config.yaml` and restarting. New modules `data/control.py`
+      (`MarketDataControl` — dashboard, credentials, ordering, connection
+      tests, eight maintenance jobs, recommendations; composed *over* the
+      registry, which never learns about it), `data/credentials.py` (owner-only
+      `credentials.json`; `environment → stored → config.yaml`; plaintext
+      leaves only through `resolve()`) and `data/faults.py` (QA-mode fault
+      injection firing inside `fetch_history`, 404-gated and off in every
+      shipped build). New `/api/marketdata/*` surface and a Settings ▸ Market
+      data panel: a card per provider, a 21-column live dashboard, failover
+      summary, recommendations, maintenance with progress + Stop, a
+      plain-English explainer, and a gated QA panel. Behaviour changes:
+      `enabled: false` now *constructs* and benches a provider (it must be
+      listable and re-enableable); `ordering_mode` (static/hybrid/dynamic)
+      supersedes `dynamic_ranking`; `monitor.health_state()` is a derived
+      human-facing state beside the `status()` gate; reorder rewrites
+      priorities 10/20/30. **Five defects found by self-audit**, each with a
+      regression test — including a hand-edited `marketdata.json` crashing
+      startup. 1257 → **1468 tests** (+184); new 46-check
+      `scripts/marketdata_check.py`. Design: `docs/MARKET_DATA.md` §29–41.
+
+- [x] **Exercise the adapters against their real APIs** — done 2026-07-27, and
+      it immediately earned its keep. **Twelve Data and Alpha Vantage
+      authenticate and serve**; Yahoo and yfinance work normally. **Finnhub
+      returns HTTP 403 to a valid free key** because `/stock/candle` moved to
+      its paid tiers — and the app was reporting that as "the API key was
+      rejected", sending users to regenerate a key that was never wrong. Fixed
+      by splitting 401 from 403 (`ProviderEntitlementError`,
+      `STATUS_PREMIUM_REQUIRED`, `verify_credentials()` on the free `/quote`
+      endpoint) without weakening authentication, plus two knock-on fixes:
+      `deepest_earliest` now excludes `monitor.permanently_unusable`, and
+      `free_tier_serves_history` stops Finnhub being recommended. 19 regression
+      tests. Full account: `docs/MARKET_DATA.md` §41.
+
+- [ ] **Run `scripts/marketdata_benchmark.py --live`** with the working Twelve
+      Data / Alpha Vantage keys. The certification above proved authentication
+      and one request per provider; this measures latency, quality and
+      cross-provider agreement over a real workload, which is what the ranking
+      is actually calibrated against.
+
+- [ ] **Reconsider Finnhub's place in the shipped chain.** It sits at priority
+      40, ahead of Twelve Data and Alpha Vantage, on the strength of a free
+      tier it no longer has. It costs nothing where it is (it benches itself),
+      but a user on a paid Finnhub plan is the only one it now helps — so the
+      default order is arguably wrong for everyone else. Cheap to change
+      (`provider_priority`), worth a decision rather than a drift.
+
+- [x] **V0.5.6 Chart interaction hardening** — done 2026-07-27. Two reported
+      bugs, both root-caused from the real `cache.db`. (1) **Every symbol on 1D
+      stuck behind "the cached bars failed validation and were discarded"**:
+      Yahoo stamped daily bars at the 09:30 ET session open (13:30 UTC) and
+      yfinance at exchange midnight (04:00 UTC), so the cache — keyed
+      `(symbol, timeframe, ts)` — held a row per convention per trading day
+      (SPY: 6,517 rows for ~3,258 days), the frame's spacing read 0.40 intervals
+      and validation correctly refused it. Recovery never completed because
+      validation ran in `_settle`, *after* the ladder had committed, leaving no
+      provider to fall through to and the bad rows on disk, so Retry repeated it
+      forever. Fixed at all three points: `base.session_index` (one convention,
+      enforced in `HistoryAdapter.fetch_history`), `cache._migration_3` (repairs
+      existing installs; 17,957 daily+ rows -> 11,831, intraday untouched), and
+      disk tiers that validate before committing and `_quarantine` on failure.
+      (2) **Viewport/zoom corruption**: nothing defined a legal viewport, so a
+      symbol switch inherited the previous instrument's zoom and a resize left 4
+      bars of 281 visible. Six invariants now enforced in `chClampViewport`;
+      `CH.restoringViewport` became a depth counter. +19 tests (1257);
+      `chart_check` 48 -> 65; new 110-cell browser matrix. Full report:
+      `docs/CHART_CERTIFICATION.md` Part II.
+
+- [x] **V0.5.5 Chart production certification** — done 2026-07-27. Ten
+      defects found by reproducing them, each a way the chart could fail while
+      the backend and every test reported success. Headline: **the price axis
+      had no owner** — lightweight-charts disables `autoScale` permanently on
+      the first price-axis drag and nothing restored it, so a pinned band
+      outlived every symbol switch and rendered other symbols off-screen while
+      volume kept painting (the reported "IWM shows only volume" bug). Also:
+      Yahoo's 30-minute closing stub bar condemning every 1h frame; a `NaT`
+      timestamp 500'ing `/api/candles`; null-OHLC bars rendering as invisible
+      whitespace under `state="complete"`; an out-of-order payload collapsing
+      to one candle; a malformed indicator wiping the chart; a render failure
+      reporting `complete`; and `chart_check.py`/`browser_check.py` running against
+      the user's REAL data root (`cwd=scratch` stopped isolating in V0.4.4 —
+      they now pass `OPTIONSPILOT_HOME`). +6 tests (1238); `chart_check` 42 -> 48 (the new
+      invariant: visible candles must intersect the visible PRICE band); 41
+      adversarial scenarios through the real renderer. No version bump, no
+      trading-behavior change. Full report: `docs/CHART_CERTIFICATION.md`.
+
+- [x] **Provider API-key management in Settings** — done in V0.5.7. Paste,
+      mask, replace, remove, test, with owner-only persistence in
+      `data/credentials.json` and environment variables still taking
+      precedence (and the page saying so when one does).
+
+- [x] **Expand the provider health dashboard** — done in V0.5.7. The live
+      dashboard in Settings ▸ Market data carries 21 columns including the
+      enabled-vs-configured split, key source, per-interval capability and
+      current availability. Help ▸ Diagnostics is unchanged and still the
+      trace-level view.
+
+- [ ] **Permanent history-loading stress coverage.** Rapid scrolling,
+      wheel-holding, jumping between oldest and newest, and history arriving
+      while live updates do were exercised through a throwaway viewport harness
+      during V0.5.6 but never committed. `scripts/chart_check.py` 49-54 cover
+      the viewport invariants; the scroll-stress matrix does not exist.
+
+- [ ] **Get one non-Yahoo provider actually working.** Stooq is **dead** as of
+      2026-07-27: it answers every request with a JavaScript proof-of-work
+      challenge (verified live on `stooq.com` and `stooq.pl`), which a `urllib`
+      client cannot satisfy and which this project will not circumvent. With no
+      API keys configured the app now has exactly **one** real source — Yahoo,
+      reached by two code paths that share one upstream and one failure domain
+      — and Yahoo rate-limits by IP (a 429 was observed during the V0.5.5
+      pass). A free Finnhub or Twelve Data key is the only route to genuine
+      independence today. Decide between: shipping with a documented single
+      point of failure, prompting the user for a free key on first run, or
+      replacing Stooq with another keyless source.
+
+- [ ] **Enforce cross-provider agreement, don't just measure it.**
+      `quality.disagreement()` computes the median relative close difference
+      and the diagnostics replay compares providers on demand, but nothing
+      flags a disagreement during normal operation — so a dividend-adjusted and
+      an unadjusted series can still be stitched together in the cache without
+      comment. Wants its own design (tolerance, what to do on a breach,
+      whether to quarantine the cache rows); out of scope for V0.5.5.
+
 - [ ] **Authenticode code signing + checksums** — the remaining security gap:
       sign the setup + app exe in `release.yml` (removes SmartScreen warnings),
       add signature verification to `update/validation.py` (designed as a drop-in
       check), publish a SHA-256 checksums asset the validator enforces, replace
       the placeholder `LICENSE`, and run one manual end-to-end update QA on real
       Windows (`docs/AUTO_UPDATER.md` §7).
+
+- [x] **V0.5.4 Enterprise provider expansion** — done 2026-07-26. Added
+      Finnhub (40), Twelve Data (50) and Alpha Vantage (60) behind the keyless
+      chain; `data/http_adapter.py` (shared keyed-HTTP base + timezone
+      contract) and `data/ratelimit.py` (request budgets, persisted, feeding
+      the ranking as pressure). Credentials resolve environment-first and are
+      redacted by default in every exportable payload; a missing key disables a
+      provider quietly and explains itself in diagnostics. Fixed two
+      pre-existing defects: `deepest_earliest` counted providers that could
+      never answer, and the stale tier could report `stale` with zero bars.
+      +180 tests (1232); stress 65 -> 88 scenarios. No version bump, no
+      trading-behavior change. Full design: `docs/MARKET_DATA.md` §23-27.
+
+- [ ] **Verify each keyed adapter against its real API.** All 1232 tests run
+      against canned payloads, so the three response shapes are as
+      *documented*, not as *observed*. One live run per provider with a real
+      key (`python scripts/marketdata_benchmark.py --live`) would confirm the
+      parsers and — more importantly — the error translations, which are the
+      part most likely to differ from the docs.
 
 - [x] **V0.5.3 Market-data production readiness** — done 2026-07-26. Made the
       V0.5.2 subsystem *operable*: `data/health.py` (`ProviderHealthMonitor` —
@@ -50,13 +230,9 @@ is. This file is the flat, actionable checklist version.
       Full design: `docs/MARKET_DATA.md`. **Manual QA not yet run:**
       `docs/QA_MARKET_DATA.md` (84 checks).
 
-- [ ] **Optional: a second non-Yahoo intraday provider** — Tiingo or Twelve
-      Data behind a free API key would make an entire Yahoo outage survivable at
-      intraday resolution (Stooq only covers daily+). The chain is already built
-      for it: one adapter file plus one `default_registry()` entry, and since
-      V0.5.3 the whole operational half (dashboard row, breaker, config section,
-      replay, benchmark, ranking) comes for free. See `docs/MARKET_DATA.md` §4
-      for the survey, §21 for the step-by-step checklist.
+- [x] **A second non-Yahoo intraday provider** — done in V0.5.4, three times
+      over (Finnhub, Twelve Data, Alpha Vantage). A Yahoo outage is now
+      survivable at intraday resolution given any one API key.
 
 - [ ] **Optional: act on cross-provider disagreement.**
       `quality.disagreement()` measures it, diagnostics record it, and

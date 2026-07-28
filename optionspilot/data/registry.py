@@ -44,8 +44,12 @@ from datetime import datetime
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Timeframe
 from optionspilot.data.adapter import HistoryAdapter
-from optionspilot.data.config import MarketDataConfig
+from optionspilot.data.config import (
+    ORDER_DYNAMIC, ORDER_STATIC, MarketDataConfig,
+)
+from optionspilot.data.credentials import CredentialStore
 from optionspilot.data.health import DEFAULT_BREAKER
+from optionspilot.data.ratelimit import QuotaStore
 
 #: Kept as the shipped defaults' public names — the values now live on
 #: `health.BreakerPolicy`, which per-provider configuration can override.
@@ -60,10 +64,17 @@ class ProviderRegistry:
     """Ordered, health-aware collection of `HistoryAdapter`s. Thread-safe."""
 
     def __init__(self, adapters: list[HistoryAdapter] | None = None, *,
-                 config: MarketDataConfig | None = None):
+                 config: MarketDataConfig | None = None,
+                 credentials: CredentialStore | None = None):
         self._lock = threading.Lock()
         self._adapters: list[HistoryAdapter] = []
         self.config = config or MarketDataConfig()
+        #: The store `default_registry` resolved keys from, kept so a live key
+        #: change has one place to write to and one place to re-read from. A
+        #: registry built by hand (tests, scripts) gets an in-memory store, so
+        #: this is never None and no caller needs a null check.
+        self.credentials = credentials if credentials is not None else \
+            CredentialStore(self.config.credentials_path)
         for adapter in adapters or []:
             self.register(adapter)
 
@@ -137,11 +148,16 @@ class ProviderRegistry:
         return out
 
     def _rank(self, adapter: HistoryAdapter) -> float:
-        """Lower is better. Falls back to the static priority when dynamic
-        ranking is switched off, which reproduces the pre-V0.5.3 order."""
-        if not self.config.dynamic_ranking:
+        """Lower is better. What "better" means is the ordering mode.
+
+        The three modes and why they exist are documented once, in
+        `data/config.py`'s ORDER_* block. This is the only place that reads
+        them, so the vocabulary cannot drift into a second interpretation.
+        """
+        mode = self.config.ordering()
+        if mode == ORDER_STATIC:
             return float(adapter.provider_priority)
-        return adapter.monitor.rank()
+        return adapter.monitor.rank(include_latency=(mode == ORDER_DYNAMIC))
 
     def ranking(self, symbol: str = "SPY",
                 timeframe: Timeframe | None = None) -> list[dict]:
@@ -154,12 +170,103 @@ class ProviderRegistry:
         rows = [{"name": a.provider_name,
                  "priority": a.provider_priority,
                  "rank": round(self._rank(a), 2),
-                 "available": a.monitor.available()}
+                 "available": a.monitor.available(),
+                 "mode": self.config.ordering()}
                 for a in adapters]
         rows.sort(key=lambda r: r["rank"])
         for position, row in enumerate(rows, start=1):
             row["position"] = position
         return rows
+
+    # ── live control (V0.5.7) ────────────────────────────────────────────────
+    #
+    # The registry owns the ADAPTER LIST, so it owns applying a settings change
+    # to it. `MarketDataControl` decides what the change should be and persists
+    # it; these methods are the mechanism, and they exist here so that nothing
+    # outside this module has to reach into `self._adapters`.
+
+    def apply_config(self, config: MarketDataConfig, *,
+                     credentials: CredentialStore | None = None) -> None:
+        """Re-apply `config` to the adapters already constructed.
+
+        Used when a setting changes at runtime. Deliberately does NOT rebuild
+        the registry: reconstructing the adapters would throw away every
+        counter, latency sample and breaker state the session has accumulated,
+        so changing one provider's priority would erase the evidence for why
+        the other five are ranked where they are.
+        """
+        with self._lock:
+            self.config = config
+            adapters = list(self._adapters)
+        for adapter in adapters:
+            provider = config.for_provider(adapter.provider_name)
+            adapter.set_enabled(provider.enabled)
+            if provider.priority is not None:
+                adapter.set_priority(provider.priority)
+            if credentials is not None and adapter.requires_api_key:
+                adapter.set_api_key(credentials.resolve(adapter.provider_name)
+                                    or provider.api_key)
+        with self._lock:
+            self._adapters.sort(key=lambda a: a.provider_priority)
+
+    def order(self) -> list[str]:
+        """Provider names in configured-priority order, best first.
+
+        This is the order the settings page shows and reorders — the STATIC
+        anchor, not the live rank. Showing the live rank in a list with Move
+        Up / Move Down buttons would let a latency change reorder the list
+        under the user's cursor between reading it and clicking it.
+        """
+        return [a.provider_name
+                for a in sorted(self.adapters, key=lambda a: a.provider_priority)]
+
+    def reorder(self, names: list[str]) -> list[str]:
+        """Set the configured order from a list of provider names, best first.
+
+        Priorities are rewritten as 10, 20, 30… rather than 1, 2, 3: the rank
+        formula is calibrated so that **10 rank points is one second of
+        latency** (`health.LATENCY_MS_PER_RANK_POINT`), so consecutive
+        priorities would mean a provider 100ms slower than its neighbour
+        outranked it — dynamic ordering would become almost-static, silently,
+        the first time a user pressed Move Up.
+
+        Unknown names are ignored and registered providers the caller omitted
+        keep their relative order at the end, so a stale list from an older
+        build (or a downgrade) reorders what it can and breaks nothing.
+
+        **Repeats are collapsed to their first occurrence.** A list naming the
+        same provider twice would otherwise be assigned two priorities — the
+        last winning — and `order()` would report a chain longer than the
+        registry, with one provider appearing several times in the settings
+        page. There is no legitimate way to type that in the UI, but this
+        method also parses a JSON file a user can edit by hand.
+        """
+        wanted: list[str] = []
+        for name in names:
+            if self.get(name) is not None and name not in wanted:
+                wanted.append(name)
+        seen = set(wanted)
+        tail = [a.provider_name for a in
+                sorted(self.adapters, key=lambda a: a.provider_priority)
+                if a.provider_name not in seen]
+        final = wanted + tail
+        for position, name in enumerate(final, start=1):
+            adapter = self.get(name)
+            if adapter is not None:
+                adapter.set_priority(position * 10)
+        with self._lock:
+            self._adapters.sort(key=lambda a: a.provider_priority)
+        return final
+
+    def set_enabled(self, name: str, enabled: bool) -> bool:
+        """Switch one provider on or off. Returns True when it exists."""
+        adapter = self.get(name)
+        if adapter is None:
+            return False
+        adapter.set_enabled(enabled)
+        log.info("market-data provider %s %s from settings", name,
+                 "enabled" if enabled else "disabled")
+        return True
 
     def healthiest(self, symbol: str, timeframe: Timeframe, *,
                    now: datetime | None = None) -> HistoryAdapter | None:
@@ -170,14 +277,36 @@ class ProviderRegistry:
 
     def deepest_earliest(self, symbol: str, timeframe: Timeframe,
                          now: datetime) -> datetime | None:
-        """Oldest bar time ANY registered provider could serve for `timeframe`.
+        """Oldest bar time any USABLE provider could serve for `timeframe`.
 
-        None means at least one provider has unlimited depth. This is the value
-        the chart uses to say "start of available history" truthfully rather
-        than retrying a window nothing can serve.
+        None means at least one such provider has unlimited depth. This is the
+        value the chart uses to say "start of available history" truthfully
+        rather than retrying a window nothing can serve.
+
+        **Permanently-unusable providers are excluded, temporarily-unavailable
+        ones are not.** The distinction is load-bearing. A keyed provider with
+        no API key declares deep intraday history it can never actually serve;
+        counting it would tell the chart that 5-minute bars reach back 180 days
+        when the only reachable source stops at 59 — and the chart would then
+        scroll into a window nothing can answer and retry it forever. That is
+        precisely the bug class V0.5.2 was built to eliminate, so a provider
+        that cannot be used *at all* in this install contributes no floor.
+
+        A provider that is merely rate-limited, over quota, or behind an open
+        breaker DOES contribute: it will be back, and the true start of history
+        should not lurch about as breakers open and close.
+
+        "Permanently unusable" is `monitor.permanently_unusable`, not just
+        `disabled_reason`: a **rejected key** and an **insufficient plan** are
+        equally permanent until the user acts, and both were being counted.
+        Finnhub on a free plan is the live example — it declares 180 days of
+        5-minute history and, since Finnhub moved candles behind a paid tier,
+        can serve none of it.
         """
         floors: list[datetime] = []
         for adapter in self.adapters:
+            if adapter.monitor.permanently_unusable:
+                continue
             if not adapter.supports_interval(timeframe):
                 continue
             if not adapter.supports_symbol(symbol):
@@ -246,6 +375,15 @@ class ProviderRegistry:
             entry["max_lookback_days"] = {
                 str(tf): spec.max_lookback_days
                 for tf, spec in adapter.capabilities.intervals.items()}
+            # The capability profile the dashboard shows, so a user can see
+            # what each provider actually IS rather than only how it is doing.
+            entry["asset_classes"] = list(adapter.capabilities.asset_classes)
+            entry["realtime"] = adapter.capabilities.realtime
+            entry["description"] = adapter.capabilities.description
+            entry["signup_url"] = adapter.signup_url
+            # API keys are REDACTED here — this payload reaches the diagnostics
+            # endpoint, the JSON export and the text report, all of which users
+            # are invited to attach to public bug reports.
             entry["config"] = adapter.config.as_dict()
             report.append(entry)
         report.sort(key=lambda r: r["rank"])
@@ -253,21 +391,38 @@ class ProviderRegistry:
 
 
 def default_registry(*, include_stooq: bool = True,
-                     config: MarketDataConfig | None = None) -> ProviderRegistry:
-    """The shipped provider chain: Yahoo JSON -> yfinance -> Stooq.
+                     config: MarketDataConfig | None = None,
+                     environ: dict | None = None,
+                     credentials: CredentialStore | None = None) -> ProviderRegistry:
+    """The shipped provider chain, keyless first then keyed.
 
-    Ordering rationale (see `docs/MARKET_DATA.md` §5): the primary is the
-    fastest source that reports its own limits; the secondary reaches the same
-    data by an independent code path; the tertiary is the only source that does
-    not depend on Yahoo at all, which is what makes a Yahoo-wide outage
-    survivable for daily charts. That ordering is the *starting* rank; health
-    moves it from there.
+        Yahoo JSON (10) -> yfinance (20) -> Stooq (30)
+            -> Finnhub (40) -> Twelve Data (50) -> Alpha Vantage (60)
 
-    `config` disables providers and overrides their timeouts, retries and
-    breaker thresholds without touching adapter code — the point of
-    `data/config.py`.
+    Ordering rationale (see `docs/MARKET_DATA.md` §5 and §23): the primary is
+    the fastest source that reports its own limits; the secondary reaches the
+    same data by an independent code path; the tertiary is the only source that
+    does not depend on Yahoo at all. The keyed providers sit behind them
+    because they cost a metered request where the keyless ones cost nothing —
+    but they are *genuinely independent* of Yahoo, which is what makes a
+    Yahoo-wide outage survivable at intraday resolution for the first time.
+    Among themselves they are ordered by how much budget they have to spend:
+    Finnhub (60/min, no daily cap), Twelve Data (800/day), Alpha Vantage
+    (25/day). All of that is the *starting* rank; health and budget move it.
+
+    **A keyed provider with no key disables itself, quietly.** It is still
+    constructed and still appears in diagnostics — reporting `missing_api_key`
+    and where to get one — so the page can explain its absence. It is simply
+    never selected. The application must start and serve charts with zero keys
+    configured, which is the shipped default.
+
+    `config` disables providers and overrides timeouts, retries, breaker
+    thresholds, budgets and credentials without touching adapter code.
     """
+    from optionspilot.data.alphavantage_provider import AlphaVantageAdapter
+    from optionspilot.data.finnhub_provider import FinnhubAdapter
     from optionspilot.data.stooq_provider import StooqAdapter
+    from optionspilot.data.twelvedata_provider import TwelveDataAdapter
     from optionspilot.data.yahoo_provider import YahooChartAdapter
     from optionspilot.data.yfinance_adapter import YFinanceAdapter
 
@@ -275,15 +430,66 @@ def default_registry(*, include_stooq: bool = True,
     classes = [YahooChartAdapter, YFinanceAdapter]
     if include_stooq:
         classes.append(StooqAdapter)
+    classes += [FinnhubAdapter, TwelveDataAdapter, AlphaVantageAdapter]
+
+    # One store shared by every metered provider, so a restart cannot mint an
+    # allowance the plan has not granted. Best-effort: an unusable path costs
+    # persistence, never startup.
+    quota_store = None
+    if config.quota_state_path:
+        try:
+            quota_store = QuotaStore(config.quota_state_path)
+        except Exception as exc:  # noqa: BLE001 — never fail launch over this
+            log.warning("quota state at %s is unusable (%s) — counting in "
+                        "memory only", config.quota_state_path, exc)
+
+    # Keys pasted into Settings, merged into each provider's config. The
+    # environment still wins: `overlay` fills in `ProviderConfig.api_key`, and
+    # `resolve_api_key` consults the environment BEFORE that field — so the
+    # documented precedence needs no second implementation here. See
+    # `data/credentials.py`.
+    credentials = (credentials if credentials is not None
+                   else CredentialStore(config.credentials_path))
+    config = credentials.overlay(config)
+
     adapters: list[HistoryAdapter] = []
     for cls in classes:
         provider_config = config.for_provider(cls.provider_name)
+        # `enabled: false` used to skip construction entirely. It no longer
+        # does, and the difference is the whole reason the control centre can
+        # exist: a provider that is not constructed cannot be listed, cannot
+        # explain itself, and cannot be switched back on without editing a file
+        # and restarting. A disabled provider is now built exactly like one
+        # with a missing API key — present, reporting `disabled`, and never
+        # selected (`monitor.available()` is False, so `candidates` skips it
+        # and `deepest_earliest` counts no floor for it).
         if not provider_config.enabled:
             log.info("market-data provider %s is disabled by configuration",
                      cls.provider_name)
+        try:
+            adapter = cls(provider_config, quota_store=quota_store,
+                          environ=environ)
+        except Exception as exc:  # noqa: BLE001 — one bad adapter must not
+            log.error("market-data provider %s could not be constructed "  # kill
+                      "(%s) — continuing without it", cls.provider_name, exc)
             continue
-        adapters.append(cls(provider_config))
-    return ProviderRegistry(adapters, config=config)
+        if adapter.monitor.disabled_reason:
+            status, detail = adapter.monitor.status()
+            log.info("market-data provider %s is unavailable: %s%s",
+                     cls.provider_name, detail,
+                     f" — get a key at {adapter.signup_url}"
+                     if status == "missing_api_key" and adapter.signup_url else "")
+        adapters.append(adapter)
+    registry = ProviderRegistry(adapters, config=config,
+                                credentials=credentials)
+    # A user-chosen order is applied AFTER construction rather than folded into
+    # each adapter's config, so there is one implementation of "what does this
+    # list of names mean" (`reorder`) shared by startup and by the settings
+    # page. An order saved against a build that had more providers than this
+    # one reorders what it recognises and ignores the rest.
+    if config.provider_order:
+        registry.reorder(list(config.provider_order))
+    return registry
 
 
 __all__ = ["ProviderRegistry", "default_registry", "BREAKER_THRESHOLD",

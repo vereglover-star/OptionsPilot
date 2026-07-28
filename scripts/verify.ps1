@@ -58,6 +58,14 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: chart regression check"
     & $python "$PSScriptRoot\chart_check.py" @browserArgs
     $results["Chart regression check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: market-data control centre check"
+    & $python "$PSScriptRoot\marketdata_check.py" @browserArgs
+    $results["Market-data control check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: trading intelligence UI check"
+    & $python "$PSScriptRoot\intelligence_check.py" @browserArgs
+    $results["Trading intelligence UI check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

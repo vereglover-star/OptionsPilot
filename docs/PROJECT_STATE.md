@@ -3,7 +3,197 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-26, after **V0.5.3 Market Data Production Readiness**
+**Last updated:** 2026-07-28, after **V0.6.0 — the Trading Intelligence
+Engine** (branch `feature/providers`, uncommitted). 1468 → **1849 tests**
+(+381); a new **54-check** headless-browser suite
+(`scripts/intelligence_check.py`) and a performance benchmark
+(`scripts/intelligence_benchmark.py`). Full design:
+**`docs/TRADING_INTELLIGENCE.md`**.
+
+**What it is.** The app already knew a great deal about its trader, and knew it
+in four unrelated places — `journal.db`, `experience.db`, `data/coach/*.json`
+and `learning/weights.json`. Four stores, four aggregation paths, and no answer
+to *what am I good at, what keeps costing me money, am I improving, what should
+I learn next*. Worse, every new screen that wanted an answer computed its own,
+which is the "two objects tracking one fact will drift" failure this codebase
+had already paid for twice. V0.6.0 collapses that into one pipeline:
+`build_facts()` joins the three sources into a `TradeFact` once, ten engines run
+over it, and everything above projects from a single `IntelligenceSnapshot`.
+**No trading-behaviour change, no new runtime dependency, no new tab, and the
+engine is never consulted before a trade — `risk/manager.py` is still the only
+gate.**
+
+New subpackage `optionspilot/intelligence/` (17 modules), importing **`core`
+only**: it reads journal/experience/coach records structurally rather than by
+import, which keeps it *below* the coach so the coach can become a presentation
+layer over it rather than a parallel analysis path.
+`tests/test_architecture.py` enforces that in both directions.
+
+**Four defects found by attacking it**, each with a regression test: a composite
+score reading 100/100 grade A for a trader with no reviews (one component needed
+no review, and 20% coverage was enough to average — now a hard coverage floor);
+thirteen "patterns" out of 100 uniformly random trades (~70 bucket tests at
+p≤0.20 produces ~14 by construction — now Benjamini–Hochberg corrected); exit
+reason as a pattern dimension, which is circular by definition and generated the
+recommendation *"stop taking stop-loss trades"*; and `nan%` in the improvement
+timeline, because profit factor is legitimately infinite for a period with no
+losers.
+
+**Measured:** 50,000 trades analysed in 2.9 s with a flat per-trade cost from 1k
+to 50k, so the pipeline is sub-quadratic; nothing is computed at construction, so
+startup is unchanged; four cached reads cost 0.001% of one analysis.
+
+## Before that: V0.5.7 — the Market Data Control Centre
+
+**Last updated:** 2026-07-27, after **V0.5.7 — the Market Data Control Centre**
+(branch `feature/providers`, uncommitted). 1257 → **1468 tests** (+184); a new
+**46-check** headless-browser suite (`scripts/marketdata_check.py`). Full
+design: `docs/MARKET_DATA.md` **§29–41**.
+
+**What it is.** V0.5.2–V0.5.6 built a production-grade market-data subsystem
+and gave its owner no way to see or steer it: every real question was answered
+by reading `logs/data.log` or by editing `config.yaml` and restarting. V0.5.7
+is the entire user-facing management layer built over that machinery, without
+redesigning any of it. **No trading-behaviour change, no new runtime
+dependency, identical shipped defaults.**
+
+Three new modules — `data/control.py` (`MarketDataControl`, composed *over* the
+registry, which never learns about it), `data/credentials.py` (owner-only key
+storage; `environment → stored → config.yaml`; plaintext leaves only through
+`resolve()`), `data/faults.py` (QA-mode fault injection, off in every shipped
+build) — plus a new Settings ▸ Market data panel, `/api/marketdata/*`, and
+three ordering modes.
+
+**Four behaviour changes to know before touching `data/`:** `enabled: false`
+now constructs the provider (benched, listed, self-explaining, contributing no
+history floor); `ordering_mode` supersedes `dynamic_ranking` (hybrid = the full
+rank formula minus its latency term); `monitor.health_state()` is a derived
+human-facing state alongside the `status()` gate; and a reorder rewrites
+priorities 10/20/30 because 10 rank points is one second of latency.
+
+**Five defects found by self-audit**, each with a regression test — most
+seriously a hand-edited `marketdata.json` with `providers` as a list raising an
+`AttributeError` out of the composition root, i.e. the app refusing to start
+because a *preferences* file was edited badly.
+
+**Exact stopping point:** everything above is implemented, tested and verified;
+nothing is committed. **Next recommended task:** configure one real free key
+(Finnhub or Twelve Data) through the new panel and run a live Test Connection
+plus `scripts/marketdata_benchmark.py --live` — no adapter has ever been
+exercised against its real API, so the response shapes are as documented rather
+than as verified.
+
+---
+
+## Previously: after **V0.5.6 Chart Interaction Hardening**
+(branch `feature/providers`, uncommitted). Two further reproducible bugs, both
+root-caused from the real `cache.db`. **1257 tests** (+19); `chart_check` 48 →
+**65**; a new **110-cell** browser matrix. Full report:
+`docs/CHART_CERTIFICATION.md` **Part II**.
+
+**Bug 1 — every symbol on 1D stuck behind "the cached bars failed validation and
+were discarded".** Two defects stacked. The data was genuinely wrong: a daily
+bar's identity is its session *date*, and a date is only an instant relative to
+a timezone, so Yahoo stamped 13:30 UTC (09:30 ET session open), yfinance 04:00
+UTC (exchange midnight) and the date-only sources 00:00 UTC — three rows per
+trading day in a cache keyed `(symbol, timeframe, ts)`. SPY held **6,517 daily
+rows for ~3,258 trading days**; the tightest spacing read 0.40 intervals and
+`validate_history` correctly refused the frame. Recovery never completed because
+validation ran in `_settle`, *after* the tier ladder had committed — so the
+providers were already behind it, the bad rows stayed on disk, and Retry
+repeated it forever. Fixed at all three mechanisms: `base.session_index` (one
+convention — exchange midnight — enforced in `HistoryAdapter.fetch_history`),
+`cache._migration_3` (repairs poisoned installs in place: 17,957 daily+ rows →
+11,831, intraday untouched), and disk tiers that validate *before* committing
+and `_quarantine` the rows on failure so the ladder falls through.
+
+**Bug 2 — viewport/zoom corruption.** "One owner" said where a viewport move
+comes from, never what it may leave on screen: `chScrollToLatest` carried the
+previous view's width onto a new symbol, `chApplyFocal` ratcheted narrower up
+the timeframe ladder, and a resize left 4 bars of 281 visible. Six explicit
+invariants now live in `chClampViewport`, and `CH.restoringViewport` became a
+depth counter (overlapping guarded moves were clearing each other's protection
+and firing spurious history fetches).
+
+**Deliberately reverted:** re-clamping the viewport from the ResizeObserver. It
+broke manual price scaling — a price-axis drag changes its own label widths, so
+the canvas resizes mid-gesture and the clamp snapped the scale back.
+
+**Not implemented** (tracked in `docs/TODO.md`): the Settings panel for pasting
+API keys, the extra provider-health dashboard columns, enforcement of
+cross-provider disagreement, and permanent history-scroll stress coverage.
+
+**Before that: 2026-07-27, V0.5.5 Chart Production Certification**
+(branch `feature/providers`, uncommitted). A failure-elimination pass over the
+whole chart pipeline, provider to pixel. **No new features, no version bump, no
+trading-behavior change.** 1232 → **1238 tests** (+6); `chart_check` 42 → **48
+checks**. Full report, matrices and residual risk: **`docs/CHART_CERTIFICATION.md`**.
+
+**Ten defects, found by reproducing them.** Every one was a way the chart
+could fail while the backend, the diagnostics dashboard and the entire test
+suite reported success — because every check this repo had asked whether the
+*data arrived*, and none asked whether the user could *see it*.
+
+The headline defect explains the whole user report ("QQQ loads, SPY partially,
+IWM shows only volume, diagnostics healthy"): **the price axis had no owner.**
+lightweight-charts turns `autoScale` off permanently the first time the price
+axis is dragged, and nothing in this app ever turned it back on — not a symbol
+switch, not a timeframe switch, not Reset view. The pinned band outlived every
+later load, putting other symbols' candles off-screen while the volume
+histogram (own price scale) kept painting. The user's four screenshots show an
+identical 480–660 band at four different price levels, and a restart "fixed" it
+because `autoScale` is not persisted. Ownership now mirrors the time axis: a
+genuine switch resets it, Reset/Latest reset it, a same-key refresh preserves
+it (a manual scale is deliberate), and a zero-overlap net catches the rest.
+
+Also fixed: **one 30-minute closing stub bar** (15:30 → 16:00 ET) condemning
+every Yahoo 1h frame as "wrong interval served" — measured in the user's real
+cache as 1 bad gap in 2,180, and fatal on both Yahoo and yfinance since they
+share an upstream; a **`NaT` timestamp** 500'ing `/api/candles`; **null-OHLC
+bars rendering as invisible whitespace** under `state="complete"` (they are not
+an error to lightweight-charts, they are whitespace); an **out-of-order payload
+collapsing to one candle**; a malformed indicator **wiping the whole chart**; a
+string indicator value raising an uncaught error from the crosshair handler;
+and a **render failure being overwritten with `complete`**. The tenth was in
+the test harness itself: `chart_check.py` and `browser_check.py` have been
+running against the user's **real** `%LOCALAPPDATA%` data root since V0.4.4
+moved the storage root off the CWD, so the suite both polluted live data and
+produced results that depended on what an earlier run had cached.
+
+**Two limitations found that cannot be fixed here.** Stooq now serves a
+JavaScript proof-of-work challenge to every request (verified live on both
+`stooq.com` and `stooq.pl`) — the adapter refuses it correctly, but with no API
+keys configured that leaves **Yahoo as the only real source**, via two code
+paths sharing one upstream. And Yahoo rate-limits by IP (a 429 was observed
+during this pass). A free Finnhub or Twelve Data key is the only route to real
+provider independence today.
+
+**Before that: 2026-07-26, V0.5.4 Enterprise Provider Expansion**
+(branch `feature/providers`, uncommitted). Three keyed providers — **Finnhub,
+Twelve Data, Alpha Vantage** — added behind the existing keyless chain, plus
+the credential handling and request budgeting they require. 1052 → **1232
+tests** (+180), stress 65 → **88 scenarios**. No version bump, no
+trading-behavior change, and **with no API keys configured the app behaves
+exactly as it did in V0.5.3** — the shipped default.
+
+Each adapter is ~150 lines implementing four methods (`_build_url`,
+`_translate`, `_parse`, `_probe`); health monitoring, circuit breaking,
+ranking, configuration, replay, benchmarking and diagnostics all followed with
+no per-provider code, which is what V0.5.3's extensibility claim promised. The
+genuinely new machinery is `data/http_adapter.py` (shared keyed-HTTP transport
+and the timezone contract) and `data/ratelimit.py` (request budgeting —
+Alpha Vantage allows 25 requests/DAY, which cannot be managed by reacting to
+errors after the fact). Budget *pressure* feeds the existing ranking, so load
+moves off a nearly-exhausted provider before it is exhausted.
+
+**Two pre-existing defects surfaced and fixed:** `deepest_earliest` counted
+providers that could never answer (a keyless Finnhub declares 180 days of
+5-minute history, which would have told the chart history reached back further
+than anything could serve — reviving the retry-forever bug class V0.5.2
+eliminated); and the stale tier could report `stale` with zero bars. Full
+design: `docs/MARKET_DATA.md` §23–27.
+
+**Prior update:** 2026-07-26, after **V0.5.3 Market Data Production Readiness**
 (branch `v3-ui`, uncommitted). V0.5.2 built the market-data subsystem; V0.5.3
 makes it **operable**, and is deliberately infrastructure work rather than a
 feature — **no new provider, no version bump, no trading-behavior change, and a

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from datetime import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -75,6 +75,19 @@ class MarketDataProviderConfig(_Section):
     breaker_max_cooldown: float = Field(default=300.0, gt=0, le=86400)
     min_quality_score: float = Field(default=0.0, ge=0, le=100)
 
+    # ── credentials (V0.5.4) ─────────────────────────────────────────────────
+    # Storing a secret here is supported but not recommended: config.yaml is
+    # the file users attach to bug reports. Prefer `api_key_env`, or the
+    # adapter's conventional `<PROVIDER>_API_KEY` environment variable, which
+    # needs no configuration at all. A key set here is REDACTED everywhere it
+    # is displayed or exported (`data.config.ProviderConfig.as_dict`).
+    api_key: str | None = None
+    api_key_env: str | None = None
+    # Override the provider's published free-tier limits (worth setting only on
+    # a paid plan). None keeps whatever the adapter declares.
+    requests_per_minute: int | None = Field(default=None, ge=1, le=100_000)
+    requests_per_day: int | None = Field(default=None, ge=1, le=100_000_000)
+
 
 class MarketDataCacheConfig(_Section):
     enabled: bool = True
@@ -93,10 +106,36 @@ class MarketDataConfigSection(_Section):
     providers: dict[str, MarketDataProviderConfig] = Field(default_factory=dict)
     cache: MarketDataCacheConfig = MarketDataCacheConfig()
     dynamic_ranking: bool = True
+    # How the provider chain is ordered. See `data/config.py`'s ORDER_* block
+    # for what each mode means; the settings page explains them in words.
+    # `dynamic_ranking: false` still wins and pins the chain to `static`, so an
+    # existing config that turned ranking off is not quietly overruled.
+    ordering_mode: Literal["static", "hybrid", "dynamic"] = "dynamic"
+    # The user's explicit provider order, best first. Normally written by the
+    # control centre (Settings ▸ Market Data) rather than by hand; unknown
+    # names are ignored so a config survives a downgrade.
+    provider_order: list[str] = Field(default_factory=list)
     memo_max_entries: int = Field(default=400, ge=1, le=100_000)
     structured_logging: bool = True
     capability_discovery: bool = False
     capability_refresh_days: int = Field(default=30, ge=1, le=3650)
+    # Where each metered provider's daily request count is persisted, so a
+    # restart cannot mint an allowance the plan has not granted. The
+    # orchestrator fills this in with `<data>/quota.json`; null keeps counts in
+    # memory only.
+    quota_state_path: str | None = None
+    # Where a key pasted into Settings ▸ Market Data is stored, and where the
+    # control centre's live choices are persisted. The orchestrator fills both
+    # in under the user-data directory; null keeps them in memory only.
+    # Credentials deliberately do NOT live in settings.json — see
+    # `data/credentials.py` for the reasoning.
+    credentials_path: str | None = None
+    control_state_path: str | None = None
+    # Expose the developer QA panel (fault injection, forced failover,
+    # simulated outages). **Off in every shipped build**; the endpoints that
+    # reach it return 404 while this is false, so it cannot be turned on by
+    # guessing a URL. Intended for this repository's own manual QA.
+    qa_mode: bool = False
 
     # NOTE: there is deliberately no `to_runtime()` here. `config/` must not
     # import `data/` (nor the reverse — `tests/test_architecture.py` enforces

@@ -19,6 +19,7 @@ working directory so the app's default (packaged) config and a brand-new
 paper account are used, then deletes that directory afterward.
 """
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -63,10 +64,14 @@ def main() -> int:
 
     scratch = Path(tempfile.mkdtemp(prefix="optionspilot-smoke-"))
     base = f"http://127.0.0.1:{args.port}"
+    # OPTIONSPILOT_HOME, not just cwd: the storage root moved off the CWD in
+    # V0.4.4, so `cwd=scratch` alone has been letting this smoke test run
+    # against the user's real data root (see the same fix in chart_check.py).
     server = subprocess.Popen(
         [sys.executable, "-m", "optionspilot", "serve",
          "--port", str(args.port), "--no-loop"],
-        cwd=scratch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=scratch, env={**os.environ, "OPTIONSPILOT_HOME": str(scratch)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
         if not wait_for(base + "/api/status"):

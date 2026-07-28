@@ -232,30 +232,44 @@ into long-term memory:
    and never add a code path that could place a real order without both
    flags AND a real adapter existing (which currently doesn't exist at
    all — `broker/registry.py`'s non-paper entries are stubs that raise).
-3. **Never introduce an LLM call into the trading or coaching path**
+3. **Never let the Trading Intelligence Engine state something it cannot
+   evidence.** The whole layer is built on one rule: *insufficient evidence
+   is a first-class answer*. A metric is `None`, not `0`. A score is `None`,
+   not `50`. A behaviour is `assessable=False` **with the reason stated**,
+   not `detected=False`, because "not detected" is a claim and it would be
+   unearned. Every conclusion carries the measured `Evidence` — including
+   the exact trade IDs — behind it. A coaching system that is confidently
+   wrong is worse than one that says "I don't know", because the user acts
+   on it. See `docs/TRADING_INTELLIGENCE.md` §4.
+4. **Never let `intelligence/` import upward.** It imports `core` only, and
+   reads journal/experience/coach records *structurally* rather than by
+   import, which keeps it BELOW the coach. That direction is what allows the
+   AI Coach to become a presentation layer over the engine; reverse it and
+   that becomes impossible forever. `tests/test_architecture.py` enforces it.
+5. **Never introduce an LLM call into the trading or coaching path**
    (`engine/scorer.py`, `engine/gate.py`, `coach/coach.py`) without the
    user explicitly asking for that specific change. Determinism and
    auditability here are a stated design decision, not an accident of
    what was easy to build first.
-4. **Never edit `optionspilot/core/models.py` casually.** It's the shared
+6. **Never edit `optionspilot/core/models.py` casually.** It's the shared
    domain vocabulary; a field change touches persistence (SQLite schemas),
    the engine, the broker, and the UI simultaneously. Grep for every usage
    before changing anything here.
-5. **Never hand-edit generated/binary assets**: `assets/optionspilot.ico`
+7. **Never hand-edit generated/binary assets**: `assets/optionspilot.ico`
    (regenerate via `scripts/make_icon.py`), `optionspilot/data_assets/symbols.csv`
    (regenerate via `scripts/fetch_symbols.py`), `OptionsPilot.spec`
    (PyInstaller-generated, gitignored).
-6. **Never treat `data/` or `logs/` in a working checkout as fixtures.**
+8. **Never treat `data/` or `logs/` in a working checkout as fixtures.**
    They're gitignored runtime state — the user's actual paper account,
    journal, and logs. Tests use `tmp_path`; verification uses scratch data
    directories, never the real one.
-7. **Never rewrite `docs/CHANGELOG.md`'s existing entries.** Append new
+9. **Never rewrite `docs/CHANGELOG.md`'s existing entries.** Append new
    ones; history is append-only.
-8. **Never build a second code path that duplicates
+10. **Never build a second code path that duplicates
    `Orchestrator.run_cycle()`'s logic** for a UI action. Either call into
    the orchestrator or add a narrowly-scoped public method to it (the
    `register_manual_entry`/`approve_manual_entry` pattern).
-9. **Never let a market-data adapter return an empty frame to signal
+11. **Never let a market-data adapter return an empty frame to signal
    failure** (V0.5.2). Adapters raise typed `ProviderError`s; the empty
    frame is reserved for "this window genuinely holds no bars." Collapsing
    those two back together is the ancestor of every chart-history bug this
@@ -264,7 +278,7 @@ into long-term memory:
    `MarketDataService.get_history(allow_stale=False)` to serve stale data.
    The engine's empty-means-skip behavior is load-bearing for trading
    safety, and stale bars belong only on display surfaces.
-10. **Never re-derive a provider's history depth inside an adapter.** It
+12. **Never re-derive a provider's history depth inside an adapter.** It
    lives in `data/capabilities.py`, is *measured* (rerun
    `scripts/marketdata_probe.py`), is asserted by `test_capabilities.py`,
    and is measured **from now** — not from the request's end. That
@@ -273,7 +287,7 @@ into long-term memory:
    **advisory and off by default**: it reports drift, it does not rewrite
    the table, because the shipped numbers sit one day *inside* each
    measured cliff on purpose and a probe can be wrong.
-11. **Never split a provider's operational state across two objects again**
+13. **Never split a provider's operational state across two objects again**
    (V0.5.3). `data/health.py::ProviderHealthMonitor` is the single owner
    of counters, latency, rate-limit window, circuit breaker and ranking
    score. It used to be `adapter.ProviderHealth` plus
@@ -285,7 +299,18 @@ into long-term memory:
    that decides whether a failure counts. Do not re-derive that policy at
    a call site — range and symbol errors are correct answers to
    impossible questions and must never trip a breaker.
-12. **Never make provider ranking dominate the static priority anchor.**
+14. **Never let a missing API key become a failure** (V0.5.4). The app ships
+   with zero keys and must start, chart and trade normally in that state. A
+   keyed provider with no key is *constructed*, reports `missing_api_key`
+   with a signup link in diagnostics, and is never selected — that is
+   deliberately different from `enabled: false`, which removes it entirely.
+   Never add a code path where an absent credential raises, retries, or
+   degrades a keyless provider.
+15. **Never serialise a provider config without redaction** (V0.5.4).
+   `ProviderConfig.as_dict()` redacts `api_key` by default because that dict
+   reaches `/api/diagnostics/marketdata`, the JSON export and the text
+   report. Adding a path that dumps config another way reintroduces the leak.
+16. **Never make provider ranking dominate the static priority anchor.**
    `rank()` is anchored on `provider_priority` so that a cold system
    reproduces the documented chain order exactly; that property is what
    makes dynamic ranking safe to ship, and `dynamic_ranking: false` must
@@ -295,6 +320,34 @@ into long-term memory:
    yields. Also keep the rank's failure rate **windowed** — a lifetime
    rate never decays, so a provider would stay demoted long after it
    recovered.
+
+17. **Never leave a chart axis without an owner** (V0.5.5). The time axis has
+   had exactly one (`chMoveViewport`) since V3.2.2. The price axis had none,
+   and that was the last way the canvas could go silently blank:
+   lightweight-charts disables `autoScale` **permanently** on the first
+   price-axis drag, so one gesture pinned the band for the rest of the session
+   and every later symbol outside it rendered off-screen — with a healthy
+   backend, a perfect `CH.data`, a clean console and `data-ch-state="complete"`.
+   Keep `chAutoScalePrice` wired to *genuine switches, Reset and Latest only*
+   (a same-key refresh must preserve a deliberate manual scale — otherwise the
+   app fights the user), and keep `chEnsurePriceVisible` as the zero-overlap
+   net. `chart_check` 43–48 exist to fail if any of that is undone.
+
+18. **Never assert only that the data arrived.** That single blind spot cost
+   this project nine defects in one pass. 1,232 tests, 42 browser checks and a
+   whole diagnostics subsystem all verified payload correctness; not one asked
+   whether the candles were on screen, so three separate defects rendered a
+   correct payload as a blank canvas reporting success. Any new chart check
+   must assert a user-visible property. The canonical one:
+   **the candles in the visible time window must intersect the visible PRICE
+   window.**
+
+19. **Never judge a data frame by a single extreme value** (V0.5.5). Interval
+   conformance tested the tightest gap, and Yahoo's 30-minute session-closing
+   stub bar (15:30 → 16:00 ET) made one gap in ~1,900 fail the whole 1h frame
+   as "wrong interval served". Judge distributions on their **median**; keep
+   the extreme as a reported statistic. The same reasoning applies to any
+   future "is this data what I asked for" test.
 
 ## Common mistakes to avoid
 

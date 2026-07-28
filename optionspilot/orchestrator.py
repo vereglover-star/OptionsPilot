@@ -41,8 +41,14 @@ from optionspilot.core.models import (
     Direction, Fill, Position, Timeframe, TradePlan, TradeRecord, utcnow,
 )
 from optionspilot.data import MarketDataConfig, MarketDataProvider, build_provider
+from optionspilot.data.control import (
+    MarketDataControl, apply_control_state, load_control_state,
+)
 from optionspilot.engine import DecisionEngine
 from optionspilot.experience import ExperienceEngine, build_snapshot
+from optionspilot.intelligence import (
+    FactSet, IntelligenceStore, TradingIntelligence, build_facts,
+)
 from optionspilot.journal import TradeJournal
 from optionspilot.learning import WeightStore
 from optionspilot.notify import NotificationCenter, build_notification_center
@@ -180,9 +186,48 @@ class Orchestrator:
         # MarketDataProvider interface. The `market_data:` config section is
         # translated to its runtime form here — the single point where
         # operational settings enter the data subsystem.
+        market_data = config.market_data.model_dump()
+        # Default the quota ledger into the user-data directory. A metered
+        # provider's daily count MUST survive a restart, or quitting and
+        # reopening the app would appear to grant a fresh allowance (Alpha
+        # Vantage's free tier is 25 requests per DAY) and every request past
+        # the real limit would fail with an error the app could not explain.
+        market_data.setdefault("quota_state_path", None)
+        if not market_data.get("quota_state_path"):
+            market_data["quota_state_path"] = str(data_dir / "quota.json")
+        # Where API keys pasted into Settings live, and where the control
+        # centre's live choices (provider order, ordering mode, per-provider
+        # enable) are persisted. Both default into the user-data directory for
+        # the same reason the quota ledger does — they must survive an update
+        # that replaces the install directory, and they are the user's, not the
+        # build's. Credentials get their own file rather than sharing
+        # settings.json; see `data/credentials.py` for why.
+        market_data.setdefault("credentials_path", None)
+        if not market_data.get("credentials_path"):
+            market_data["credentials_path"] = str(data_dir / "credentials.json")
+        market_data.setdefault("control_state_path", None)
+        if not market_data.get("control_state_path"):
+            market_data["control_state_path"] = str(data_dir / "marketdata.json")
+        md_config = MarketDataConfig.from_mapping(market_data)
+        # Choices made in the control centre are folded in BEFORE the providers
+        # are constructed, so a provider disabled last session is disabled from
+        # the first request rather than for every request after the settings
+        # page happens to be opened.
+        md_config = apply_control_state(
+            md_config, load_control_state(md_config.control_state_path))
         self.provider = provider or build_provider(
-            data_dir / "cache.db",
-            config=MarketDataConfig.from_mapping(config.market_data.model_dump()))
+            data_dir / "cache.db", config=md_config)
+        # The administration surface over the market-data stack — API keys,
+        # provider order, connection tests, maintenance, QA. Only present when
+        # the provider is the real stack; an injected test double has no
+        # service to administer, and the UI degrades to "not available" rather
+        # than requiring every test to build one.
+        service = getattr(self.provider, "service", None)
+        self.marketdata = (
+            MarketDataControl(service, config=md_config,
+                              credentials=service.registry.credentials,
+                              state_path=md_config.control_state_path)
+            if service is not None else None)
         self.broker = broker or create_broker(
             config, data_dir / "paper.db", config.risk.starting_balance
         )
@@ -199,6 +244,18 @@ class Orchestrator:
         self._metas = self._meta_store.load()
         from optionspilot.coach import TradeCoach
         self.coach = TradeCoach(data_dir / "coach")
+        # The Trading Intelligence Engine. Constructing it touches no data and
+        # runs no analysis — the fact provider below is a closure the engine
+        # calls on the first read, so this adds nothing measurable to startup.
+        # It is composed HERE because the orchestrator is the only object that
+        # already owns all three sources it joins (journal, experience, coach);
+        # `intelligence/` itself imports none of them (see
+        # tests/test_architecture.py).
+        self.intelligence = TradingIntelligence(
+            self._intelligence_facts,
+            fingerprint_provider=self._intelligence_fingerprint,
+            store=IntelligenceStore(data_dir / "intelligence"),
+        )
         self._manual_store = _JsonStore(data_dir / "state" / "manual_trades.json")
         self._manual: dict[str, dict] = self._manual_store.load()
         self._last_advice: dict[str, str] = {}
@@ -209,6 +266,39 @@ class Orchestrator:
         self._last_daily_summary: date | None = None
         self._last_weekly_summary: tuple[int, int] | None = None
         self._rebuild_risk_state()
+
+    # ── trading intelligence ─────────────────────────────────────────────────
+
+    def _intelligence_facts(self) -> FactSet:
+        """Join the three records of a completed trade into one fact set.
+
+        This is the ONLY place the intelligence layer's three sources are
+        brought together, and it lives here because the orchestrator is the only
+        object that already owns all three. `build_facts` prefers the experience
+        row (richest), falls back to the journal row for trades that predate the
+        Experience Engine, and attaches the coach review where one exists.
+        """
+        return build_facts(
+            experiences=self.experience.store.all(),
+            reviews=self.coach.load_all(),
+            trades=self.journal.all(),
+        )
+
+    def _intelligence_fingerprint(self) -> str:
+        """Cache key for the snapshot.
+
+        Both stores bump a revision on every write, and a coach review is
+        written inside the same close-out path that journals the trade — so a
+        new review always moves the journal revision too. Revisions restart at 0
+        on launch, which is correct here: the in-memory cache starts empty in
+        the same moment, so the first read after a restart always recomputes.
+        """
+        return f"{self.journal.revision}:{self.experience.store.revision}"
+
+    def intelligence_snapshot(self, *, force: bool = False):
+        """The current analysis. Cheap when nothing has changed since the last
+        call; a full recompute otherwise."""
+        return self.intelligence.snapshot(force=force)
 
     # ── startup ──────────────────────────────────────────────────────────────
 

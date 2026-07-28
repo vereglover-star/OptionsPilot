@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace), and the V3 product-quality sprint is underway on
-branch `v3-ui`. **1052 tests, 100% passing.** See
+branch `feature/providers`. **1849 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -25,6 +25,8 @@ branch `v3-ui`. **1052 tests, 100% passing.** See
 | Manual paper trading (order book, Trade tab, account metrics) | ✅ done |
 | AI Mode vs. Human Mode + deterministic Trade Coach | ✅ done |
 | Interactive chart workspace (drawing tools, trade lines) | ✅ done |
+| Market data: 6 providers, health ranking, budgets, diagnostics | ✅ done |
+| Market Data Control Centre (keys, order, tests, maintenance) | ✅ done |
 | Replay engine (V2-5) | ⬜ not started |
 | Journal & improvement dashboard (V2-6) | ⬜ partially covered by the Coach tab |
 
@@ -203,6 +205,46 @@ In-app mode switches and watchlist edits live in `data/settings.json`
 (they overlay config.yaml at startup; explicit `engine.evidence_weights`
 etc. in yaml still apply).
 
+## Market data
+
+Charts and scans are fed by a chain of providers, asked in order until one
+answers with usable bars. **Settings → Market data** is where you see and steer
+all of it:
+
+- **One card per provider** — its state in a word plus a sentence explaining
+  it, latency, success rate, remaining quota, and what kind of feed it is
+  (free / rate-limited, real-time / delayed, key or no key).
+- **API keys.** Twelve Data and Alpha Vantage each offer a free key (no card).
+  Paste it in and the provider is usable immediately — no restart.
+  **Twelve Data is the one to add** if you want a second, genuinely independent
+  source: Finnhub also offers a free key, but has moved historical prices to its
+  paid plans, so a free Finnhub key authenticates and is then refused chart data
+  (the app says exactly that, rather than blaming your key).
+  Keys are stored in `data/credentials.json` with owner-only permissions, shown
+  only as `••••••••abcd`, and stripped from every diagnostics export, report
+  and log line, so a bug report is always safe to share. An environment
+  variable (`FINNHUB_API_KEY`, …) still takes precedence, and the page says so
+  when one is.
+- **Provider order**, with Move Up / Down / Reset, and three ordering modes:
+  *static* (exactly your order), *hybrid* (your order, but a failing provider
+  loses its place), and *dynamic* (fastest healthy provider per request — the
+  default).
+- **Test connection** — a real request end to end, reporting what happened and
+  what to do about it.
+- **Maintenance** — clear or rebuild the chart cache, verify its integrity,
+  re-run validation, replay a request across every provider, benchmark them, or
+  re-measure how far back each one's history really goes. Each shows progress,
+  produces a summary, and says up front whether it spends live requests.
+- **Advice** — if you are running on a single source, or a provider is nearly
+  out of quota or repeatedly failing, the page says so and names the fix.
+
+**Worth knowing:** out of the box there is effectively *one* real source.
+Stooq now blocks automated requests entirely, and Yahoo and yfinance are two
+different pieces of code reaching the same servers — so a Yahoo outage takes
+both. Adding one free key is what buys a genuinely independent source, and the
+panel exists so that takes thirty seconds. Full design:
+`docs/MARKET_DATA.md`.
+
 ## Configuration
 
 Edit `config.yaml` (validated at startup; typos and out-of-range values fail
@@ -212,13 +254,37 @@ fast). Environment variables override the file:
 $env:OPTIONSPILOT__RISK__RISK_PER_TRADE_PCT = "0.5"
 ```
 
+### Optional market-data API keys
+
+OptionsPilot works fully with **no API keys** — Yahoo, yfinance and Stooq need
+none, and that is the shipped default. Adding a key enables an extra provider
+that is genuinely independent of Yahoo, so a Yahoo outage no longer takes
+intraday charts with it. All three free tiers are optional and no key is ever
+required to trade, chart or backtest.
+
+```powershell
+$env:FINNHUB_API_KEY      = "..."   # 60 req/min, real-time  finnhub.io/register
+$env:TWELVEDATA_API_KEY   = "..."   # 800/day, 8/min         twelvedata.com/pricing
+$env:ALPHAVANTAGE_API_KEY = "..."   # 25/day                 alphavantage.co
+```
+
+Keys can also live in `config.yaml` under
+`market_data.providers.<name>.api_key`, though the environment is preferred —
+`config.yaml` is the file people attach to bug reports. **Keys are redacted
+from every diagnostics payload and export.** Help ▸ Diagnostics shows each
+provider's status, remaining budget, and — when a key is missing — where to get
+one. Full detail: [docs/MARKET_DATA.md](docs/MARKET_DATA.md) §23–27.
+
 ## Layout
 
 ```
 optionspilot/
   config/        layered, validated configuration
   core/          domain models, logging
-  data/          provider interface, yfinance adapter, SQLite candle cache
+  data/          six-provider market-data subsystem (see docs/MARKET_DATA.md):
+                 keyless Yahoo/yfinance/Stooq + keyed Finnhub/Twelve Data/
+                 Alpha Vantage, health-ranked with circuit breakers, request
+                 budgets, validation, diagnostics and a durable candle cache
   analysis/      indicators, candlesticks, structure, smart money, volume,
                  options math (pure functions, shared by live + backtest)
   engine/        multi-timeframe analyzer, confluence scorer, contract
@@ -227,6 +293,11 @@ optionspilot/
   broker/        Broker ABC, paper simulator, order manager, position
                  manager, registry
   coach/         deterministic post-trade review + aggregated profile
+  intelligence/  the Trading Intelligence Engine (see docs/TRADING_INTELLIGENCE.md):
+                 one analysis of your whole trading record — performance,
+                 behaviour, discovered patterns, risk, eight self-explaining
+                 scores, goals, lessons, recommendations, timeline,
+                 achievements and prose reports — consumed by every tab
   journal/       SQLite trade journal
   learning/      performance slicing, bounded weight updates, WeightStore
   backtest/      event-driven replay + JSON/HTML reports
@@ -239,7 +310,7 @@ scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
                  make_icon.py, fetch_symbols.py
 docs/            see "Documentation" below
-tests/           pytest suite (1052 tests)
+tests/           pytest suite (1849 tests)
 ```
 
 ## Documentation
@@ -265,6 +336,9 @@ you're a human contributor. The full set:
 - [docs/ROADMAP.md](docs/ROADMAP.md) — Completed / In Progress / Planned /
   Deferred / long-term vision. [docs/ROADMAP-V2.md](docs/ROADMAP-V2.md) has
   the granular per-phase checklist.
+- [docs/TRADING_INTELLIGENCE.md](docs/TRADING_INTELLIGENCE.md) — the Trading
+  Intelligence Engine: architecture, the rules that keep its conclusions honest,
+  the metric registry, measured performance, and its stated limitations.
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — dated, prose changelog by feature.
 - [docs/TODO.md](docs/TODO.md) — flat, actionable work queue.
 - [docs/RELEASE.md](docs/RELEASE.md) — CI/CD & release pipeline;

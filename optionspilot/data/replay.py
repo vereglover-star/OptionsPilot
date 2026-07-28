@@ -156,6 +156,13 @@ def compare_providers(registry: ProviderRegistry, request: HistoryRequest, *,
     Breaker state is ignored by default: when you are debugging, "this provider
     is currently out of rotation" is a fact you want to see the answer *behind*,
     not a reason to skip it.
+
+    A provider that is **permanently** unusable — no API key, disabled in
+    configuration — is skipped regardless. `include_open_breakers` is about
+    breakers, and stretching it to cover credentials would mean every replay
+    fired a real request at every unconfigured provider, collected a 401, and
+    marked it auth-failed. That poisons the health state of providers the user
+    never set up, and spends requests to learn something already known.
     """
     now = now or datetime.now(timezone.utc)
     result = ReplayResult(
@@ -172,6 +179,16 @@ def compare_providers(registry: ProviderRegistry, request: HistoryRequest, *,
             continue
         if not adapter.supports_symbol(request.symbol):
             answer.skipped = "symbol not served"
+            result.answers.append(answer)
+            continue
+        # The shared gate every request-spending path uses: refuses what is
+        # permanently unusable (no key, disabled) or budgeted out, while still
+        # permitting a provider whose breaker is merely open. Replay must not
+        # be the thing that fires a doomed request at an unconfigured provider,
+        # nor the thing that spends the last of a 25-a-day allowance.
+        spendable, refusal = adapter.can_spend_request()
+        if not spendable:
+            answer.skipped = refusal
             result.answers.append(answer)
             continue
         if not include_open_breakers and not adapter.monitor.available():

@@ -140,10 +140,47 @@ class TestPydanticMirror:
 
 
 class TestConfigTakesEffect:
-    def test_a_disabled_provider_is_never_constructed(self):
-        registry = default_registry(config=MarketDataConfig.from_mapping(
+    def test_a_disabled_provider_is_present_but_never_selected(self):
+        """`enabled: false` benches a provider; it does not delete it.
+
+        This changed in V0.5.7 and the change is load-bearing. A provider that
+        is not CONSTRUCTED cannot be listed in Settings, cannot explain why it
+        is absent, and cannot be switched back on without editing a file and
+        restarting — so the control centre would have had a permanent blind
+        spot exactly where a user needs to act. A disabled provider is now
+        treated like one with a missing API key: present, self-explaining, and
+        never chosen.
+        """
+        registry = default_registry(environ={}, config=MarketDataConfig.from_mapping(
             {"providers": {"stooq": {"enabled": False}}}))
-        assert [a.provider_name for a in registry.adapters] == ["yahoo", "yfinance"]
+        assert "stooq" in [a.provider_name for a in registry.adapters]
+        stooq = registry.get("stooq")
+        assert stooq.monitor.available() is False
+        assert stooq.monitor.health_state()[0] == "disabled"
+        # The part that actually matters: it is never asked for data.
+        assert stooq not in registry.candidates("SPY", Timeframe.D1)
+
+    def test_a_disabled_provider_contributes_no_history_floor(self):
+        """It must not tell the chart that history reaches further than any
+        usable provider can serve — the retry-forever bug class from V0.5.2."""
+        now = datetime(2026, 7, 27, tzinfo=timezone.utc)
+        registry = default_registry(environ={}, config=MarketDataConfig.from_mapping(
+            {"providers": {"yahoo": {"enabled": False},
+                           "yfinance": {"enabled": False},
+                           "stooq": {"enabled": False}}}))
+        # With every keyless provider benched and no API keys, nothing can
+        # serve daily bars at all — which must read as "no floor", not as a
+        # deep one inherited from a provider that will never answer.
+        assert registry.deepest_earliest("SPY", Timeframe.D1, now) is None
+        assert registry.candidates("SPY", Timeframe.D1) == []
+
+    def test_reenabling_a_provider_takes_effect_without_a_restart(self):
+        registry = default_registry(environ={}, config=MarketDataConfig.from_mapping(
+            {"providers": {"stooq": {"enabled": False}}}))
+        assert registry.get("stooq").monitor.available() is False
+        registry.set_enabled("stooq", True)
+        assert registry.get("stooq").monitor.available() is True
+        assert registry.get("stooq") in registry.candidates("SPY", Timeframe.D1)
 
     def test_a_priority_override_reorders_the_shipped_chain(self):
         registry = default_registry(config=MarketDataConfig.from_mapping(

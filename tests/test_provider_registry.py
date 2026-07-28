@@ -127,6 +127,13 @@ class TestDeepestEarliest:
         assert registry.deepest_earliest("SPY", Timeframe.D1, NOW) is None
 
 
+#: The shipped chain, split by whether a provider needs credentials. Keyed
+#: providers are ALWAYS constructed — a missing key makes them unavailable and
+#: self-explaining, not absent (see `default_registry`).
+KEYLESS_CHAIN = ["yahoo", "yfinance", "stooq"]
+KEYED_CHAIN = ["finnhub", "twelvedata", "alphavantage"]
+
+
 class TestCircuitBreaker:
     def _sicken(self, registry, adapter, times=BREAKER_THRESHOLD):
         for _ in range(times):
@@ -197,8 +204,8 @@ class TestCircuitBreaker:
 
 class TestHealthReport:
     def test_the_report_covers_every_provider_with_its_state(self):
-        report = default_registry().health_report()
-        assert [r["name"] for r in report] == ["yahoo", "yfinance", "stooq"]
+        report = default_registry(environ={}).health_report()
+        assert [r["name"] for r in report] == KEYLESS_CHAIN + KEYED_CHAIN
         for row in report:
             assert set(row) >= {"name", "available", "priority", "rate_limit",
                                 "intervals", "circuit_open_for",
@@ -209,14 +216,18 @@ class TestHealthReport:
         assert set(report["stooq"]["intervals"]) == {"1d", "1w", "1mo"}
 
 
-def test_the_shipped_chain_is_yahoo_then_yfinance_then_stooq():
-    """Order is a deliberate design decision (docs/MARKET_DATA.md §5), not an
-    accident of registration: fastest-and-self-describing first, then an
-    independent code path to the same data, then the only non-Yahoo source."""
-    assert [a.provider_name for a in default_registry().adapters] == \
-        ["yahoo", "yfinance", "stooq"]
+def test_the_shipped_chain_is_keyless_first_then_keyed():
+    """Order is a deliberate design decision (docs/MARKET_DATA.md §5, §23), not
+    an accident of registration: fastest-and-self-describing first, then an
+    independent code path to the same data, then the only non-Yahoo keyless
+    source — and only then the keyed providers, which cost a metered request
+    where the keyless ones cost nothing. Among themselves the keyed providers
+    are ordered by how much budget they have to spend."""
+    assert [a.provider_name for a in default_registry(environ={}).adapters] == \
+        KEYLESS_CHAIN + KEYED_CHAIN
 
 
 def test_stooq_can_be_left_out():
     assert [a.provider_name for a in
-            default_registry(include_stooq=False).adapters] == ["yahoo", "yfinance"]
+            default_registry(include_stooq=False, environ={}).adapters] == \
+        ["yahoo", "yfinance"] + KEYED_CHAIN

@@ -31,6 +31,11 @@ ALLOWED: dict[str, set[str]] = {
     "experience": {"core", "engine"},   # engine is TYPE_CHECKING-only (see snapshot.py)
     "backtest": {"core", "config", "analysis", "engine", "risk", "broker", "journal"},
     "coach": {"core"},
+    # Trading Intelligence Engine: consumes journal/experience/coach records
+    # structurally (duck-typed in facts.py) rather than by import, so it stays
+    # BELOW the coach in the layering — which is what lets the coach become a
+    # presentation layer over it instead of a parallel analysis path.
+    "intelligence": {"core"},
     "notify": {"core", "config"},
     "integrations": {"core"},
     # Self-updater: reads GitHub, downloads to temp, backs up + launches the
@@ -106,6 +111,13 @@ def test_key_isolation_invariants():
     analysis = _package_imports("analysis")
     assert analysis <= {"core"}, \
         f"analysis/ must stay pure (core only), found {analysis}"
+
+    # The intelligence layer must sit BELOW everything that presents it. If it
+    # ever imports coach/ or ui/, the dependency inverts and the coach can no
+    # longer be built on top of it (V0.6.0's central architectural claim).
+    intelligence = _package_imports("intelligence")
+    assert intelligence <= {"core"}, \
+        f"intelligence/ must stay pure (core only), found {intelligence}"
 
 
 def test_ui_is_the_only_broad_composition_root_besides_orchestrator():

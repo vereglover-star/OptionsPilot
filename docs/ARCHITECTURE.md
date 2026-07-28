@@ -59,6 +59,7 @@ optionspilot/
 │   ├── journal/                   #   SQLite trade record store
 │   ├── learning/                  #   evidence-weight tuning from journal history
 │   ├── experience/                #   AI long-term memory: rich trade store + similarity (V0.4.0)
+│   ├── intelligence/              #   Trading Intelligence Engine: one analysis, every consumer (V0.6.0, core-only)
 │   ├── backtest/                  #   event-driven replay through the SAME engine/risk/broker
 │   ├── notify/                    #   desktop toast + email notifications
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
@@ -67,7 +68,7 @@ optionspilot/
 │   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
 │   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)
 │
-├── tests/                        # one test file per module, pytest, 345 tests
+├── tests/                        # one test file per module, pytest
 ├── scripts/                      # build_exe.ps1, soak.py, make_icon.py, fetch_symbols.py
 ├── docs/                         # this document set
 ├── assets/                       # generated app icon
@@ -75,10 +76,18 @@ optionspilot/
 └── logs/                         # gitignored — rotating per-subsystem logs
 ```
 
-Layering rule (enforced by convention, not by tooling): each layer only depends on
-layers below it. `analysis/` has no dependents below `engine/`; `engine/` doesn't
-import `broker/`; `broker/` doesn't import `ui/`. If a change requires importing
-"up" the stack, that's a signal the code belongs somewhere else.
+Layering rule (enforced by `tests/test_architecture.py`, which parses the AST of
+every module against an explicit allow-list): each layer only depends on layers
+below it. `analysis/` has no dependents below `engine/`; `engine/` doesn't import
+`broker/`; `broker/` doesn't import `ui/`; `intelligence/` imports `core` only.
+If a change requires importing "up" the stack, that's a signal the code belongs
+somewhere else.
+
+`intelligence/`'s position is the strictest and the most deliberate: it reads
+journal, experience and coach records *structurally* rather than by import, so it
+sits **below** the coach. That is what allows the AI Coach to become a
+presentation layer over the intelligence engine rather than a second, parallel
+analysis path.
 
 ---
 
@@ -151,11 +160,55 @@ MarketDataService         ← the tier ladder + the four "no data" conditions
       │
 ProviderRegistry          ← eligibility, breakers, health-RANKED ordering
       │
-HistoryAdapter × N        ← Yahoo JSON (10) · yfinance (20) · Stooq (30)
+HistoryAdapter × N        ← keyless: Yahoo (10) · yfinance (20) · Stooq (30)
+      │                     keyed:   Finnhub (40) · TwelveData (50)
+      │                              · AlphaVantage (60)          (V0.5.4)
       │                       each owning one ProviderHealthMonitor
+      │                       + one QuotaTracker
       +  CandleCache · quality · diagnostics · capabilities
       +  health · config · report · replay · discovery      (V0.5.3)
+      +  http_adapter · ratelimit                           (V0.5.4)
+      +  control · credentials · faults                     (V0.5.7)
 ```
+
+**V0.5.7 cross-cuts — administration, composed OVER the stack.**
+`data/control.py::MarketDataControl` is the user-facing management surface:
+credentials, provider order, connection tests, maintenance jobs and
+recommendations. It is deliberately *not* a layer in the diagram above — it
+sits beside it and depends on it one way only. **Control knows about the
+registry; the registry has never heard of control.** That is what kept the hot
+path unchanged and kept `MarketDataService` from growing a settings API, and it
+is the rule to preserve if anything else administrative is added.
+
+`data/credentials.py` owns API keys in their own owner-only file
+(`<data>/credentials.json`, never `settings.json`, which is treated as ordinary
+backed-up user data). Resolution is `environment → stored → config.yaml`,
+implemented by having the store fill in the field `ProviderConfig.
+resolve_api_key` already consults *after* the environment — one implementation,
+not two. A plaintext key leaves that module only through `resolve()`.
+
+`data/faults.py` is QA-mode fault injection, consulted once inside
+`HistoryAdapter.fetch_history` so a simulated failure is handled by exactly the
+machinery a real one would be. It is off in every shipped build
+(`market_data.qa_mode` defaults False and the endpoints 404 without it) and
+costs one boolean read per request when idle.
+
+Two behaviour changes the diagram does not show: `enabled: false` now
+*constructs* the provider and benches it (a provider that is not constructed
+cannot be listed, explained, or switched back on), and ordering has three named
+modes — `static`, `hybrid` (the rank formula minus its latency term), and
+`dynamic` — superseding the boolean `dynamic_ranking`.
+
+**V0.5.4 cross-cuts.** Keyed providers inherit `KeyedHTTPAdapter`
+(`data/http_adapter.py`), which owns the shared transport, HTTP-status mapping,
+JSON decoding and — most consequentially — the **timezone contract**: intraday
+bars convert from the exchange-local time the payload names, daily and coarser
+stamp at 00:00 UTC to match Yahoo and Stooq, because the cache is keyed on the
+timestamp. `data/ratelimit.py` adds per-provider request budgets enforced
+*before* the network and persisted across restarts; budget pressure feeds the
+existing health ranking, so load moves off a nearly-spent provider without a
+separate scheduler. A provider with no API key disables itself quietly and
+explains why in diagnostics — the application starts and charts with zero keys.
 
 **V0.5.3 cross-cuts.** Each adapter owns a `ProviderHealthMonitor` — the single
 owner of its counters, latency, breaker and ranking score (previously split
@@ -198,6 +251,14 @@ in `orchestrator.py` — the composition root that already imports both.
   health payload; the same payload exports as JSON or as a paste-safe text
   report; and any recorded request can be replayed against every provider at
   once to see who says what.
+- **Independent of Yahoo when it has to be (V0.5.4).** Three keyed providers
+  sit behind the keyless chain. They cost a metered request where the keyless
+  ones cost nothing, so they are asked last — but they are the only sources
+  that make a Yahoo-wide outage survivable at intraday resolution.
+- **Credentials are absent, not fatal (V0.5.4).** A keyed provider with no key
+  reports `missing_api_key` and a signup link, and is never selected. Keys
+  resolve environment-first and are redacted by default in every payload that
+  can be exported.
 - `CandleCache`: durable SQLite history — atomic writes, `PRAGMA quick_check` on
   open, corruption quarantined to `cache.db.corrupt-<ts>` and rebuilt (a damaged
   cache degrades to a *cold* cache, never a crash), versioned migrations,
@@ -375,6 +436,42 @@ loss limit.
 
 ---
 
+## 7a. Trading Intelligence Engine (`optionspilot/intelligence/`, V0.6.0)
+
+The analytical brain: one layer that turns everything the system records about
+completed trades into structured, evidence-backed insight, which every other
+part of the application consumes rather than recomputes.
+
+```
+journal.db + experience.db + coach/*.json
+              │
+              ▼  facts.build_facts()          ← the ONE join, duck-typed
+        tuple[TradeFact]
+              │
+              ▼  TradingIntelligence.analyze()
+   Performance · Behavior · Pattern · Risk · Confidence · Goal
+   Recommendation · Curriculum · Timeline · Achievement · Report
+              │
+              ▼
+     IntelligenceSnapshot  →  Dashboard · Coach · Journal · Learning · Reports
+```
+
+**Layering (load-bearing).** `intelligence/` imports **`core` only**. It reads
+journal, experience and coach records *structurally* rather than by import,
+which keeps it **below** the coach in the dependency graph — that is what lets
+the AI Coach become a presentation layer over the engine instead of a parallel
+analysis path. `tests/test_architecture.py` enforces it in both directions.
+
+**Composition** happens in `orchestrator.py`, the only object that already owns
+all three sources (`_intelligence_facts`, `_intelligence_fingerprint`).
+
+**It never gates a trade.** `risk/manager.py` is the gate; this is analysis.
+Merging them would put a heavyweight statistical pass on the trading hot path
+and would tempt a future change to let an analysis result block a trade.
+
+Full design, the rules that keep it honest, the measured performance figures
+and the stated limitations: **`docs/TRADING_INTELLIGENCE.md`**.
+
 ## 8. Journal & Learning (`optionspilot/journal/`, `optionspilot/learning/`)
 - SQLite journal (`data/journal.db`): every trade (AI or manual) stores entry/exit,
   P&L, confidence score, full entry/exit reasoning, market conditions, indicators
@@ -531,9 +628,19 @@ The Charts tab (V2-4, extensively hardened in V3.1) is built on vendored
   if the backend served stale disk bars (`stale`/`as_of` in the
   `/api/candles` payload) a warning banner names the last bar's date. Data
   is sanitized at one boundary — `data/base.validate_candles` drops
-  NaN/inf/≤0 OHLC bars, zeroes non-finite volume, and logs every removal
-  with symbol/timeframe context — so a glitched provider bar can neither
-  500 the endpoint nor blank the chart (V3.1-1). The endpoint accepts
+  NaN/inf/≤0 OHLC bars **and unparseable (`NaT`) timestamps**, zeroes
+  non-finite volume, and logs every removal with symbol/timeframe context —
+  so a glitched provider bar can neither 500 the endpoint nor blank the
+  chart (V3.1-1; `NaT` added in V0.5.5, where one malformed timestamp
+  reached `int(ts.timestamp())` and 500'd the whole response). The DISPLAY
+  side mirrors it: `chEnsureMonotonic` drops bars the renderer cannot draw
+  and sorts out-of-order ones, because a null-OHLC bar is not an error to
+  lightweight-charts — it is *whitespace*, which draws nothing and reports
+  success. The **price axis** has a single owner for the same reason the
+  time axis does (`chAutoScalePrice`/`chEnsurePriceVisible`, V0.5.5): a
+  manually pinned price band used to survive every symbol switch and put
+  the new symbol's candles off-screen with no error anywhere. See
+  `docs/CHART_CERTIFICATION.md`. The endpoint accepts
   optional `start`/`end` range parameters so the UI **prepends history as
   the user pans left** (V3.1-3: older bars merge in front of the visible
   ones with indicators in lockstep; viewport, zoom, and drawings are

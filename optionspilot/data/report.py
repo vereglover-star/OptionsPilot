@@ -65,11 +65,29 @@ def _providers(providers: list[dict]) -> list[str]:
         out.append("  none registered")
         return out
     for position, p in enumerate(providers, start=1):
-        state = p.get("state", "?")
-        flag = {"closed": "ok", "open": "OUT OF ROTATION",
-                "half_open": "probing"}.get(state, state)
+        # Prefer the explicit status vocabulary (V0.5.4) — it distinguishes a
+        # missing API key from a spent quota from an open breaker, which the
+        # breaker state alone cannot. Falls back to the state for a payload
+        # produced by an older build.
+        status = p.get("status")
+        if status:
+            flag = "ok" if status == "ok" else status.upper().replace("_", " ")
+        else:
+            flag = {"closed": "ok", "open": "OUT OF ROTATION",
+                    "half_open": "probing"}.get(p.get("state", "?"),
+                                                p.get("state", "?"))
         out.append(f"  {position}. {p.get('name', '?'):<12} {flag}"
                    f"   rank {p.get('rank')}  (priority {p.get('priority')})")
+        if status and status != "ok":
+            out.append(f"       why      {p.get('status_detail', status)}")
+            if status == "missing_api_key" and p.get("signup_url"):
+                out.append(f"       get one  {p['signup_url']}")
+        if p.get("quota", {}).get("metered"):
+            quota = p["quota"]
+            out.append(f"       budget   {quota.get('used_today', 0)} used today"
+                       f"   {_left(quota.get('remaining_today'))} left"
+                       f"   (limits: {_limit(quota.get('per_minute'))}/min, "
+                       f"{_limit(quota.get('per_day'))}/day)")
         out.append(f"       requests {p.get('requests', 0)}"
                    f"  ok {p.get('successes', 0)}"
                    f"  failed {p.get('failures', 0)}"
@@ -81,7 +99,9 @@ def _providers(providers: list[dict]) -> list[str]:
         out.append(f"       quality  {p.get('data_quality_score')}"
                    f"   timeouts {p.get('timeouts', 0)}"
                    f"   validation failures {p.get('validation_failures', 0)}"
-                   f"   rate limits {p.get('rate_limits', 0)}")
+                   f"   rate limits {p.get('rate_limits', 0)}"
+                   f"   auth {p.get('auth_failures', 0)}"
+                   f"   quota {p.get('quota_failures', 0)}")
         out.append(f"       breaker  trips {p.get('breaker_trips', 0)}"
                    f"   {_cooldown(p)}")
         out.append(f"       last ok  {p.get('last_success_at') or 'never'}")
@@ -177,6 +197,14 @@ def _recent(traces: list[dict], limit: int) -> list[str]:
 
 
 # ── formatting helpers ───────────────────────────────────────────────────────
+
+def _left(value) -> str:
+    return "unlimited" if value is None else str(value)
+
+
+def _limit(value) -> str:
+    return "none" if value is None else str(value)
+
 
 def _pct(value) -> str:
     if value is None:

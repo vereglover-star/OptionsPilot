@@ -203,6 +203,11 @@ class MarketDataService:
         self._mem: dict[tuple, _Entry] = {}
         self._inflight: dict[tuple, threading.Event] = {}
         self._memo_max = max(1, self.config.memo_max_entries)
+        #: How many times a cached frame has been discarded as unusable and
+        #: re-downloaded. Surfaced in `health()["cache"]` — a number that keeps
+        #: climbing means something upstream is writing bars that cannot be
+        #: served, which is a defect to chase rather than a cost to absorb.
+        self._quarantines = 0
 
     # ── public API ───────────────────────────────────────────────────────────
 
@@ -297,7 +302,8 @@ class MarketDataService:
         return {
             "providers": self.registry.health_report(),
             "ranking": self.registry.ranking(),
-            "cache": self.cache.stats() if self.cache else None,
+            "cache": ({**self.cache.stats(), "quarantines": self._quarantines}
+                      if self.cache else None),
             "requests": self.diagnostics.summary(),
             "memo": {
                 "entries": len(self._mem),
@@ -382,9 +388,19 @@ class MarketDataService:
         if floor is not None and request.end <= floor:
             frame = self._from_cache(request)
             if not frame.empty:
-                return self._settle(trace, frame, diag.OUTCOME_CACHE, "cache",
-                                    floor, exhausted=True, tf=tf, now=now,
-                                    message="older bars served from the local cache")
+                # Same rule as the warm tier below: an unusable cached frame
+                # declines and quarantines rather than failing the request. No
+                # provider can serve a window this old, so the honest answer
+                # after quarantine is `exhausted`, not `failed`.
+                usable, report = self._validated(frame, request, now,
+                                                 diag.OUTCOME_CACHE)
+                if usable is not None:
+                    trace.validation = report.as_dict()
+                    return self._settle(
+                        trace, usable, diag.OUTCOME_CACHE, "cache", floor,
+                        exhausted=True, tf=tf, now=now,
+                        message="older bars served from the local cache")
+                self._quarantine(request, report, trace)
             return self._settle(trace, _empty(), diag.OUTCOME_EXHAUSTED, None,
                                 floor, exhausted=True, tf=tf, now=now,
                                 message=_exhausted_message(tf, floor))
@@ -392,9 +408,27 @@ class MarketDataService:
         # ── tier: warm start from disk ───────────────────────────────────────
         warm = self._warm_from_cache(request, ttl, now)
         if warm is not None:
-            trace.cache_hit = True
-            return self._settle(trace, warm, diag.OUTCOME_CACHE, "cache", floor,
-                                tf=tf, now=now)
+            # Validate HERE, inside the tier, not at settle time. Validation
+            # used to run in `_settle` — i.e. *after* the ladder had already
+            # committed to this tier — so a cache that failed validation became
+            # `outcome=failed` with no way back to the providers, and the
+            # offending rows stayed on disk to fail again on the next request
+            # and on every press of Retry. That is how a real (and separately
+            # fixed) daily-bar defect turned into "every symbol on 1D is stuck
+            # behind a validation screen, permanently".
+            #
+            # A tier that cannot answer must decline, not abort the ladder.
+            usable, report = self._validated(warm, request, now, diag.OUTCOME_CACHE)
+            if usable is not None:
+                trace.cache_hit = True
+                trace.validation = report.as_dict()
+                return self._settle(trace, usable, diag.OUTCOME_CACHE, "cache",
+                                    floor, tf=tf, now=now)
+            # Unusable: quarantine the rows so the NEXT request cannot inherit
+            # the same bad frame, then fall through to the providers, which will
+            # re-download and re-store the window. This is the self-healing
+            # path — it is what makes a bad cache a hiccup instead of a wall.
+            self._quarantine(request, report, trace)
 
         # ── tier: providers ──────────────────────────────────────────────────
         frame, provider, all_empty = self._try_providers(request, trace, now)
@@ -418,8 +452,21 @@ class MarketDataService:
         if allow_stale and self.cache is not None and not request.extended_hours:
             stale = self._from_cache(request, newest_fallback=True)
             if not stale.empty:
+                # Last resort, and it must not hand the chart a frame the
+                # renderer would refuse. If even these bars are unusable there
+                # is nothing left to serve, so quarantine and fall to the
+                # explained-failure tier below.
+                usable, report = self._validated(stale, request, now,
+                                                 diag.OUTCOME_STALE)
+                if usable is None:
+                    self._quarantine(request, report, trace)
+                    stale = _empty()
+            if not stale.empty:
                 return self._settle(trace, stale, diag.OUTCOME_STALE, "cache",
                                     floor, stale=True, tf=tf, now=now,
+                                    # These bars are deliberately older than the
+                                    # request — see `_settle`'s `trim` note.
+                                    trim=False,
                                     message="live data unavailable — showing the "
                                             "last bars saved locally")
 
@@ -584,6 +631,56 @@ class MarketDataService:
 
     # ── cache helpers ────────────────────────────────────────────────────────
 
+    def _validated(self, frame: pd.DataFrame, request: HistoryRequest,
+                   now: datetime, tier: str
+                   ) -> tuple[pd.DataFrame | None, HistoryReport]:
+        """Semantic validation for a frame taken off disk.
+
+        Returns `(frame, report)` when the bars are usable and
+        `(None, report)` when they are not, so a tier can DECLINE rather than
+        fail the whole request. Live provider frames are validated on their own
+        path; this is the disk equivalent, moved out of `_settle` so that
+        "these bars are unusable" and "this request failed" stop being the same
+        thing.
+        """
+        cleaned, report = validate_history(
+            frame, request.timeframe, now=now,
+            context=f"{tier} {request.symbol} {request.timeframe}")
+        if not report.usable or cleaned.empty:
+            return None, report
+        return cleaned, report
+
+    def _quarantine(self, request: HistoryRequest, report: HistoryReport,
+                    trace: RequestTrace) -> None:
+        """Drop cached rows that failed validation, so the next request can't
+        inherit them.
+
+        Deliberately scoped to `(symbol, timeframe)` rather than the requested
+        window: the defects that reach here — a wrong interval, duplicated
+        sessions, a timestamp convention change — are properties of the whole
+        series, and purging only the visible window leaves the same trap one
+        scroll to the left. The bars are re-downloadable; a wall the user cannot
+        get past is not recoverable at all.
+        """
+        if self.cache is None:
+            return
+        issues = "; ".join(report.issues) or "unusable"
+        try:
+            removed = self.cache.purge(request.symbol, request.timeframe)
+        except Exception as exc:  # noqa: BLE001 — never let cleanup fail a request
+            log.warning("cache quarantine failed for %s %s: %s",
+                        request.symbol, request.timeframe, exc)
+            return
+        # Memoized frames can hold the same bad bars; drop them too or the very
+        # next poll re-serves what we just purged from disk.
+        self.invalidate(request.symbol)
+        log.warning("quarantined %d cached %s %s bars that failed validation "
+                    "(%s); refetching from providers",
+                    removed, request.symbol, request.timeframe, issues)
+        trace.attempt("cache", "quarantined",
+                      detail=f"discarded {removed} unusable cached bars: {issues}")
+        self._quarantines += 1
+
     def _warm_from_cache(self, request: HistoryRequest, ttl: float,
                          now: datetime) -> pd.DataFrame | None:
         """Serve from disk when the newest cached bar is still current — an app
@@ -660,7 +757,8 @@ class MarketDataService:
     def _settle(self, trace: RequestTrace, frame: pd.DataFrame, outcome: str,
                 provider: str | None, floor: datetime | None, *,
                 tf: Timeframe, now: datetime, stale: bool = False,
-                exhausted: bool = False, message: str = "") -> HistoryResult:
+                exhausted: bool = False, message: str = "",
+                trim: bool = True) -> HistoryResult:
         # Trim to the window that was actually asked for. Providers routinely
         # return a little more than requested (Yahoo rounds to session edges),
         # and the disk cache holds whatever it holds — but the SAME request must
@@ -668,7 +766,15 @@ class MarketDataService:
         # this, a first load returned the provider's wider frame while every
         # later memo hit returned the sliced one, so a refresh silently changed
         # the bar count and shifted every logical index under the viewport.
-        if not frame.empty and trace.start is not None:
+        #
+        # `trim=False` is used by the LAST-RESORT stale tier only. Those bars
+        # are, by definition, older than the caller asked for — that is what
+        # "stale" means, and the UI labels them with an as-of time. Trimming
+        # them to the requested window could empty the frame completely and
+        # produce `outcome=stale, bars=0`: a banner promising the last saved
+        # bars with nothing behind it. The viewport-stability argument above
+        # does not apply, because a stale answer is never memoized.
+        if trim and not frame.empty and trace.start is not None:
             frame = frame[frame.index >= pd.Timestamp(trace.start)]
         report = None
         if not frame.empty:
@@ -682,9 +788,23 @@ class MarketDataService:
                     context=f"{outcome} {trace.symbol} {trace.timeframe}")
                 trace.validation = report.as_dict()
                 if not report.usable:
+                    # A backstop, not the primary gate. Every disk tier now
+                    # validates *before* committing to answer (see `_validated`
+                    # / `_quarantine`), because failing here left the user
+                    # permanently stuck: the ladder had already passed the
+                    # providers, so there was nothing left to fall through to
+                    # and the bad rows survived to fail identically on Retry.
+                    # Reaching this line means a frame arrived from a path that
+                    # skipped that check, so say so plainly and — since the
+                    # cache is the only tier that can hand over unvalidated
+                    # bars — quarantine it here too.
                     frame = _empty()
                     outcome = diag.OUTCOME_FAILED
-                    message = "the cached bars failed validation and were discarded"
+                    message = ("the bars failed validation and were discarded: "
+                               + ("; ".join(report.issues) or "unusable"))
+                    log.error("validation backstop fired for %s %s (%s) — a "
+                              "tier answered without validating first",
+                              trace.symbol, trace.timeframe, message)
             elif trace.validation is not None:
                 report = HistoryReport(
                     bars=trace.validation["bars"],

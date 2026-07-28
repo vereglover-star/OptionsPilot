@@ -77,21 +77,156 @@ KIND_RANGE = "range"                  # outside this provider's supported depth
 KIND_SYMBOL = "symbol"                # this provider does not list the symbol
 KIND_VALIDATION = "validation"        # answered, but the bars were not usable
 KIND_INTERNAL = "internal"            # an adapter bug
+KIND_AUTH = "auth"                    # the API key is missing/invalid/revoked
+KIND_QUOTA = "quota"                  # the plan's allowance is spent
+KIND_ENTITLEMENT = "entitlement"      # the key is VALID; the plan lacks access
 
 ALL_KINDS = (KIND_UNAVAILABLE, KIND_TIMEOUT, KIND_RATE_LIMITED, KIND_RANGE,
-             KIND_SYMBOL, KIND_VALIDATION, KIND_INTERNAL)
+             KIND_SYMBOL, KIND_VALIDATION, KIND_INTERNAL, KIND_AUTH,
+             KIND_QUOTA, KIND_ENTITLEMENT)
 
 #: The single definition of "does this failure say anything about the provider's
 #: health?". Everything else reads this rather than re-deriving it.
+#:
+#: `auth` and `quota` count. They are not the provider being *broken*, but they
+#: ARE reasons this install cannot use it, and a provider we cannot use must
+#: fall to the back of the ranking rather than being retried on every chart
+#: load. They are distinguished from `unavailable` because the remedy differs
+#: completely — one needs a key, one needs tomorrow — and the diagnostics page
+#: has to tell the user which.
 COUNTS_AGAINST_HEALTH: dict[str, bool] = {
     KIND_UNAVAILABLE: True,
     KIND_TIMEOUT: True,
     KIND_RATE_LIMITED: True,
     KIND_VALIDATION: True,
     KIND_INTERNAL: True,
+    KIND_AUTH: True,
+    KIND_QUOTA: True,
+    # An entitlement refusal counts, for the same reason `auth` does: the
+    # provider is working perfectly and this install still cannot use it, so it
+    # must fall to the back of the ranking rather than be retried on every
+    # chart load. It is a SEPARATE kind because the remedy is completely
+    # different — an auth failure means "fix your key", an entitlement failure
+    # means "your key is fine, your plan does not include this data" — and
+    # telling a user with a valid key that it was rejected sends them to
+    # regenerate a key that was never the problem.
+    KIND_ENTITLEMENT: True,
     KIND_RANGE: False,
     KIND_SYMBOL: False,
 }
+
+# ── why a provider is (un)available ──────────────────────────────────────────
+#
+# One vocabulary, shared by the monitor, the diagnostics payload, the text
+# export and the dashboard, so "why can't I use Finnhub?" has exactly one
+# answer everywhere it is asked.
+
+STATUS_OK = "ok"                        # in rotation
+STATUS_DISABLED = "disabled"            # switched off in configuration
+STATUS_NO_API_KEY = "missing_api_key"   # needs a key; none configured
+STATUS_AUTH_FAILED = "auth_failure"     # key present and rejected
+#: The key is VALID and the plan does not include this data. Distinct from
+#: `auth_failure` because the two look identical from the outside and have
+#: opposite remedies — see `KIND_ENTITLEMENT` above and
+#: `docs/MARKET_DATA.md` §28.
+STATUS_PREMIUM_REQUIRED = "premium_required"
+STATUS_QUOTA = "quota_exceeded"         # plan allowance spent
+STATUS_RATE_LIMITED = "rate_limited"    # told to back off; recovers on its own
+STATUS_CIRCUIT_OPEN = "temporarily_unavailable"   # breaker open after failures
+
+#: Human wording for each status. The dashboard and the text report both render
+#: from this rather than inventing their own phrasing.
+STATUS_TEXT: dict[str, str] = {
+    STATUS_OK: "available",
+    STATUS_DISABLED: "disabled in configuration",
+    STATUS_NO_API_KEY: "no API key configured",
+    STATUS_AUTH_FAILED: "the API key was rejected",
+    STATUS_PREMIUM_REQUIRED: "the API key is valid, but this provider's plan "
+                             "does not include historical price data",
+    STATUS_QUOTA: "the plan's request allowance is spent",
+    STATUS_RATE_LIMITED: "rate limited — backing off",
+    STATUS_CIRCUIT_OPEN: "temporarily out of rotation after repeated failures",
+}
+
+# ── the displayed state ──────────────────────────────────────────────────────
+#
+# `status()` above answers "may this provider be used, and if not, why" — it is
+# a *gate*, and the registry reads it as one. It is not quite what a user needs
+# to see, because it has no way to say "in rotation, but struggling": a provider
+# failing one request in three is `ok` to the gate and alarming to a person.
+#
+# `health_state()` is the one-word answer for a human. It is DERIVED, never
+# stored: a second stored copy of the same fact is how the adapter's counters
+# and the registry's breaker came to disagree in V0.5.2 (see this module's
+# docstring), and the whole point of consolidating them here was that there is
+# now one place to derive it from.
+#
+# `testing` and `connecting` are in the vocabulary but are never returned by
+# this module — they are transient states the UI owns while a Test Connection
+# is in flight. They live here anyway so that the page and the backend share
+# ONE list of states, and a badge style cannot be added for a state the backend
+# can emit but the page has never heard of.
+
+HEALTH_HEALTHY = "healthy"
+HEALTH_DEGRADED = "degraded"
+HEALTH_OFFLINE = "offline"
+HEALTH_DISABLED = "disabled"
+HEALTH_MISSING_KEY = "missing_key"
+HEALTH_RATE_LIMITED = "rate_limited"
+HEALTH_CIRCUIT_OPEN = "circuit_open"
+HEALTH_UNAVAILABLE = "unavailable"
+HEALTH_PREMIUM_REQUIRED = "premium_required"
+HEALTH_UNKNOWN = "unknown"
+HEALTH_TESTING = "testing"        # UI-only, while a connection test runs
+HEALTH_CONNECTING = "connecting"  # UI-only, while the first request is in flight
+
+ALL_HEALTH_STATES = (
+    HEALTH_HEALTHY, HEALTH_DEGRADED, HEALTH_OFFLINE, HEALTH_DISABLED,
+    HEALTH_MISSING_KEY, HEALTH_RATE_LIMITED, HEALTH_CIRCUIT_OPEN,
+    HEALTH_UNAVAILABLE, HEALTH_PREMIUM_REQUIRED, HEALTH_TESTING,
+    HEALTH_CONNECTING, HEALTH_UNKNOWN,
+)
+
+#: One plain-English sentence per state. Every place a state is displayed must
+#: display this next to it — a coloured badge that says "degraded" and nothing
+#: else tells a user they have a problem without telling them what it is.
+HEALTH_TEXT: dict[str, str] = {
+    HEALTH_HEALTHY: "Working normally and first in line for its rank.",
+    HEALTH_DEGRADED: "Still in use, but failing some requests or returning "
+                     "lower-quality data — it has been moved down the order.",
+    HEALTH_OFFLINE: "Every recent request to this provider has failed. The "
+                    "next one or two failures will take it out of rotation.",
+    HEALTH_DISABLED: "Switched off here. It will not be asked for data until "
+                     "you turn it back on.",
+    HEALTH_MISSING_KEY: "This provider needs a free API key before it can be "
+                        "used. Nothing is broken — it is simply not set up.",
+    HEALTH_RATE_LIMITED: "Out of requests for now. It rejoins automatically "
+                         "when the limit resets — no action needed.",
+    HEALTH_CIRCUIT_OPEN: "Taken out of rotation after repeated failures. It "
+                         "is retried automatically with one probe request "
+                         "when the cooldown expires.",
+    HEALTH_UNAVAILABLE: "Cannot be used right now. The reason is shown below "
+                        "— it usually means the API key was rejected.",
+    HEALTH_PREMIUM_REQUIRED: "Your API key works, but this provider's free "
+                             "plan does not include historical price data. "
+                             "Nothing is broken and there is nothing to fix — "
+                             "it needs a paid plan, or you can simply leave it "
+                             "switched off and use the other providers.",
+    HEALTH_TESTING: "Running a live test request…",
+    HEALTH_CONNECTING: "Contacting the provider…",
+    HEALTH_UNKNOWN: "Not used yet in this session, so there is nothing "
+                    "measured to report.",
+}
+
+#: Recent failure rate at or above which an in-rotation provider is DEGRADED.
+#: One failure in four is well past noise — the shipped chain answers >99% of
+#: requests when healthy — and comfortably below the breaker's own threshold,
+#: so "degraded" is a warning the user sees BEFORE the provider drops out.
+DEGRADED_FAILURE_RATE = 0.25
+#: Rolling quality score below which a provider is degraded even while it is
+#: answering. A source returning bars that only just pass validation is a
+#: source about to start failing it.
+DEGRADED_QUALITY = 70.0
 
 # ── breaker ──────────────────────────────────────────────────────────────────
 
@@ -131,6 +266,14 @@ CONSECUTIVE_FAILURE_WEIGHT = 15.0
 BREAKER_TRIP_WEIGHT = 5.0
 MAX_COUNTED_TRIPS = 4
 QUALITY_WEIGHT = 0.5
+#: Rank points a provider carries at 100% of its daily budget spent (0 at 0%).
+#: This is what distributes load *between* metered providers: as one approaches
+#: its ceiling it drifts down the ranking, so traffic moves to a fresher key
+#: BEFORE the quota is gone rather than after. Sized at 25 — larger than a
+#: single priority step (10), so budget genuinely reorders the chain, but below
+#: the failure weights, so a healthy-but-busy provider still outranks a broken
+#: one. Providers with no daily limit contribute 0 and are never penalised.
+QUOTA_PRESSURE_WEIGHT = 25.0
 
 #: How many recent latency samples to retain for percentiles. Small enough to
 #: stay cheap, large enough that p95 means something.
@@ -158,10 +301,33 @@ class ProviderHealthMonitor:
 
     def __init__(self, name: str, *, priority: int = 100,
                  breaker: BreakerPolicy | None = None,
+                 quota=None, disabled_reason: str | None = None,
                  clock=None, wall_clock=None):
         self.name = name
         self.priority = priority
         self.breaker_policy = breaker or DEFAULT_BREAKER
+        #: Optional `ratelimit.QuotaTracker`. Availability is ONE question, so
+        #: the budget is consulted here rather than by a second gate in the
+        #: registry — the same reason the breaker and the rate-limit window
+        #: live here (see this module's docstring).
+        self.quota = quota
+        #: Set when the provider cannot be used at all in this install (no API
+        #: key, switched off in config). Distinct from the breaker: it does not
+        #: expire, is not a health event, and names its own remedy.
+        self.disabled_reason = disabled_reason
+        #: Set when a live request proved the key wrong. Sticky, because
+        #: retrying a rejected key on every chart load only burns requests.
+        self.auth_failed = False
+        #: Set when a live request proved the key VALID but the plan
+        #: insufficient — the provider authenticated us and then refused the
+        #: data (HTTP 403). Sticky for the same reason as `auth_failed`, and
+        #: separate from it because the two have opposite remedies.
+        self.entitlement_failed = False
+        #: Declared by the adapter, reported by diagnostics. Lets the dashboard
+        #: distinguish "keyless provider, working" from "keyed provider, key
+        #: present" without knowing anything about individual providers.
+        self.requires_api_key = False
+        self.api_key_configured = False
         # Injectable so tests drive cooldowns and day rollovers without sleeping
         # or waiting for midnight.
         self._clock = clock or _time.monotonic
@@ -374,16 +540,148 @@ class ProviderHealthMonitor:
     # ── breaker queries ──────────────────────────────────────────────────────
 
     def available(self) -> bool:
-        """Is this provider in rotation right now? Rate limiting is honoured as
-        a form of breaker: a provider that told us to back off is skipped no
-        matter how healthy it looks."""
+        """Is this provider in rotation right now?"""
+        return self.status()[0] == STATUS_OK
+
+    def status(self) -> tuple[str, str]:
+        """(status code, human detail) — the single answer to "why can't I use
+        this provider?".
+
+        Checked in order of how permanent each condition is, so the reported
+        reason is the one the user would actually have to act on: a provider
+        with no API key is not "temporarily unavailable", and one whose daily
+        quota is spent is not "rate limited". Every consumer — the registry,
+        the dashboard, the text export, the ranking — reads this rather than
+        re-deriving availability from the individual flags.
+        """
+        if self.disabled_reason:
+            code = (STATUS_NO_API_KEY if self.disabled_reason == STATUS_NO_API_KEY
+                    else STATUS_DISABLED)
+            return code, STATUS_TEXT.get(code, self.disabled_reason)
+        if self.auth_failed:
+            return STATUS_AUTH_FAILED, STATUS_TEXT[STATUS_AUTH_FAILED]
+        # Checked after `auth_failed` because a rejected key is the more
+        # fundamental problem: if we cannot authenticate at all, what the plan
+        # includes is not yet a question worth answering.
+        if self.entitlement_failed:
+            return (STATUS_PREMIUM_REQUIRED,
+                    STATUS_TEXT[STATUS_PREMIUM_REQUIRED])
+        if self.quota is not None:
+            allowed, reason = self.quota.allow()
+            if not allowed:
+                # A spent daily allowance and a hit per-minute ceiling are
+                # different problems with different remedies, so they report
+                # differently even though both refuse the request.
+                code = (STATUS_RATE_LIMITED if "minute" in reason
+                        else STATUS_QUOTA)
+                return code, reason
         now = self._clock()
         with self._lock:
             if self.rate_limited_until:
                 if self.rate_limited_until > now:
-                    return False
+                    return (STATUS_RATE_LIMITED,
+                            f"backing off for another "
+                            f"{self.rate_limited_until - now:.0f}s")
                 self.rate_limited_until = None
-            return not self._is_open(now)
+            if self._is_open(now):
+                return (STATUS_CIRCUIT_OPEN,
+                        f"out of rotation for another "
+                        f"{self._open_until - now:.0f}s after "
+                        f"{self.consecutive_failures} consecutive failures")
+        return STATUS_OK, STATUS_TEXT[STATUS_OK]
+
+    def health_state(self) -> tuple[str, str]:
+        """(state, plain-English explanation) — the one-word answer for a human.
+
+        Derived from `status()` plus the measured counters; see the vocabulary
+        block at the top of this module for why it is separate from `status()`
+        and why nothing stores it.
+        """
+        code, detail = self.status()
+        if code == STATUS_DISABLED:
+            return HEALTH_DISABLED, HEALTH_TEXT[HEALTH_DISABLED]
+        if code == STATUS_NO_API_KEY:
+            return HEALTH_MISSING_KEY, HEALTH_TEXT[HEALTH_MISSING_KEY]
+        if code == STATUS_AUTH_FAILED:
+            return HEALTH_UNAVAILABLE, detail
+        if code == STATUS_PREMIUM_REQUIRED:
+            return HEALTH_PREMIUM_REQUIRED, HEALTH_TEXT[HEALTH_PREMIUM_REQUIRED]
+        if code in (STATUS_RATE_LIMITED, STATUS_QUOTA):
+            # Both mean "out of requests for now, back on its own". They are
+            # kept apart in `status()` because the remedy differs (wait a
+            # minute vs wait for the daily reset) and `status_detail` says
+            # which — the STATE is the same either way, and inventing two
+            # badges for one situation is how a status page stops being read.
+            return HEALTH_RATE_LIMITED, detail
+        if code == STATUS_CIRCUIT_OPEN:
+            return HEALTH_CIRCUIT_OPEN, detail
+        with self._lock:
+            answered = self.successes + self.failures
+            recent = (sum(self._recent) / len(self._recent)) if self._recent else 0.0
+            quality = self.data_quality_score
+            streak = self.consecutive_failures
+        if not answered:
+            return HEALTH_UNKNOWN, HEALTH_TEXT[HEALTH_UNKNOWN]
+        if self._recent and recent >= 1.0:
+            return HEALTH_OFFLINE, HEALTH_TEXT[HEALTH_OFFLINE]
+        if recent >= DEGRADED_FAILURE_RATE or quality < DEGRADED_QUALITY or streak:
+            return HEALTH_DEGRADED, HEALTH_TEXT[HEALTH_DEGRADED]
+        return HEALTH_HEALTHY, HEALTH_TEXT[HEALTH_HEALTHY]
+
+    def note_auth_failure(self) -> None:
+        """A live request proved the configured key wrong.
+
+        Sticky until `clear_auth_failure()`: re-testing a rejected key on every
+        chart load spends requests to learn something already known, and on
+        some providers repeated auth failures get an IP blocked.
+        """
+        if not self.auth_failed:
+            log.warning("provider %s rejected our API key — taking it out of "
+                        "rotation until the key changes", self.name)
+        self.auth_failed = True
+
+    def clear_auth_failure(self) -> None:
+        """The key changed (or an operator asked for a retry).
+
+        Clears the entitlement verdict too. A different key may well be on a
+        different plan — that is the single most likely reason someone pastes a
+        new one after seeing "premium plan required" — so keeping the old
+        verdict would bench an upgraded key for the rest of the session and
+        make the upgrade look like it had not worked.
+        """
+        self.auth_failed = False
+        self.entitlement_failed = False
+
+    def note_entitlement_failure(self) -> None:
+        """A live request proved the key valid and the PLAN insufficient.
+
+        Sticky, exactly like `note_auth_failure`: an entitlement does not
+        change between two chart loads, so retrying spends requests to learn
+        something already known. Cleared when the key changes.
+        """
+        if not self.entitlement_failed:
+            log.warning("provider %s authenticated us and then refused the "
+                        "data — the key is valid but the plan does not include "
+                        "it. Taking it out of rotation until the key changes.",
+                        self.name)
+        self.entitlement_failed = True
+
+    @property
+    def permanently_unusable(self) -> bool:
+        """True when nothing but USER ACTION can bring this provider back.
+
+        The distinction this draws is load-bearing for
+        `registry.deepest_earliest`: a provider that is *temporarily* out
+        (breaker open, rate limited, over budget) will return on its own and
+        should still contribute a history floor, so the reported start of
+        history does not lurch about as breakers open and close. One that is
+        permanently out — switched off, no key, rejected key, insufficient
+        plan — can never answer, and counting its declared depth would tell the
+        chart that history reaches back further than anything reachable. That
+        is the retry-forever bug class V0.5.2 was built to eliminate.
+        """
+        return bool(self.disabled_reason or self.auth_failed
+                    or self.entitlement_failed)
 
     def _is_open(self, now: float) -> bool:
         """Called with the lock held."""
@@ -429,14 +727,27 @@ class ProviderHealthMonitor:
 
     # ── ranking ──────────────────────────────────────────────────────────────
 
-    def rank(self) -> float:
+    def rank(self, *, include_latency: bool = True) -> float:
         """Sort key for provider selection — LOWER IS BETTER.
 
         Anchored on the static priority so a cold system reproduces the old
         fixed order exactly; see the module docstring for the scale.
+
+        `include_latency=False` is what HYBRID ordering means (see
+        `data/config.py::ORDER_HYBRID`): the user's chosen order stands, and a
+        provider only loses its place when it is genuinely *failing* — not when
+        it is merely slower than the one behind it. Latency is the one term
+        that reorders healthy providers, so dropping it is the whole difference
+        between "respect my order unless something is broken" and "always use
+        whatever is fastest right now".
         """
+        # Budget pressure is read BEFORE taking our lock: the quota tracker has
+        # a lock of its own, and acquiring it while holding this one — when
+        # some other path could plausibly do the reverse — is how a deadlock is
+        # built. Nothing here needs the two to be consistent to the instant.
+        pressure = self._quota_pressure
         with self._lock:
-            return self._rank_locked()
+            return self._rank_locked(pressure, include_latency=include_latency)
 
     # ── reporting ────────────────────────────────────────────────────────────
 
@@ -464,6 +775,14 @@ class ProviderHealthMonitor:
         Durations are rendered as seconds-ago rather than raw monotonic stamps,
         because a monotonic clock means nothing outside this process.
         """
+        # Taken OUTSIDE this monitor's lock: both consult the quota tracker,
+        # which holds its own lock. Calling them while holding ours would nest
+        # two locks in one order here and the reverse order in `rank()`, which
+        # is how deadlocks are built.
+        status_code, status_detail = self.status()
+        health_code, health_detail = self.health_state()
+        quota_state = self.quota.state() if self.quota is not None else None
+        pressure = self._quota_pressure
         now = self._clock()
         with self._lock:
             self._roll_day()
@@ -478,8 +797,20 @@ class ProviderHealthMonitor:
             return {
                 "name": self.name,
                 "priority": self.priority,
-                "rank": round(self._rank_locked(), 2),
-                "available": open_for is None and limited_for is None,
+                "rank": round(self._rank_locked(pressure), 2),
+                "available": status_code == STATUS_OK,
+                # The single vocabulary for "why can't I use this provider?".
+                "status": status_code,
+                "status_detail": status_detail,
+                # The one-word answer for a HUMAN, plus the sentence that must
+                # always accompany it. Derived from the same counters, never
+                # stored — see the vocabulary block at the top of this module.
+                "health_state": health_code,
+                "health_detail": health_detail,
+                "quota_pressure": round(pressure, 3),
+                "requires_api_key": self.requires_api_key,
+                "api_key_configured": self.api_key_configured,
+                "quota": quota_state,
                 "state": state,
                 "requests": self.requests,
                 "successes": self.successes,
@@ -500,6 +831,11 @@ class ProviderHealthMonitor:
                 "timeouts": self.by_kind.get(KIND_TIMEOUT, 0),
                 "validation_failures": self.by_kind.get(KIND_VALIDATION, 0),
                 "rate_limits": self.by_kind.get(KIND_RATE_LIMITED, 0),
+                "auth_failures": self.by_kind.get(KIND_AUTH, 0),
+                "entitlement_failures": self.by_kind.get(KIND_ENTITLEMENT, 0),
+                "premium_required": self.entitlement_failed,
+                "permanently_unusable": self.permanently_unusable,
+                "quota_failures": self.by_kind.get(KIND_QUOTA, 0),
                 "failures_by_kind": dict(self.by_kind),
                 "breaker_trips": self.breaker_trips,
                 "circuit_open_for": open_for,
@@ -517,15 +853,26 @@ class ProviderHealthMonitor:
                 "failures_today": self.failures_today,
             }
 
-    def _rank_locked(self) -> float:
-        latency = min(self.avg_latency_ms / LATENCY_MS_PER_RANK_POINT,
-                      MAX_LATENCY_PENALTY)
+    def _rank_locked(self, pressure: float = 0.0, *,
+                     include_latency: bool = True) -> float:
+        """Called with the lock held. `pressure` is passed IN rather than read
+        here, so this never reaches for the quota tracker's lock while holding
+        ours (see `rank()`)."""
+        latency = (min(self.avg_latency_ms / LATENCY_MS_PER_RANK_POINT,
+                       MAX_LATENCY_PENALTY) if include_latency else 0.0)
         # The RECENT rate, not the lifetime one — see `OUTCOME_WINDOW`.
         rate = (sum(self._recent) / len(self._recent)) if self._recent else 0.0
         return (float(self.priority) + latency + rate * FAILURE_RATE_WEIGHT
                 + self.consecutive_failures * CONSECUTIVE_FAILURE_WEIGHT
                 + min(self.breaker_trips, MAX_COUNTED_TRIPS) * BREAKER_TRIP_WEIGHT
-                + max(0.0, 100.0 - self.data_quality_score) * QUALITY_WEIGHT)
+                + max(0.0, 100.0 - self.data_quality_score) * QUALITY_WEIGHT
+                + max(0.0, min(1.0, pressure)) * QUOTA_PRESSURE_WEIGHT)
+
+    @property
+    def _quota_pressure(self) -> float:
+        """Share of the daily budget already spent, 0.0–1.0. Takes the quota
+        tracker's lock, so it must be called WITHOUT holding ours."""
+        return self.quota.pressure() if self.quota is not None else 0.0
 
     # ── internals ────────────────────────────────────────────────────────────
 
@@ -613,6 +960,15 @@ __all__ = [
     "ProviderHealthMonitor", "ProviderHealth", "BreakerPolicy",
     "DEFAULT_BREAKER", "STATE_CLOSED", "STATE_OPEN", "STATE_HALF_OPEN",
     "KIND_UNAVAILABLE", "KIND_TIMEOUT", "KIND_RATE_LIMITED", "KIND_RANGE",
-    "KIND_SYMBOL", "KIND_VALIDATION", "KIND_INTERNAL", "ALL_KINDS",
-    "COUNTS_AGAINST_HEALTH", "LATENCY_MS_PER_RANK_POINT",
+    "KIND_SYMBOL", "KIND_VALIDATION", "KIND_INTERNAL", "KIND_AUTH",
+    "KIND_QUOTA", "KIND_ENTITLEMENT", "ALL_KINDS", "COUNTS_AGAINST_HEALTH",
+    "LATENCY_MS_PER_RANK_POINT", "QUOTA_PRESSURE_WEIGHT",
+    "STATUS_OK", "STATUS_DISABLED", "STATUS_NO_API_KEY", "STATUS_AUTH_FAILED",
+    "STATUS_PREMIUM_REQUIRED", "STATUS_QUOTA", "STATUS_RATE_LIMITED",
+    "STATUS_CIRCUIT_OPEN", "STATUS_TEXT",
+    "HEALTH_HEALTHY", "HEALTH_DEGRADED", "HEALTH_OFFLINE", "HEALTH_DISABLED",
+    "HEALTH_MISSING_KEY", "HEALTH_RATE_LIMITED", "HEALTH_CIRCUIT_OPEN",
+    "HEALTH_UNAVAILABLE", "HEALTH_PREMIUM_REQUIRED", "HEALTH_TESTING",
+    "HEALTH_CONNECTING", "HEALTH_UNKNOWN", "ALL_HEALTH_STATES", "HEALTH_TEXT",
+    "DEGRADED_FAILURE_RATE", "DEGRADED_QUALITY",
 ]

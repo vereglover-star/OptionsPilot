@@ -59,8 +59,9 @@ class YFinanceAdapter(HistoryAdapter):
     default_timeout = REQUEST_TIMEOUT
 
     def __init__(self, config=None, *, timeout: float | None = None,
-                 ticker_factory=None):
-        super().__init__(config)
+                 ticker_factory=None, quota_store=None,
+                 environ: dict | None = None):
+        super().__init__(config, quota_store=quota_store, environ=environ)
         if timeout is not None:
             self.timeout = timeout
         # Injected in tests so this adapter is exercised without yfinance or a
