@@ -186,6 +186,15 @@ each browser-verified.
 
 ## In Progress
 
+**V0.6.0, V0.6.1 and V0.7.0 are all built, verified and uncommitted, awaiting
+the user's review.** V0.7.0 (platform foundation) is the most recent: the
+application layer was extracted out of `ui/server.py` into
+`optionspilot/services/`, the OS went behind `optionspilot/host/`, workspace
+state moved server-side, and every durable object gained a declared
+synchronization policy. It changes no trading behaviour and redesigns no UI.
+Read `docs/ARCHITECTURE-PLATFORM.md` — §7 lists the nine remaining platform
+blockers and §8 scores cross-platform readiness honestly.
+
 **The `v3-ui` branch is awaiting the user's review/merge decision.**
 Remaining audit items deliberately not built (see `ROADMAP-V3-UX.md`):
 notification center with persistence (H5), chart↔chain cross-links (N2),

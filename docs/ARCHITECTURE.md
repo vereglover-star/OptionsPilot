@@ -64,7 +64,9 @@ optionspilot/
 │   ├── notify/                    #   desktop toast + email notifications
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
 │   ├── update/                    #   self-updater: GitHub Releases → verify → backup → silent install (V0.5.0, core+stdlib only; docs/AUTO_UPDATER.md)
-│   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py)
+│   ├── host/                      #   host platform: capability profiles per target + OS adapter (V0.7.0, core-only)
+│   ├── services/                  #   PLATFORM-INDEPENDENT APPLICATION LAYER: portfolio, watchlist, intelligence projections, notifications, workspace, sync inventory, view models (V0.7.0; never imports ui/ or any web framework)
+│   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py) — TRANSPORT ONLY since V0.7.0
 │   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
 │   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)
 │
@@ -88,6 +90,19 @@ journal, experience and coach records *structurally* rather than by import, so i
 sits **below** the coach. That is what allows the AI Coach to become a
 presentation layer over the intelligence engine rather than a second, parallel
 analysis path.
+
+`services/` and `host/` (V0.7.0) add the other end of the same idea — full
+design in **`docs/ARCHITECTURE-PLATFORM.md`**. `services/` is the application
+layer: it may import the domain it projects, and it may **never** import `ui/`
+*or any web or GUI framework at all*. The second half is the stronger rule and
+the one that matters — a service free of `optionspilot.ui` but importing
+`fastapi` for a response model still means a future mobile backend, a CLI or a
+test pulls a web server in to compute a win rate. `host/` sits at the bottom
+alongside `core`, and exists so that a business-logic module asks a **capability**
+question (`host.supports(Capability.TOAST)`) rather than an `sys.platform`
+question, which is a bug on every platform that is not Windows and a silent one
+on most. Seven guards in `tests/test_architecture.py` enforce all of this, and
+each was verified to fail when its invariant was deliberately broken.
 
 ---
 
