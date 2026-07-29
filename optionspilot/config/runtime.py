@@ -10,6 +10,8 @@ the dashboard, persisted to data/settings.json after every change:
     daily_trade_limit, max_contracts, min_risk_reward, max_daily_loss_pct)
   - guided-onboarding state (tutorials finished/skipped, features used,
     motion and hint preferences) — see ui/guide.py
+  - workspace state (selected tab, symbol, timeframe, indicators, sidebar,
+    recent symbols, saved layouts) — see services/workspace.py
 
 Changes mutate the *live* AppConfig objects that every component reads at
 call time (the orchestrator re-reads the watchlist each cycle, the gate and
@@ -239,6 +241,37 @@ class RuntimeSettings:
             self._doc["guide"] = dict(state)
             self._save()
             return dict(self._doc["guide"])
+
+    # ── workspace state (V0.7.0) ─────────────────────────────────────────────
+    #
+    # Same deliberately-dumb storage as the guide document above, for the same
+    # reason: the vocabulary (tab ids, indicator names, layout bodies) belongs
+    # to `services/workspace.py`, and `config/` must not import upward to reach
+    # it. The caller normalizes on read and on write.
+    #
+    # It lives here rather than in the WebView's localStorage because that is
+    # not durable storage — a cleared profile, a restored backup or a reinstall
+    # discards it silently — and because a second client cannot see localStorage
+    # at all. Both were true of onboarding progress in V0.6.1 and the answer is
+    # the same one.
+
+    def workspace_state(self) -> dict:
+        """The persisted workspace document, exactly as stored (possibly empty)."""
+        with self._lock:
+            stored = self._doc.get("workspace")
+            return dict(stored) if isinstance(stored, dict) else {}
+
+    def set_workspace_state(self, state: dict) -> dict:
+        """Replace the workspace document wholesale and persist.
+
+        Replacement, not merge — merging is `services/workspace.merge`'s job,
+        and doing it in two places would give the two of them a chance to
+        disagree about what a partial patch from a limited client means.
+        """
+        with self._lock:
+            self._doc["workspace"] = dict(state)
+            self._save()
+            return dict(self._doc["workspace"])
 
     # ── persistence ──────────────────────────────────────────────────────────
 

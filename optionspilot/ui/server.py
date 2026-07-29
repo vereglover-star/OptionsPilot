@@ -14,8 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-import time as _time
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -32,7 +31,7 @@ from optionspilot.backtest import Backtester
 from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.coach import CoachProfile, build_dashboard
-from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
+from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
@@ -45,13 +44,16 @@ from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
 from optionspilot.engine.scorer import DEFAULT_WEIGHTS
 from optionspilot.intelligence import (
-    Goal, IntelligenceSnapshot, build_evidence_index, confidence_of,
+    Goal, IntelligenceSnapshot, build_evidence_index,
 )
 from optionspilot.intelligence.goals import TEMPLATES as GOAL_TEMPLATES
 from optionspilot.intelligence.performance import METRIC_SPECS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
+from optionspilot.services import ServiceRegistry
+from optionspilot.services import intelligence as intel_view
+from optionspilot.services import sync as sync_boundaries
 from optionspilot.ui import guide
 from optionspilot.update.models import UpdateError
 from optionspilot.update.service import UpdateService
@@ -82,73 +84,18 @@ ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_EQUITY_POINTS = 2000
 
-# How much of each period series the intelligence payload carries. The snapshot
-# itself holds every period — a five-year daily series is thousands of points,
-# and shipping all of it to a browser that draws the last quarter is how a
-# status payload becomes a megabyte. Trimming happens HERE, at the transport
-# boundary, so nothing in `intelligence/` has to know a UI exists.
-PERIOD_LIMITS = {"day": 120, "week": 78, "month": 36, "quarter": 20, "year": 10}
-
-# Metrics the dashboard's compact summary carries. The full registry is
-# available from /api/intelligence; this is the headline row.
-SUMMARY_METRICS = (
-    "trades", "win_rate", "expectancy", "profit_factor", "avg_r", "total_pnl",
-    "max_drawdown", "consistency", "stop_discipline_rate", "avg_process_score",
-    "current_streak", "clean_trade_rate",
-)
-
-
-def _intelligence_payload(snapshot: IntelligenceSnapshot, *,
-                          full: bool = True) -> dict:
-    """JSON for one snapshot, with the period series trimmed to what a browser
-    will actually draw."""
-    doc = snapshot.to_dict()
-    doc["periods"] = {
-        name: series[-PERIOD_LIMITS.get(name, 60):]
-        for name, series in doc["periods"].items()
-    }
-    doc["overall_confidence"] = confidence_of(snapshot).name.lower()
-    if not full:
-        # The Coach tab renders behaviours, patterns, reports and the timeline;
-        # what it never draws is a time series, which is also the only part of
-        # the payload that grows without bound. So "not full" drops exactly
-        # that, and the coach still gets one analysis in one request.
-        doc.pop("periods", None)
-    return doc
+# V0.7.0: the intelligence projections moved to `services/intelligence.py`.
+# They decide which twelve of thirty-eight metrics are a headline and how much
+# of a five-year series a client receives — presentation decisions, reachable
+# now without importing a web framework. Re-exported under their historical
+# names so anything importing them from here keeps working.
+PERIOD_LIMITS = intel_view.PERIOD_LIMITS
+SUMMARY_METRICS = intel_view.SUMMARY_METRICS
+_intelligence_payload = intel_view.payload
 
 
 def _intelligence_summary(snapshot: IntelligenceSnapshot) -> dict:
-    """The compact dashboard projection — headline metrics, the scores, the top
-    few actions, goal progress and the newest report's summary line.
-
-    A projection of the same snapshot every other view reads, never a second
-    analysis: two screens disagreeing about the same trader is the failure this
-    whole layer exists to prevent.
-    """
-    doc = snapshot.to_dict()
-    return {
-        "generated": doc["generated"],
-        "trades_analyzed": snapshot.trades_analyzed,
-        "data_sufficiency": snapshot.data_sufficiency,
-        "overall_confidence": confidence_of(snapshot).name.lower(),
-        "span": {"start": snapshot.span_start, "end": snapshot.span_end},
-        "metrics": [snapshot.metrics[k].to_dict() for k in SUMMARY_METRICS
-                    if k in snapshot.metrics],
-        "scores": doc["scores"],
-        "recommendations": doc["recommendations"][:4],
-        "behaviors": [b for b in doc["behaviors"] if b["detected"]][:5],
-        "goals": doc["goals"],
-        "achievements": doc["achievements"],
-        "timeline": doc["timeline"][:6],
-        # Lessons are already capped at MAX_LESSONS by the curriculum engine,
-        # and the Learning tab renders the full set from this same projection
-        # rather than issuing a second request for the whole snapshot.
-        "lessons": doc["lessons"],
-        "risk": {"observations": snapshot.risk.get("observations", [])[:4],
-                 "assessable": snapshot.risk.get("assessable", False)},
-        "latest_report": doc["reports"][0] if doc["reports"] else None,
-        "notes": doc["notes"],
-    }
+    return intel_view.summary(snapshot)
 
 
 class UIServer:
@@ -192,6 +139,31 @@ class UIServer:
         # RuntimeSettings. Constructing it touches no network — a launch-time
         # check is kicked separately (see create_app), only for the real app.
         self.updater = UpdateService(__version__, self.runtime)
+        # V0.7.0: the platform-independent application layer. Everything that
+        # decides WHAT a client is shown — portfolio statistics, watchlist
+        # classification, intelligence projections, workspace state,
+        # notification routing — lives behind this and is reachable without
+        # importing FastAPI. `UIServer` keeps its method names so nothing that
+        # calls them had to change; the bodies now delegate.
+        self._data_dir = data_dir
+        self.services = ServiceRegistry(
+            orchestrator=self.orch,
+            runtime=self.runtime,
+            config=self.cfg,
+            lock=self.lock,
+            directory=symdir,
+            # Bound LATE, through the attribute, rather than by handing over the
+            # bound method here. These three are overridable seams — a test
+            # replaces `_live_symbol_check` to keep validation offline, and a
+            # future host could replace any of them — and a bound method
+            # captured at construction silently ignores every later
+            # reassignment. Caught by an existing test rather than in
+            # production, which is the only reason it is a footnote.
+            trades=lambda: self._all_trades(),
+            verify_symbol=lambda symbol: self._live_symbol_check(symbol),
+            on_symbols_added=lambda symbols: self._kick_meta_refresh(symbols),
+            log=log,
+        )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
 
@@ -281,29 +253,7 @@ class UIServer:
     def status_payload(self) -> dict:
         with self.lock:
             orch = self.orch
-            acct = orch.broker.get_account()
-            marks = (orch.broker.current_marks()
-                     if hasattr(orch.broker, "current_marks") else {})
-            positions = []
-            for p in orch.broker.get_positions():
-                mark = marks.get(p.contract.symbol, p.avg_price)
-                positions.append({
-                    "contract": p.contract.symbol,
-                    "underlying": p.contract.underlying,
-                    "expiration": p.contract.expiration.isoformat(),
-                    "strike": p.contract.strike,
-                    "right": p.contract.right.value,
-                    "managed_by": p.managed_by,
-                    "direction": p.direction.value,
-                    "quantity": p.quantity,
-                    "avg_price": round(p.avg_price, 2),
-                    "mark": round(mark, 2),
-                    "unrealized": round(p.unrealized_pnl(mark), 2),
-                    "entry_spot": round(p.entry_spot, 2),
-                    "stop": p.stop_current,
-                    "target": p.target,
-                    "opened_at": p.opened_at.isoformat(),
-                })
+            positions = [p.to_dict() for p in self.services.portfolio.positions()]
             now_et = utcnow().astimezone(ET)
             return {
                 "version": __version__,
@@ -311,12 +261,7 @@ class UIServer:
                 "scan": dict(self.scan_state),
                 "market_open": orch.market_open(utcnow()),
                 "paper": True,
-                "account": {
-                    "cash": acct.cash,
-                    "equity": acct.equity,
-                    "realized_pnl": acct.realized_pnl,
-                    "starting_balance": self.cfg.risk.starting_balance,
-                },
+                "account": self.services.portfolio.account().to_dict(),
                 "pnl": self._pnl_windows(now_et),
                 "risk": orch.risk.status(),
                 "positions": positions,
@@ -341,11 +286,10 @@ class UIServer:
                 "quotes": self.last_summary.get("quotes", {}),
                 "setup_history": self._setup_history(),
                 "equity_history": self.equity_history[-300:],
-                "notifications": [
-                    {"kind": e.kind, "title": e.title, "body": e.body,
-                     "ts": e.ts.isoformat()}
-                    for e in orch.notifier.history[-15:]
-                ][::-1],
+                # Newest first, and the ordering is the service's decision
+                # rather than each client's — see NotificationService.recent.
+                "notifications": [n.to_dict()
+                                  for n in self.services.notifications.recent(15)],
             }
 
     # ── chart workspace data ─────────────────────────────────────────────────
@@ -683,115 +627,41 @@ class UIServer:
                 "event": event["event"] if event else "working"}
 
     def account_metrics(self) -> dict:
-        with self.lock:
-            broker = self.orch.broker
-            acct = broker.get_account()
-            trades = self._all_trades()
-            marks = (broker.current_marks()
-                     if hasattr(broker, "current_marks") else {})
-            unrealized = sum(
-                p.unrealized_pnl(marks.get(p.contract.symbol, p.avg_price))
-                for p in broker.get_positions()
-            )
-            history = (broker.equity_history()
-                       if hasattr(broker, "equity_history") else [])
-            now_et = utcnow().astimezone(ET)
-            day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)
-            daily = sum(t.pnl for t in trades
-                        if t.exit_ts.astimezone(ET) >= day_start)
-        start = self.cfg.risk.starting_balance
-        pnls = [t.pnl for t in trades]
-        wins = [p for p in pnls if p > 0]
-        losses = [p for p in pnls if p <= 0]
-        gross_win, gross_loss = sum(wins), abs(sum(losses))
-        max_dd = 0.0
-        peak = start
-        for _, equity in history:
-            peak = max(peak, equity)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - equity) / peak * 100)
-        return {
-            "cash": acct.cash,
-            "buying_power": acct.cash,      # options buying power = cash (no margin)
-            "portfolio_value": acct.equity,
-            "unrealized_pnl": round(unrealized, 2),
-            "realized_pnl": acct.realized_pnl,
-            "daily_pnl": round(daily, 2),
-            "total_return_pct": round((acct.equity / start - 1) * 100, 2),
-            "trades": len(trades),
-            "win_rate": round(len(wins) / len(pnls), 4) if pnls else 0.0,
-            "avg_win": round(gross_win / len(wins), 2) if wins else 0.0,
-            "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
-            "profit_factor": (round(gross_win / gross_loss, 2)
-                              if gross_loss else None),
-            "max_drawdown_pct": round(max_dd, 2),
-            "equity_history": history[-500:],
-        }
+        return self.services.portfolio.performance(
+            utcnow().astimezone(ET)).to_dict()
 
     # ── watchlist management ─────────────────────────────────────────────────
 
     def watchlist_add(self, text: str) -> dict:
-        """Parse free-form input (single ticker, comma/space/newline lists,
-        pasted from anywhere), validate each symbol, add the valid ones."""
-        requested = symdir.parse_symbols(text)
-        result = {"added": [], "invalid": [], "duplicates": [], "over_cap": [],
-                  "names": {}}
-        if not requested:
-            result["error"] = "no ticker symbols found in the input"
-            return result
-        with self.lock:
-            current = list(self.cfg.data.watchlist)
-            for symbol in requested:
-                if symbol in current:
-                    result["duplicates"].append(symbol)
-                elif len(current) >= MAX_WATCHLIST:
-                    result["over_cap"].append(symbol)
-                elif symdir.is_known(symbol) or self._live_symbol_check(symbol):
-                    current.append(symbol)
-                    result["added"].append(symbol)
-                    result["names"][symbol] = symdir.company_name(symbol)
-                else:
-                    result["invalid"].append(symbol)
-            if result["added"]:
-                self.runtime.set_watchlist(self.cfg, current)
-        if result["over_cap"]:
-            result["error"] = (f"watchlist is capped at {MAX_WATCHLIST} symbols "
-                               f"(scan time grows with each one)")
-        if result["added"]:
-            self._kick_meta_refresh(result["added"])
-            log.info("watchlist add: +%s (invalid: %s, dupes: %s)",
-                     result["added"], result["invalid"], result["duplicates"])
-        return result
+        return self.services.watchlist.add(text).to_dict()
 
     def watchlist_remove(self, symbol: str) -> dict:
-        symbol = symbol.upper()
-        with self.lock:
-            current = [s for s in self.cfg.data.watchlist if s != symbol]
-            if len(current) == len(self.cfg.data.watchlist):
-                return {"error": f"{symbol} is not on the watchlist"}
-            self.runtime.set_watchlist(self.cfg, current)   # raises if empty
-        log.info("watchlist remove: %s", symbol)
-        return {"removed": symbol, "watchlist": current}
+        return self.services.watchlist.remove(symbol)
 
     def watchlist_reorder(self, symbols: list[str]) -> dict:
-        symbols = [s.upper() for s in symbols]
-        with self.lock:
-            if sorted(symbols) != sorted(self.cfg.data.watchlist):
-                return {"error": "reorder must contain exactly the current symbols"}
-            self.runtime.set_watchlist(self.cfg, symbols)
-        return {"watchlist": symbols}
+        return self.services.watchlist.reorder(symbols)
 
     def watchlist_payload(self) -> dict:
         with self.lock:
-            return {
-                "watchlist": list(self.cfg.data.watchlist),
-                "pinned": self.runtime.pinned(),
-                "favorites": self.runtime.favorites(),
-                "max": MAX_WATCHLIST,
-                "meta": dict(self._symbol_meta),
-                "quotes": self.last_summary.get("quotes", {}),
-                "signals": self.last_summary.get("signals", {}),
-            }
+            return self.services.watchlist.view(
+                quotes=self.last_summary.get("quotes", {}),
+                signals=self.last_summary.get("signals", {}),
+                meta=self._symbol_meta,
+            ).to_dict()
+
+    # ── workspace (V0.7.0) ───────────────────────────────────────────────────
+
+    def workspace_payload(self) -> dict:
+        with self.lock:
+            return self.services.workspace.get().to_dict()
+
+    def update_workspace(self, patch: dict | None) -> dict:
+        with self.lock:
+            return self.services.workspace.update(patch).to_dict()
+
+    def reset_workspace(self) -> dict:
+        with self.lock:
+            return self.services.workspace.reset().to_dict()
 
     def _live_symbol_check(self, symbol: str) -> bool:
         """Fallback for tickers missing from the bundled directory: a real
@@ -906,31 +776,10 @@ class UIServer:
         return guide.payload(merged, facts)
 
     def _setup_history(self) -> dict:
-        """Measured win rate per setup quality from the journal — the honest
-        'estimated probability of success' (n/a until enough history exists)."""
-        buckets: dict[str, list[bool]] = {}
-        for t in self._all_trades():
-            quality = t.market_conditions.get("setup_quality")
-            if quality:
-                buckets.setdefault(quality, []).append(t.is_win)
-        return {
-            q: {"trades": len(v), "win_rate": round(sum(v) / len(v), 3)}
-            for q, v in buckets.items()
-        }
+        return self.services.portfolio.setup_history()
 
     def _pnl_windows(self, now_et: datetime) -> dict:
-        day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)
-        week_start = day_start - timedelta(days=now_et.weekday())
-        month_start = day_start.replace(day=1)
-        with self.lock:
-            trades = self._all_trades()
-        def pnl_since(start):
-            return round(sum(t.pnl for t in trades if t.entry_ts >= start), 2)
-        return {
-            "today": pnl_since(day_start),
-            "week": pnl_since(week_start),
-            "month": pnl_since(month_start),
-        }
+        return self.services.portfolio.pnl_windows(now_et).to_dict()
 
     # ── backtest job ─────────────────────────────────────────────────────────
 
@@ -1297,7 +1146,14 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
         with server.lock:
             engine = LearningEngine(server.orch.journal)
-            store = WeightStore(Path("data") / "learning" / "weights.json")
+            # The SAME file the orchestrator loads its learned weights from.
+            # This read was `Path("data") / ...` — CWD-relative, one of the
+            # hardcodes V0.4.4's storage split was meant to eliminate. On any
+            # real install the CWD is not the storage root, so the file simply
+            # did not exist and the Learning tab reported "no learned weights"
+            # however much the engine had learned. `effective` was right (it is
+            # read from the live scorer), which is what made it look plausible.
+            store = WeightStore(server._data_dir / "learning" / "weights.json")
 
             def rows(slices):
                 return [{"label": s.label, "trades": s.trades,
@@ -1470,6 +1326,49 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         of a celebration, and nothing downstream depends on the write.
         """
         return server.update_guide(payload)
+
+    # ── workspace (V0.7.0) ───────────────────────────────────────────────
+    # Where the user was looking, owned by the server rather than by one
+    # browser's localStorage. See services/workspace.py for why.
+
+    @app.get("/api/workspace")
+    def workspace_view():
+        return server.workspace_payload()
+
+    @app.post("/api/workspace")
+    def workspace_update(payload: dict | None = None):
+        """Merge a PARTIAL patch. Deliberately forgiving, and deliberately
+        partial: a client that only knows about `symbol` must be able to say so
+        without overwriting panel layout it has never heard of. An unusable
+        value is replaced by its default rather than rejected — this records
+        where someone was looking, and 4xx-ing it would interrupt a chart."""
+        return server.update_workspace(payload)
+
+    @app.delete("/api/workspace")
+    def workspace_reset():
+        return server.reset_workspace()
+
+    # ── platform readiness (V0.7.0) ──────────────────────────────────────
+
+    @app.get("/api/host")
+    def host_view():
+        """What this build's host can do.
+
+        A client reads this to decide which surfaces to offer at all rather
+        than to guess from a user-agent string. Contains no user data and no
+        secret, so it is safe in a public bug report."""
+        return server.services.host_view().to_dict()
+
+    @app.get("/api/diagnostics/sync")
+    def sync_boundaries_view():
+        """The classified inventory of every durable object the app owns.
+
+        Nothing here syncs anything — V0.7.0 builds no cloud sync. This is the
+        classification that has to exist before one could, exposed because the
+        list is only useful if it is visible: `never_sync` in particular is the
+        answer to "what must not leave this machine", and it should be readable
+        without grepping the source."""
+        return sync_boundaries.report()
 
     # ── Trading Intelligence Engine ──────────────────────────────────────
     # Every route below projects the SAME snapshot. None of them analyses

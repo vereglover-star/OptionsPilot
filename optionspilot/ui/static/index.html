@@ -2003,6 +2003,8 @@ function switchTab(name) {
   sec.style.display = "";
   sec.style.animation = "none"; void sec.offsetWidth; sec.style.animation = "";
   $("tab-title").textContent = b.querySelector(".lbl").textContent;
+  // The one workspace fact with no localStorage key of its own to intercept.
+  if (window.Workspace) Workspace.push({tab: name});
   if (name === "dashboard") Intel.enterDashboard();
   if (name === "charts") loadChart();
   if (name === "trade") loadTrade();
@@ -7956,12 +7958,160 @@ const Guide = (() => {
           syncLearnButton, flush, get state() { return state; }};
 })();
 
+/* ── workspace: the server owns where you were (V0.7.0) ──────────────────
+   Every fact below used to live ONLY in localStorage, which is not durable
+   storage: clearing the WebView2 profile, restoring a backup or reinstalling
+   discarded it silently. That is the same failure V0.6.1 refused to accept for
+   onboarding progress, for the same reason — a returning user must not be
+   handed a beginner's defaults — and it is also what makes the state invisible
+   to any second client.
+
+   The design is deliberately additive, and the ordering is the reason:
+   CH.sym, CH.tf, wlSort and tkChartOpen are read at SCRIPT-EVAL time, long
+   before any fetch can resolve. Making the server the synchronous source would
+   mean restructuring chart initialisation around an await, in a file with no
+   automated per-flow coverage. So localStorage stays the fast local path and
+   the server becomes the DURABLE one:
+
+     * every local write is mirrored up, debounced;
+     * a profile with no workspace keys at all — a fresh install, a cleared
+       profile, a restored backup — adopts the server's copy instead of the
+       shipped defaults.
+
+   Known limitation, stated rather than hidden: on adoption, only the values
+   that are re-readable after eval are applied live (tab, chart symbol /
+   timeframe / extended hours / auto-follow / indicators, watchlist sort).
+   `tkChartOpen` is seeded into localStorage and takes effect on the next
+   launch, because forcing the ticket's chart open post-eval would desync the
+   panel from its own toggle. */
+/* Attached to `window` rather than declared `const`, because `switchTab` runs
+   above this point in the file and `typeof X` does NOT guard a const in its
+   temporal dead zone — it throws a ReferenceError, which would have made the
+   first tab click of a session a console error. */
+window.Workspace = (() => {
+  // localStorage key -> server field. The server never learns these key names
+  // and never learns an indicator name: the object-of-booleans below is this
+  // client's own vocabulary, and a backend copy of it would be the two-
+  // catalogue drift the guide layer exists to avoid.
+  const BOOLS = {chExt: "extended_hours", chAutoFollow: "auto_follow",
+                 tkChartOpen: "ticket_chart_open"};
+  const PLAIN = {chSym: "symbol", chTf: "timeframe", wlSort: "watchlist_sort"};
+  const TRACKED = [...Object.keys(BOOLS), ...Object.keys(PLAIN), "chInds"];
+
+  let ready = false, pending = {}, timer = null, adopting = false;
+
+  const indsToList = obj => Object.keys(obj || {}).filter(k => obj[k]);
+  const listToInds = list => {
+    const out = {ema: false, vwap: false, bb: false, rsi: false, macd: false};
+    (Array.isArray(list) ? list : []).forEach(k => { if (k in out) out[k] = true; });
+    return out;
+  };
+
+  function push(patch) {
+    // Adoption writes the server's own answer back into localStorage, which
+    // trips the interceptor below. Echoing it straight back up is harmless but
+    // pointless, and it would make the very first request of a fresh install a
+    // redundant write to settings.json.
+    if (adopting) return;
+    Object.assign(pending, patch);
+    if (!ready || timer) return;
+    // Debounced: dragging a timeframe row or toggling four indicators is one
+    // intent, not four writes into the same settings.json the trading mode
+    // lives in.
+    timer = setTimeout(async () => {
+      const body = pending; pending = {}; timer = null;
+      try {
+        await fetch("/api/workspace", {
+          method: "POST", headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(body)});
+      } catch (e) {
+        // Best-effort by contract. Losing a workspace mirror must never
+        // surface as an error over a chart the user is reading.
+        console.debug("workspace mirror failed", e);
+      }
+    }, 600);
+  }
+
+  function fromLocal() {
+    const out = {};
+    for (const [key, field] of Object.entries(PLAIN)) {
+      const v = localStorage.getItem(key);
+      if (v != null) out[field] = v;
+    }
+    for (const [key, field] of Object.entries(BOOLS)) {
+      const v = localStorage.getItem(key);
+      if (v != null) out[field] = v === "1";
+    }
+    if (localStorage.getItem("chInds") != null)
+      out.indicators = indsToList(safeParse("chInds", {}));
+    return out;
+  }
+
+  function adopt(doc) {
+    adopting = true;
+    // Seed localStorage first so anything read at the NEXT eval is already
+    // correct, then apply what can safely be applied to the live page.
+    try {
+      localStorage.setItem("chSym", doc.symbol);
+      localStorage.setItem("chTf", doc.timeframe);
+      localStorage.setItem("chExt", doc.extended_hours ? "1" : "0");
+      localStorage.setItem("chAutoFollow", doc.auto_follow ? "1" : "0");
+      localStorage.setItem("wlSort", doc.watchlist_sort);
+      localStorage.setItem("tkChartOpen", doc.ticket_chart_open ? "1" : "0");
+      localStorage.setItem("chInds", JSON.stringify(listToInds(doc.indicators)));
+    } catch (e) { console.warn("could not seed workspace", e); }
+
+    // Safe to assign: no chart exists yet on a first paint, so these are read
+    // fresh by loadChart() rather than needing a re-render.
+    CH.sym = doc.symbol; CH.tf = doc.timeframe;
+    CH.ext = !!doc.extended_hours; CH.autoFollow = !!doc.auto_follow;
+    CH.inds = listToInds(doc.indicators);
+    wlSort = doc.watchlist_sort;
+    try { chPaintControls(); } catch {}
+    if (doc.tab && doc.tab !== "dashboard") switchTab(doc.tab);
+    adopting = false;
+  }
+
+  async function init() {
+    // Captured SYNCHRONOUSLY, before the await below. `loadChart` writes
+    // chSym/chTf, so a user who reaches the Charts tab while the fetch is in
+    // flight would make a genuinely fresh profile look established — and the
+    // one launch where adoption matters is the one where it silently would not
+    // have happened.
+    const virgin = !TRACKED.some(k => localStorage.getItem(k) != null);
+
+    // One interception point rather than an edit at every call site: this
+    // cannot miss a write, and it cannot change what a write already does.
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      setItem.call(this, key, value);
+      if (this !== window.localStorage || !TRACKED.includes(key)) return;
+      if (key === "chInds") push({indicators: indsToList(safeParse("chInds", {}))});
+      else if (key in BOOLS) push({[BOOLS[key]]: value === "1"});
+      else push({[PLAIN[key]]: value});
+    };
+
+    let doc = null;
+    try {
+      const r = await fetch("/api/workspace");
+      if (r.ok) doc = await r.json();
+    } catch (e) { console.debug("workspace unavailable", e); }
+    ready = true;
+    if (!doc) return;
+    if (virgin) adopt(doc);
+    else push(fromLocal());          // teach the server what this client has
+  }
+
+  return {init, push, get tracked() { return TRACKED; }};
+})();
+
 refresh();
 connectWS();
 Updater.init();
 Diagnostics.init();
 MarketData.init();
 Guide.init();
+Workspace.init();
 // The Dashboard is the landing tab and switchTab() never runs for it at
 // startup, so its intelligence panel has to be kicked here.
 Intel.enterDashboard();
