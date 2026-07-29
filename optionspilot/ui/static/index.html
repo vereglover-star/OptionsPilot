@@ -1495,6 +1495,27 @@ html.gd-nomotion #gd-ring::after { display:none; }
 
   <!-- SETTINGS -->
   <section id="tab-settings" style="display:none">
+    <div class="panel" id="runtime-settings" aria-labelledby="runtime-settings-title">
+      <h2 id="runtime-settings-title">Background &amp; startup</h2>
+      <p class="hint">OptionsPilot can keep essential monitoring alive while the window is hidden.</p>
+      <div class="upd-settings-row"><div class="lo">
+        <label for="rt-close">When I close the window</label>
+        <select id="rt-close"><option value="tray">Hide to system tray</option><option value="exit">Exit OptionsPilot</option></select>
+      </div></div>
+      <div class="upd-settings-row"><div class="lo">
+        <label for="rt-hidden">Hidden workload</label>
+        <select id="rt-hidden"><option value="essential_reduced">Essential Reduced</option><option value="normal">Normal</option><option value="monitoring_only">Monitoring Only</option></select>
+      </div></div>
+      <div class="upd-settings-row"><div class="lo">
+        <label for="rt-notify">Notification mode</label>
+        <select id="rt-notify"><option value="normal">Normal</option><option value="reduced">Reduced</option><option value="critical">Critical only</option></select>
+      </div></div>
+      <div class="upd-settings-row"><label><input type="checkbox" id="rt-start"> Launch OptionsPilot when Windows starts</label></div>
+      <div class="upd-settings-row"><label><input type="checkbox" id="rt-tray"> Start minimized to tray</label></div>
+      <div class="upd-settings-row"><label><input type="checkbox" id="rt-restore"> Restore previous workspace</label></div>
+      <div class="upd-settings-row"><label><input type="checkbox" id="rt-resume"> Automatically resume background monitoring</label></div>
+      <span class="hint" id="rt-save-note" role="status" aria-live="polite"></span>
+    </div>
     <!-- ── Learning the app + motion/hint accessibility ───────────────────
          Progress lives in settings.json (not localStorage) so a reinstall or a
          cleared webview profile does not greet a returning user as a beginner.
@@ -1750,6 +1771,21 @@ html.gd-nomotion #gd-ring::after { display:none; }
 
 <div class="tooltip" id="tooltip"></div>
 <div id="toast" role="status" aria-live="polite"></div>
+
+<!-- Static markup keeps the desktop-close dialog discoverable to accessibility
+     tooling and the HTML-ID verifier.  The desktop bridge only toggles it. -->
+<div id="op-close-dialog" role="dialog" aria-modal="true" aria-labelledby="op-close-title" hidden
+     style="position:fixed;inset:0;background:rgba(0,0,0,.68);z-index:99999;place-items:center;padding:24px">
+  <div style="max-width:520px;width:100%;background:var(--surface,#1a1a19);border:1px solid var(--line,#40403d);border-radius:12px;padding:24px;box-shadow:0 18px 60px #000">
+    <h2 id="op-close-title">OptionsPilot is still running in the background.</h2>
+    <p>It will continue monitoring market data, notifications, updates, and your workspace.</p>
+    <label style="display:block;margin:16px 0"><input id="op-close-dont" type="checkbox"> Don't show this again</label>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn" id="op-close-exit">Exit</button>
+      <button class="btn primary" id="op-close-hide">Hide to Tray</button>
+    </div>
+  </div>
+</div>
 
 <!-- ══ guided onboarding (V0.6.1) ═════════════════════════════════════════
      The ring dims the page and cuts out the target; the card explains it. Both
@@ -4068,7 +4104,11 @@ function chExhaustedDetail(d) {
     [], { year: "numeric", month: "short", day: "numeric" })}`;
 }
 async function chLoadHistoryChunk() {
-  if (!CH.data || CH.historyLoading || CH.historyExhausted) return;
+  // The controller is the ownership token for an in-flight history request.
+  // Do not rely on the presentation flag alone: callers/tests can observe or
+  // reset that flag while a provider request is still pending, which used to
+  // permit overlapping pages to race and leave the terminal pill as Loading.
+  if (!CH.data || CH.historyLoading || CH.historyExhausted || CH.histCtl) return;
   const first = CH.data.candles[0]?.time;
   const last = CH.data.candles[CH.data.candles.length - 1]?.time;
   if (!first || !last) return;
@@ -4410,7 +4450,8 @@ function chAutoRefreshTick() {
   // under the cursor. The next tick refreshes once idle. loadChart() re-arms
   // the timer itself (it calls chArmRefresh at the top); when we skip it here
   // we must re-arm so the poll keeps ticking.
-  if (!window.__chNoAutoRefresh && !document.hidden && CH.main && chOnScreen()
+  if (!window.__chNoAutoRefresh && window.__optionspilotVisible !== false
+      && !document.hidden && CH.main && chOnScreen()
       && !chDrag && !CH.pendingPoint && !CH.pendingNote && !CH.historyLoading)
     loadChart();
   else
@@ -4440,6 +4481,7 @@ function chFmtCountdown(sec) {
   return h > 0 ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
 }
 function chUpdateTimer() {
+  if (window.__optionspilotVisible === false) return;
   const el = $("ch-timer");
   if (!el) return;
   const open = CH.data?.market_open ?? lastStatus?.market_open ?? false;
@@ -5185,7 +5227,12 @@ function toggleChartFullscreen() {
 }
 
 document.querySelectorAll("#ch-tfs button").forEach(b => b.onclick = () => {
-  CH.tf = b.dataset.tf; chPaintControls(); loadChart();
+  CH.tf = b.dataset.tf;
+  // Persist user intent before the network-backed chart render completes.
+  // Waiting for setData made a slow provider lose a timeframe choice during
+  // startup/reload even though the user had already selected it.
+  localStorage.setItem("chTf", CH.tf);
+  chPaintControls(); loadChart();
   Guide.mark("chart.timeframe");
 });
 $("ch-ext").onclick = () => {
@@ -7395,6 +7442,9 @@ const Guide = (() => {
   let clickHandler = null;
   let rafId = null, lastSig = "";
   let helpIdx = -1, helpRows = [];
+  // A later mutation must win over any earlier GET response.  Guide state has
+  // one client owner; stale responses are never allowed to replace it.
+  let stateRevision = 0;
 
   /* ── motion ────────────────────────────────────────────────────────────
      The OS preference is the default and the in-app toggle overrides it in
@@ -7415,15 +7465,18 @@ const Guide = (() => {
 
   /* ── server state ──────────────────────────────────────────────────── */
   async function load() {
+    const revision = stateRevision;
     try {
       const r = await fetch("/api/guide");
       const d = await r.json();
+      if (revision !== stateRevision) return;
       state = d.state;
       renderRecs(d.recommendations || []);
       renderCatalogue();
       syncPrefs();
       applyMotion();
       maybeWelcome();
+      $("hero").style.visibility = "";
     } catch (e) {
       // The guide must never be the reason the app looks broken. Fall back to
       // the OS motion preference and a catalogue with no progress marks.
@@ -7432,14 +7485,17 @@ const Guide = (() => {
                reduce_motion:osReduced(), tips:true,
                large_text:false, high_contrast:false};
       applyDisplay();
+      $("hero").style.visibility = "";
     }
   }
 
   async function patch(body) {
+    const revision = ++stateRevision;
     try {
       const r = await fetch("/api/guide/state", {method:"POST",
         headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
       const d = await r.json();
+      if (revision !== stateRevision) return;
       state = d.state;
       renderRecs(d.recommendations || []);
       renderCatalogue();
@@ -7852,6 +7908,10 @@ const Guide = (() => {
 
   /* ── wiring ────────────────────────────────────────────────────────── */
   function init() {
+    // The first-launch modal and the initial dashboard are one bootstrap
+    // decision.  Do not expose an interactive dashboard, then inject a modal
+    // after a slow guide-state GET has finished.
+    $("hero").style.visibility = "hidden";
     applyMotion();                       // before the first paint of anything
     $("gd-next").onclick = nextStep;
     $("gd-back").onclick = backStep;
@@ -8014,7 +8074,11 @@ window.Workspace = (() => {
     // redundant write to settings.json.
     if (adopting) return;
     Object.assign(pending, patch);
-    if (!ready || timer) return;
+    flushSoon();
+  }
+
+  function flushSoon() {
+    if (!ready || timer || !Object.keys(pending).length) return;
     // Debounced: dragging a timeframe row or toggling four indicators is one
     // intent, not four writes into the same settings.json the trading mode
     // lives in.
@@ -8029,6 +8093,9 @@ window.Workspace = (() => {
         // surface as an error over a chart the user is reading.
         console.debug("workspace mirror failed", e);
       }
+      // A write made while this request was in flight belongs to a later
+      // state transition.  Schedule it rather than letting it remain queued.
+      flushSoon();
     }, 600);
   }
 
@@ -8092,18 +8159,34 @@ window.Workspace = (() => {
     };
 
     let doc = null;
+    let restorePrevious = false;
     try {
-      const r = await fetch("/api/workspace");
+      const [r, rr] = await Promise.all([fetch("/api/workspace"), fetch("/api/v1/runtime")]);
       if (r.ok) doc = await r.json();
+      if (rr.ok) {
+        const runtime = await rr.json();
+        restorePrevious = !!((runtime.data || runtime).settings || {}).restore_previous_workspace;
+      }
     } catch (e) { console.debug("workspace unavailable", e); }
     ready = true;
-    if (!doc) return;
-    if (virgin) adopt(doc);
-    else push(fromLocal());          // teach the server what this client has
+    if (doc && (virgin || restorePrevious)) adopt(doc);
+    else if (doc) push(fromLocal()); // teach the server what this client has
+    // Events may have been queued before either startup fetch returned.  This
+    // explicit flush is the hand-off from startup to normal persistence.
+    flushSoon();
   }
 
   return {init, push, get tracked() { return TRACKED; }};
 })();
+
+// pywebview does not change document.visibilityState when the native window is
+// hidden.  The desktop host emits this event so browser timers can honour the
+// same background policy as the server runtime.
+window.__optionspilotVisible = true;
+window.addEventListener("optionspilot-visibility", event => {
+  window.__optionspilotVisible = event.detail?.visible !== false;
+  if (window.__optionspilotVisible) chArmRefresh();
+});
 
 refresh();
 connectWS();
@@ -8115,6 +8198,56 @@ Workspace.init();
 // The Dashboard is the landing tab and switchTab() never runs for it at
 // startup, so its intelligence panel has to be kicked here.
 Intel.enterDashboard();
+
+const RuntimePrefs = (() => {
+  const ids = {
+    close_behavior: "rt-close", hidden_profile: "rt-hidden",
+    notification_mode: "rt-notify", start_with_windows: "rt-start",
+    start_minimized_to_tray: "rt-tray", restore_previous_workspace: "rt-restore",
+    auto_resume_monitoring: "rt-resume"
+  };
+  function apply(doc) {
+    const p = doc.settings || doc;
+    for (const [key, id] of Object.entries(ids)) {
+      const el = $(id); if (!el || p[key] === undefined) continue;
+      if (el.type === "checkbox") el.checked = !!p[key]; else el.value = p[key];
+    }
+  }
+  async function save() {
+    const patch = {};
+    for (const [key, id] of Object.entries(ids)) {
+      const el = $(id); if (!el) continue;
+      patch[key] = el.type === "checkbox" ? el.checked : el.value;
+    }
+    try {
+      const r = await fetch("/api/v1/runtime", {method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify(patch)});
+      const d = await r.json(); if (r.ok) { apply(d.data || d); $("rt-save-note").textContent = "Saved"; }
+      else $("rt-save-note").textContent = (d.error && d.error.message) || "Could not save runtime settings";
+    } catch (e) { $("rt-save-note").textContent = "Could not save runtime settings"; }
+  }
+  function init() {
+    fetch("/api/v1/runtime").then(r => r.json()).then(d => apply(d.data || d)).catch(() => {});
+    Object.values(ids).forEach(id => { const el = $(id); if (el) el.addEventListener("change", save); });
+  }
+  return {init};
+})();
+RuntimePrefs.init();
+
+// Native window close is intercepted by the desktop shell.  Keeping this small
+// dialog in the web client gives keyboard and screen-reader users the same
+// labelled actions as the tray menu.
+window.addEventListener("optionspilot-close-request", () => {
+  const box = $("op-close-dialog");
+  if (!box.hidden) return;
+  box.hidden = false;
+  box.style.display = "grid";
+  const api = window.pywebview && window.pywebview.api;
+  const close = () => { box.hidden = true; box.style.display = "none"; };
+  $("op-close-hide").focus();
+  $("op-close-hide").onclick = () => { close(); if (api) api.hide_to_tray(!!$("op-close-dont").checked); };
+  $("op-close-exit").onclick = () => { close(); if (api) api.exit(); };
+  box.onkeydown = (e) => { if (e.key === "Escape") { e.preventDefault(); $("op-close-hide").click(); } };
+});
 </script>
 </body>
 </html>

@@ -86,6 +86,11 @@ class CachedProvider(MarketDataProvider):
         self._mem: dict[tuple, _Entry] = {}
         self._inflight: dict[tuple, threading.Event] = {}
 
+    def close(self) -> None:
+        close = getattr(self.service, "close", None)
+        if close is not None:
+            close()
+
     # ── candles ──────────────────────────────────────────────────────────────
 
     def get_candles(self, symbol: str, timeframe: Timeframe,

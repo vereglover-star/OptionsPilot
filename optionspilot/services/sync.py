@@ -35,6 +35,10 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Protocol
+
+from optionspilot.services.contracts import SyncRevision, SyncSnapshot
 
 
 class SyncDomain(enum.Enum):
@@ -81,6 +85,25 @@ class SyncPolicy(enum.Enum):
     #: Only one writer may exist at a time, arbitrated by whoever hosts. Not a
     #: merge strategy — a mutual-exclusion requirement.
     SINGLE_WRITER = "single_writer"
+
+
+class SyncProvider(Protocol):
+    def snapshot(self, domains: list[str] | None = None) -> SyncSnapshot: ...
+
+
+class LocalSyncProvider:
+    """Read-only local provider used until a cloud/device transport exists."""
+
+    name = "local"
+
+    def snapshot(self, domains: list[str] | None = None) -> SyncSnapshot:
+        wanted = set(domains or [d.value for d in SyncDomain])
+        now = datetime.now(timezone.utc).isoformat()
+        revisions = {
+            d.value: SyncRevision(d.value, 0, now)
+            for d in SyncDomain if d.value in wanted and by_domain(d)
+        }
+        return SyncSnapshot(revisions, provider=self.name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,6 +249,13 @@ INVENTORY: tuple[PersistedObject, ...] = (
         "Fully regenerable from providers, large, and identical everywhere. "
         "Syncing it would move the most bytes for the least value in the whole "
         "inventory.",
+    ),
+    PersistedObject(
+        "data/notifications.db", SyncDomain.PREFERENCES, SyncPolicy.APPEND_ONLY,
+        "durable notification inbox and dismissal state",
+        "Events are append-and-deduplicate records; dismissal is a small client "
+        "state update. A future sync provider can merge event IDs without losing "
+        "a notification seen on another client.",
     ),
     PersistedObject(
         "data/quota.json", SyncDomain.DEVICE_ONLY, SyncPolicy.DEVICE_ONLY,

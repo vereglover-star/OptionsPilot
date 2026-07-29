@@ -57,7 +57,7 @@ class ServiceRegistry:
         )
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)
-        self.notifications = NotificationService(orchestrator.notifier)
+        self.notifications = NotificationService(orchestrator.notifier, runtime)
 
     @property
     def host(self):

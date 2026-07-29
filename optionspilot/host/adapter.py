@@ -87,6 +87,14 @@ class HostAdapter(abc.ABC):
         """
         return _NULL_LOCK
 
+    def set_startup(self, enabled: bool, command: str) -> bool:
+        """Enable per-user startup where this host supports it.
+
+        The default is deliberately inert; a future menu-bar or headless host
+        must not inherit Windows registry behavior accidentally.
+        """
+        return False
+
     # ── reporting ────────────────────────────────────────────────────────────
 
     def describe(self) -> dict:
@@ -139,6 +147,26 @@ class DesktopHost(HostAdapter):
         except OSError:
             lock.close()
             return None
+
+    def set_startup(self, enabled: bool, command: str) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            import winreg
+            key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0,
+                                winreg.KEY_SET_VALUE) as key:
+                if enabled:
+                    winreg.SetValueEx(key, "OptionsPilot", 0, winreg.REG_SZ, command)
+                else:
+                    try:
+                        winreg.DeleteValue(key, "OptionsPilot")
+                    except FileNotFoundError:
+                        pass
+            return True
+        except OSError as exc:
+            log.warning("could not update Windows startup registration: %s", exc)
+            return False
 
 
 class HeadlessHost(HostAdapter):

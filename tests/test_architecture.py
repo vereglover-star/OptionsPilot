@@ -69,6 +69,10 @@ COMPOSITION_ROOTS = {"ui"}
 TRANSPORT_PACKAGES = {
     "fastapi", "starlette", "uvicorn", "webview", "pywebview", "jinja2",
     "httpx", "requests", "flask", "django", "aiohttp", "websockets",
+    # Platform/presentation packages are equally forbidden from reusable
+    # application services.  A Flutter or cloud host must import these modules
+    # without accidentally importing a Windows tray, toast, browser, or GUI.
+    "pystray", "PIL", "winreg", "windows_toasts",
 }
 
 
@@ -206,7 +210,10 @@ def test_host_stays_core_only():
 
     offenders = []
     for py in (PKG / "host").rglob("*.py"):
-        bad = _top_level_imports(py) & TRANSPORT_PACKAGES
+        # The host adapter is the one intentional OS boundary.  Its Win32
+        # registry implementation is permitted here, but nowhere in reusable
+        # services/contracts/runtime code.
+        bad = (_top_level_imports(py) & TRANSPORT_PACKAGES) - {"winreg"}
         if bad:
             offenders.append(f"{py.name} imports {sorted(bad)}")
     assert not offenders, \

@@ -13,7 +13,9 @@ no CDN, works offline and inside the PyInstaller bundle.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
+import tracemalloc
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -51,10 +53,13 @@ from optionspilot.intelligence.performance import METRIC_SPECS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
-from optionspilot.services import ServiceRegistry
+from optionspilot.services import IdempotencyStore, ServiceRegistry
+from optionspilot.services.runtime import BackgroundRuntime, RuntimeSnapshot, TaskSpec
+from optionspilot.host import current_host
 from optionspilot.services import intelligence as intel_view
 from optionspilot.services import sync as sync_boundaries
 from optionspilot.ui import guide
+from optionspilot.ui.api_v1 import register_v1_routes
 from optionspilot.update.models import UpdateError
 from optionspilot.update.service import UpdateService
 
@@ -120,6 +125,16 @@ class UIServer:
         self.equity_history: list[tuple[str, float]] = []
         self._loop_thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self.background = BackgroundRuntime(health_check=self._health_check)
+        self._runtime_health: dict = {"state": "healthy", "last_check": None,
+                                      "issues": [], "repairs": [], "memory": {}}
+        # Tracing every allocation is intentionally a live-runtime diagnostic,
+        # not a side effect of constructing an app for an HTTP request or a
+        # test.  The server that starts it also releases it during shutdown.
+        self._owns_memory_tracing = False
+        self._health_memory_baseline = 0
         self._bt_lock = threading.Lock()
         self.backtest_job: dict = {"state": "idle"}
         # Scan pipeline: candle fetching runs OUTSIDE self.lock (it only
@@ -133,7 +148,12 @@ class UIServer:
         self._meta_path = data_dir / "state" / "symbol_meta.json"
         self._reports_dir = data_dir / "reports"
         self._symbol_meta: dict[str, dict] = self._load_meta()
-        self._kick_meta_refresh(self.cfg.data.watchlist)
+        # Metadata enrichment is background work, not construction work.  In
+        # particular, creating an application for a request/test must not
+        # silently create a network-capable worker with no lifecycle owner.
+        # The runtime drains this queue after it has started.
+        self._meta_pending: set[str] = set()
+        self._queue_meta_refresh(self.cfg.data.watchlist)
         # Self-updater: reads GitHub Releases, downloads to a temp dir, and (on
         # explicit user action) launches the installer. Preferences persist via
         # RuntimeSettings. Constructing it touches no network — a launch-time
@@ -146,6 +166,7 @@ class UIServer:
         # importing FastAPI. `UIServer` keeps its method names so nothing that
         # calls them had to change; the bodies now delegate.
         self._data_dir = data_dir
+        self.idempotency = IdempotencyStore(data_dir / "state" / "idempotency.db")
         self.services = ServiceRegistry(
             orchestrator=self.orch,
             runtime=self.runtime,
@@ -161,24 +182,121 @@ class UIServer:
             # production, which is the only reason it is a footnote.
             trades=lambda: self._all_trades(),
             verify_symbol=lambda symbol: self._live_symbol_check(symbol),
-            on_symbols_added=lambda symbols: self._kick_meta_refresh(symbols),
+            on_symbols_added=self._queue_meta_refresh,
             log=log,
         )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
 
     def start_loop(self) -> None:
-        if self._loop_thread is not None:
+        if self._closed:
+            raise RuntimeError("UI server is closed")
+        if self.background.snapshot().running:
             return
-        self._loop_thread = threading.Thread(
-            target=self._loop, name="cycle-loop", daemon=True
-        )
-        self._loop_thread.start()
+        self._start_memory_monitoring()
+        prefs = self.runtime.runtime_prefs()
+        self.background.set_profile(prefs["hidden_profile"])
+        if not prefs["auto_resume_monitoring"]:
+            self.background.pause()
+        task_names = {task["name"] for task in self.background.snapshot().tasks}
+        if "market_monitor" not in task_names:
+            self.background.register(TaskSpec(
+                "market_monitor", self.cfg.engine.scan_interval_seconds,
+                self._background_cycle, policy="monitoring"))
+        if "symbol_metadata" not in task_names:
+            self.background.register(TaskSpec(
+                "symbol_metadata", 60.0, self._refresh_pending_meta,
+                policy="normal"))
+        self.background.start()
 
     def stop_loop(self) -> None:
         self._stop.set()
+        self.background.stop()
+
+    def close(self) -> None:
+        """Stop the one scheduler before releasing owned application resources."""
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.stop_loop()
+        self.orch.close()
+        self.idempotency.close()
+        self._stop_memory_monitoring()
+
+    def set_background_visibility(self, visible: bool) -> None:
+        self.background.set_visibility(visible)
+
+    def runtime_payload(self) -> dict:
+        snap = self.background.snapshot()
+        return {
+            "settings": self.runtime.runtime_prefs(),
+            "background": snap.to_dict(),
+            "health": dict(self._runtime_health),
+        }
+
+    def update_runtime(self, patch: dict | None) -> dict:
+        prefs = self.runtime.set_runtime_prefs(**(patch or {}))
+        self.background.set_profile(prefs["hidden_profile"])
+        if prefs["auto_resume_monitoring"] and self.background.snapshot().paused:
+            self.background.resume()
+        current_host().set_startup(
+            prefs["start_with_windows"], "\"%s\" ui" % sys.executable)
+        return self.runtime_payload()
+
+    def pause_background(self) -> dict:
+        self.background.pause()
+        return self.runtime_payload()
+
+    def resume_background(self) -> dict:
+        self.background.resume()
+        return self.runtime_payload()
+
+    def _background_cycle(self) -> None:
+        now = utcnow()
+        if self.orch.market_open(now):
+            self.run_cycle_now()
+        self.orch._maybe_send_summaries(now)
+
+    def _health_check(self, snapshot: RuntimeSnapshot) -> None:
+        issues = []
+        repairs = []
+        for task in snapshot.tasks:
+            if task["recovery_pending"]:
+                repairs.append(f"{task['name']}: retry scheduled")
+            elif task["failures"] and task["last_error"]:
+                issues.append(f"{task['name']}: {task['last_error']}")
+        current, peak = tracemalloc.get_traced_memory()
+        memory = {"current_bytes": current, "peak_bytes": peak,
+                  "baseline_bytes": self._health_memory_baseline}
+        if (self._health_memory_baseline > 1_000_000 and
+                current > self._health_memory_baseline * 3):
+            issues.append("traced memory grew beyond the health threshold")
+        self._runtime_health = {
+            "state": "degraded" if issues else "healthy",
+            "last_check": utcnow().isoformat(),
+            "issues": issues,
+            "repairs": repairs,
+            "memory": memory,
+        }
+        if issues:
+            self.orch.notifier.notify(
+                "error", "Background health check needs attention", issues[0])
+
+    def _start_memory_monitoring(self) -> None:
+        if not tracemalloc.is_tracing():
+            tracemalloc.start(10)
+            self._owns_memory_tracing = True
+        self._health_memory_baseline = tracemalloc.get_traced_memory()[0]
+
+    def _stop_memory_monitoring(self) -> None:
+        if self._owns_memory_tracing:
+            tracemalloc.stop()
+            self._owns_memory_tracing = False
+        self._health_memory_baseline = 0
 
     def _loop(self) -> None:
+        """Legacy loop body retained for embedders; new starts use BackgroundRuntime."""
         log.info("cycle loop started (scan every %ds while market open)",
                  self.cfg.engine.scan_interval_seconds)
         while not self._stop.is_set():
@@ -290,6 +408,7 @@ class UIServer:
                 # rather than each client's — see NotificationService.recent.
                 "notifications": [n.to_dict()
                                   for n in self.services.notifications.recent(15)],
+                "runtime": self.runtime_payload(),
             }
 
     # ── chart workspace data ─────────────────────────────────────────────────
@@ -681,24 +800,37 @@ class UIServer:
             pass
         return {}
 
-    def _kick_meta_refresh(self, symbols: list[str]) -> None:
-        missing = [s for s in symbols if s not in self._symbol_meta]
-        if not missing:
-            return
-        threading.Thread(target=self._refresh_meta, args=(missing,),
-                         daemon=True, name="symbol-meta").start()
+    def _queue_meta_refresh(self, symbols: list[str]) -> None:
+        """Queue unresolved metadata for the lifecycle-owned runtime."""
+        with self.lock:
+            self._meta_pending.update(
+                symbol for symbol in symbols if symbol not in self._symbol_meta)
+        self.background.trigger("symbol_metadata")
 
-    def _refresh_meta(self, symbols: list[str]) -> None:
+    def _refresh_pending_meta(self) -> None:
+        """Resolve one queued metadata batch under runtime ownership."""
+        with self.lock:
+            symbols = sorted(self._meta_pending)
+            self._meta_pending.clear()
+        if not symbols:
+            return
         get_cap = getattr(self.orch.provider, "get_market_cap", None)
+        resolved: dict[str, dict] = {}
         for symbol in symbols:
-            meta = {"name": symdir.company_name(symbol),
-                    "market_cap": get_cap(symbol) if get_cap else None}
-            with self.lock:
-                self._symbol_meta[symbol] = meta
+            try:
+                cap = get_cap(symbol) if get_cap else None
+            except Exception:  # provider metadata is optional enrichment
+                cap = None
+            resolved[symbol] = {
+                "name": symdir.company_name(symbol),
+                "market_cap": cap,
+            }
         with self.lock:
             self._meta_path.parent.mkdir(parents=True, exist_ok=True)
             self._meta_path.write_text(
-                json.dumps(self._symbol_meta, indent=1), encoding="utf-8")
+                json.dumps({**self._symbol_meta, **resolved}, indent=1),
+                encoding="utf-8")
+            self._symbol_meta.update(resolved)
 
     def _all_trades(self) -> list:
         """Journal rows cached by revision — the status payload is pushed every
@@ -830,6 +962,9 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     server = UIServer(config, orchestrator, runtime, data_dir)
     app = FastAPI(title="OptionsPilot", version=__version__)
     app.state.server = server
+    @app.on_event("shutdown")
+    def _shutdown():
+        server.close()
     if run_loop:
         server.start_loop()
         # Quietly check for updates in the background on launch (respecting the
@@ -1585,6 +1720,8 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                 await asyncio.sleep(1.0)
         except (WebSocketDisconnect, RuntimeError):
             return
+
+    register_v1_routes(app, server)
 
     return app
 

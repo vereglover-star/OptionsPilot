@@ -54,7 +54,18 @@ from optionspilot.services.notifications import (
 from optionspilot.services.portfolio import PortfolioService
 from optionspilot.services.registry import ServiceRegistry
 from optionspilot.services.sync import (
-    CLIENT_TRAPPED, INVENTORY, SyncDomain, SyncPolicy,
+    CLIENT_TRAPPED, INVENTORY, LocalSyncProvider, SyncDomain, SyncPolicy,
+    SyncProvider,
+)
+from optionspilot.services.runtime import (
+    BackgroundRuntime, BackgroundTask, RuntimeSnapshot, TaskSpec,
+)
+from optionspilot.services.idempotency import IdempotencyStore
+from optionspilot.services.contracts import (
+    AnonymousLocalAuth, AuthProvider, ClientCapabilities, DeviceTokenAuth,
+    Principal, RequestContext, SyncRevision, SyncSnapshot,
+    context_from_headers,
+    error_envelope, success_envelope,
 )
 from optionspilot.services.viewmodels import (
     AccountView, HostView, PerformanceView, PnLWindowsView, PositionView,
@@ -68,7 +79,13 @@ __all__ = [
     "IntelligenceService", "NotificationService", "PortfolioService",
     "WatchlistService", "WorkspaceService",
     "CATALOGUE", "NotificationView",
-    "INVENTORY", "CLIENT_TRAPPED", "SyncDomain", "SyncPolicy",
+    "INVENTORY", "CLIENT_TRAPPED", "LocalSyncProvider", "SyncDomain",
+    "SyncPolicy", "SyncProvider",
+    "BackgroundRuntime", "BackgroundTask", "RuntimeSnapshot", "TaskSpec",
+    "IdempotencyStore",
+    "AnonymousLocalAuth", "AuthProvider", "ClientCapabilities", "DeviceTokenAuth",
+    "Principal", "RequestContext", "SyncRevision", "context_from_headers",
+    "SyncSnapshot", "success_envelope", "error_envelope",
     "ViewModel", "AccountView", "HostView", "PerformanceView",
     "PnLWindowsView", "PositionView", "WatchlistEditView", "WatchlistView",
     "WorkspaceView",

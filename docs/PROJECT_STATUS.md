@@ -6,7 +6,7 @@ are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
 **Last verified:** 2026-07-28, **V0.7.0 — platform foundation &
-cross-platform architecture**. Full **2027-test** `pytest` suite green (+119),
+cross-platform architecture**. Full **2046-test** `pytest` suite green (+138),
 HTML-id + doc checks green, `scripts/marketdata_stress.py` **88/88** offline,
 `scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
 `scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
@@ -14,7 +14,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2027 tests run against canned
+against its real API with a real key — all 2046 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -447,7 +447,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2027 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
+**2046 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), `scripts/chart_check.py` (65 chart, drawing and history

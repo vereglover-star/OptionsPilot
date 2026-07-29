@@ -10,7 +10,7 @@ cross-platform architecture.
 
 ## What was completed most recently? (V0.7.0 — platform foundation)
 
-1908 -> **2027 tests** (+119); a new **21-check** headless-browser suite
+1908 -> **2046 tests** (+138); a new **21-check** headless-browser suite
 (`scripts/workspace_check.py`, wired into `verify.ps1`). **Not committed.**
 Full design, decisions and remaining blockers: **`docs/ARCHITECTURE-PLATFORM.md`**
 — read it before touching `optionspilot/services/` or `optionspilot/host/`.
@@ -94,7 +94,7 @@ no durable store; the tab is restored only on adoption, never on every launch
 behaviour); `tkChartOpen` takes effect on the next launch rather than live; and
 `sidebar_collapsed` exists in the model with nothing writing it.
 
-**Verified:** 2027 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+**Verified:** 2046 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
 `intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
 market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
 

@@ -232,7 +232,10 @@ class Orchestrator:
             config, data_dir / "paper.db", config.risk.starting_balance
         )
         self.journal = journal or TradeJournal(data_dir / "journal.db")
-        self.notifier = notifier or build_notification_center(config.notify)
+        self.notifier = notifier or build_notification_center(
+            config.notify,
+            store_path=data_dir / "notifications.db",
+        )
         self.experience = ExperienceEngine(data_dir / "experience.db")
         if learned_weights is None:
             learned_weights = WeightStore(data_dir / "learning" / "weights.json").current()
@@ -337,6 +340,17 @@ class Orchestrator:
                 log.exception("cycle failed: %s", exc)
             _time.sleep(self.cfg.engine.scan_interval_seconds
                         if self.market_open(utcnow()) else 60)
+
+    def close(self) -> None:
+        for owner in (self.notifier, self.provider, self.broker, self.journal,
+                      self.orders, self.experience):
+            close = getattr(owner, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    log.debug("resource close failed for %s", type(owner).__name__,
+                              exc_info=True)
 
     @staticmethod
     def market_open(now: datetime) -> bool:

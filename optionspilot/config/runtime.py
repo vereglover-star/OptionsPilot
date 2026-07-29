@@ -49,6 +49,27 @@ DEFAULT_UPDATE_PREFS: dict = {
     "last_seen_version": None,   # the latest version observed at last check
 }
 
+# Desktop/runtime preferences are persisted here rather than in the desktop
+# shell so a future host can read the same policy.  The shell is responsible
+# for applying platform-specific effects (tray, Windows startup), while this
+# store owns validation and persistence.
+DEFAULT_RUNTIME_PREFS: dict = {
+    "close_behavior": "tray",
+    "close_prompt_dismissed": False,
+    "hidden_profile": "essential_reduced",
+    "start_with_windows": False,
+    "start_minimized_to_tray": False,
+    "restore_previous_workspace": False,
+    "auto_resume_monitoring": True,
+    "notification_mode": "normal",
+}
+
+_RUNTIME_BOOL_KEYS = {
+    "close_prompt_dismissed", "start_with_windows",
+    "start_minimized_to_tray", "restore_previous_workspace",
+    "auto_resume_monitoring",
+}
+
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
     "min_confidence": ("engine", "min_confidence"),
@@ -64,7 +85,9 @@ class RuntimeSettings:
     def __init__(self, path: str | Path, baseline: AppConfig):
         self._path = Path(path)
         self._baseline = baseline.model_copy(deep=True)
-        self._lock = threading.Lock()
+        # Runtime preference reads are also used while applying a validated
+        # patch; reentrancy prevents a self-deadlock in that atomic path.
+        self._lock = threading.RLock()
         self._doc: dict = {"pinned": [], "favorites": [], "custom": {}}
         if self._path.exists():
             try:
@@ -212,6 +235,63 @@ class RuntimeSettings:
             self._doc["updates"] = current
             self._save()
             return dict(current)
+
+    # ── background/desktop runtime preferences ─────────────────────────────
+
+    def runtime_prefs(self) -> dict:
+        """Return validated runtime preferences with defaults filled in."""
+        with self._lock:
+            stored = self._doc.get("runtime") or {}
+            return {**DEFAULT_RUNTIME_PREFS, **self._valid_runtime_patch(stored)}
+
+    def set_runtime_prefs(self, **patch) -> dict:
+        """Merge and validate runtime preferences atomically."""
+        with self._lock:
+            current = self.runtime_prefs()
+            current.update(self._valid_runtime_patch(patch, reject=True))
+            self._doc["runtime"] = current
+            self._save()
+            return dict(current)
+
+    @staticmethod
+    def _valid_runtime_patch(patch: dict, *, reject: bool = False) -> dict:
+        if not isinstance(patch, dict):
+            if reject:
+                raise ValueError("runtime preferences must be an object")
+            return {}
+        allowed = set(DEFAULT_RUNTIME_PREFS)
+        unknown = set(patch) - allowed
+        if unknown and reject:
+            raise ValueError(f"unknown runtime preferences: {sorted(unknown)}")
+        out: dict = {}
+        for key, value in patch.items():
+            if key not in allowed:
+                continue
+            if key in _RUNTIME_BOOL_KEYS:
+                if not isinstance(value, bool):
+                    if reject:
+                        raise ValueError(f"{key} must be boolean")
+                    continue
+                out[key] = value
+            elif key == "close_behavior":
+                if value not in ("tray", "exit"):
+                    if reject:
+                        raise ValueError("close_behavior must be 'tray' or 'exit'")
+                    continue
+                out[key] = value
+            elif key == "hidden_profile":
+                if value not in ("essential_reduced", "normal", "monitoring_only"):
+                    if reject:
+                        raise ValueError("unknown hidden_profile")
+                    continue
+                out[key] = value
+            elif key == "notification_mode":
+                if value not in ("normal", "reduced", "critical"):
+                    if reject:
+                        raise ValueError("unknown notification_mode")
+                    continue
+                out[key] = value
+        return out
 
     # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
     #

@@ -27,10 +27,9 @@ This service is the single entry point. Its job is narrow on purpose:
     a notification failure must never interrupt trading. Every method here
     swallows, logs and continues.
 
-What it deliberately is NOT: a store. History is still the center's in-memory
-ring. A durable notification store is a real gap (a restart loses unread items,
-and a phone that was asleep cannot catch up) and it is listed as a remaining
-blocker rather than quietly half-built here.
+The center also receives a durable inbox in the V0.8 runtime. This service
+continues to expose a bounded view-model projection while persistence,
+deduplication, and platform delivery remain behind the notification core.
 """
 
 from __future__ import annotations
@@ -115,10 +114,15 @@ class NotificationView:
     body: str
     ts: str
     severity: str
+    event_id: str = ""
+    action: dict | None = None
+    dismissed: bool = False
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "title": self.title, "body": self.body,
-                "ts": self.ts, "severity": self.severity}
+                "ts": self.ts, "severity": self.severity,
+                "event_id": self.event_id, "action": self.action,
+                "dismissed": self.dismissed}
 
 
 def severity_of(kind: str) -> str:
@@ -147,12 +151,15 @@ class NotificationService:
     `notify/` is not imported here.
     """
 
-    def __init__(self, center):
+    def __init__(self, center, runtime=None):
         self._center = center
+        self._runtime = runtime
 
     # ── raising ──────────────────────────────────────────────────────────────
 
-    def raise_event(self, kind: str, title: str, body: str = "") -> bool:
+    def raise_event(self, kind: str, title: str, body: str = "", *,
+                    action: dict | None = None,
+                    dedupe_key: str | None = None) -> bool:
         """Send one notification. Returns whether it was accepted.
 
         Never raises. The cardinal rule from `notify/base.py` — a notification
@@ -163,7 +170,11 @@ class NotificationService:
             log.warning("uncatalogued notification kind %r — sending anyway "
                         "(add it to services/notifications.CATALOGUE)", kind)
         try:
-            self._center.notify(kind, title, body)
+            if action is None and dedupe_key is None:
+                self._center.notify(kind, title, body)
+            else:
+                self._center.notify(kind, title, body, action=action,
+                                    dedupe_key=dedupe_key)
             return True
         except Exception as exc:  # noqa: BLE001 — a notification must never
             log.error("notification %r failed: %s", kind, exc)   # break a caller
@@ -194,10 +205,31 @@ class NotificationService:
                 ts=event.ts.isoformat() if hasattr(event.ts, "isoformat")
                 else str(event.ts),
                 severity=severity_of(event.kind),
+                event_id=getattr(event, "event_id", ""),
+                action=getattr(event, "action", None),
             )
             for event in history
         ]
+        mode = "normal"
+        if self._runtime is not None:
+            try:
+                mode = self._runtime.runtime_prefs().get("notification_mode", "normal")
+            except Exception:
+                pass
+        if mode != "normal":
+            allowed = {"critical"}
+            if mode == "reduced":
+                allowed.add("important")
+            views = [v for v in views if v.severity in allowed or
+                     v.kind in {"update_available", "goal_achieved", "provider_offline"}]
         return views[::-1]
+
+    def dismiss(self, event_id: str) -> bool:
+        """Dismiss one durable event when the backing center supports it."""
+        try:
+            return bool(self._center.dismiss(event_id))
+        except Exception:
+            return False
 
     def catalogue(self) -> list[dict]:
         """Every kind this build can raise. For a preferences screen, and for a
