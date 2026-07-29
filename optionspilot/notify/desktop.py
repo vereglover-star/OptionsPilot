@@ -14,6 +14,18 @@ try:
     from windows_toasts import InteractableWindowsToaster, Toast, WindowsToaster
     _AVAILABLE = True
 except Exception:  # pragma: no cover - environment-dependent
+    class _MissingToaster:
+        def __init__(self, *_args, **_kwargs):
+            raise RuntimeError("windows_toasts unavailable")
+
+    class Toast:  # minimal test-safe fallback
+        def __init__(self, actions=None):
+            self.actions = list(actions or [])
+            self.text_fields = []
+            self.on_activated = None
+
+    InteractableWindowsToaster = _MissingToaster
+    WindowsToaster = _MissingToaster
     _AVAILABLE = False
 
 
