@@ -3,9 +3,48 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-28, after **V0.6.1 — intelligent user experience &
-interactive onboarding** (branch `feature/providers`, uncommitted). 1849 →
-**1908 tests** (+54); a new **135-check** headless-browser suite
+**Last updated:** 2026-07-28, after **V0.7.0 — platform foundation &
+cross-platform architecture** (branch `feature/v0.7`, uncommitted). 1908 →
+**2027 tests** (+119); a new **21-check** headless-browser suite
+(`scripts/workspace_check.py`). Full design: **`docs/ARCHITECTURE-PLATFORM.md`**.
+
+**What it is.** OptionsPilot was already a client-server system that ships both
+halves in one process; what it lacked was a boundary between the *application*
+and the *desktop transport*. `ui/server.py` held FastAPI routing and, in the same
+1,700 lines, the decisions about what a client is shown — which twelve of
+thirty-eight metrics are a headline, how a maximum drawdown is computed, what
+four buckets a pasted ticker list falls into. All correct, none of it reachable
+without importing a web framework, and a second client asking "what is my max
+drawdown" had two options: import FastAPI, or recompute it and slowly disagree.
+
+V0.7.0 extracted that into `optionspilot/services/` (portfolio, watchlist,
+intelligence projections, notifications, workspace, the persisted-object sync
+inventory, frozen view models, `ServiceRegistry`), put every OS question behind
+`optionspilot/host/` (capability profiles for `desktop`/`headless`/`web`/`ios`/
+`android` + an adapter), moved workspace state off `localStorage` onto the server,
+and added seven architecture guards — each verified to fail when deliberately
+broken. **It moved code; it did not rewrite it.** `UIServer` kept every method
+name and every wire shape. No trading-behaviour change, no new dependency, no new
+tab, no UI redesign, no test removed.
+
+**One shipped defect found and fixed:** `/api/learning` built its `WeightStore`
+from a CWD-relative `Path("data")`, so the Learning tab had been reading a
+different file from the engine for three milestones — on a real install one that
+does not exist, in a dev checkout whichever `./data/learning/weights.json` sat
+next to the process. The `effective` column came from the live scorer and was
+right, which is what hid it. **Three more were introduced by this milestone and
+caught before landing:** a bound method captured at construction (found by an
+existing test), a default tab id of `dash` where the frontend uses `dashboard`,
+and a declared `SyncDomain.WORKSPACE` with no entries.
+
+**Nine remaining platform blockers** are listed honestly in
+`ARCHITECTURE-PLATFORM.md` §7 — chart drawings are still `localStorage`-trapped,
+there is no API versioning / error envelope / idempotency / authentication, `/ws`
+is unenveloped, and notifications have no durable store.
+
+## Before that — V0.6.1, intelligent user experience & interactive onboarding
+
+1849 → a **1908-test suite** (+54); a new **135-check** headless-browser suite
 (`scripts/guide_check.py`). Full design: **`docs/ONBOARDING.md`**.
 
 **What it is.** By V0.6.0 the backend had become substantially more sophisticated
@@ -496,7 +535,32 @@ Deferred: stock/share positions (options only for now).
 
 ## Exact stopping point
 
-**2026-07-26, V0.5.2 Market Data & Chart Reliability (branch `v3-ui`,
+**2026-07-28, V0.7.0 Platform Foundation (branch `feature/v0.7`,
+uncommitted).** Two new packages exist and are wired: `optionspilot/host/`
+(`capabilities.py` — 13 `Capability` values and a `HostProfile` for each of
+`desktop`/`headless`/`web`/`ios`/`android`, the last three marked
+`implemented=False`; `adapter.py` — `HostAdapter`/`DesktopHost`/`HeadlessHost`
+plus the single-instance socket mutex moved out of `ui/desktop.py`) and
+`optionspilot/services/` (`viewmodels.py`, `portfolio.py`, `watchlist.py`,
+`intelligence.py`, `notifications.py`, `workspace.py`, `sync.py`,
+`registry.py`). `UIServer` constructs one `ServiceRegistry` and its methods
+delegate — every method name and wire shape is unchanged, except that a
+notification now additionally carries `severity` (purely additive).
+`config/runtime.py` gained `workspace_state()` / `set_workspace_state()`.
+`ui/server.py` lost ~180 lines of computation and gained three routes
+(`/api/workspace` GET/POST/DELETE, `/api/host`, `/api/diagnostics/sync`); four
+now-dead imports were removed. `index.html` gained one `window.Workspace` module
+(~110 lines) that mirrors localStorage writes up through a single
+`Storage.prototype.setItem` interception and adopts the server's copy when a
+profile has no workspace keys, plus one line in `switchTab`. New tests:
+`test_host.py`, `test_services_workspace.py`, `test_services_portfolio.py`,
+`test_services_notifications.py`, `test_services_endpoints.py`, and seven guards
+added to `test_architecture.py`. New script `scripts/workspace_check.py`, wired
+into `verify.ps1` as a sixth browser suite. 2027 tests green; 21/21 workspace,
+135/135 guide, 54/54 intelligence, 46/46 market-data, chart_check green,
+browser_check green, 88/88 stress, check_html_ids + check_docs green.
+
+**Previously: 2026-07-26, V0.5.2 Market Data & Chart Reliability (branch `v3-ui`,
 uncommitted).** The chart pipeline was traced end to end and instrumented before
 any code changed; both primary root causes were reproduced from evidence (a live
 `logs/data.log` line for the depth-clamp bug; a `chart_check.py` run for the
@@ -1068,7 +1132,15 @@ serving live data (see the current stopping point above).
 
 ## Next recommended task
 
-0. **Run the market-data manual QA** (`docs/QA_MARKET_DATA.md`, 84 checks).
+0. **Review V0.6.0, V0.6.1 and V0.7.0 and decide on the commits.** All three are
+   built, verified and uncommitted. `docs/TRADING_INTELLIGENCE.md`,
+   `docs/ONBOARDING.md` and `docs/ARCHITECTURE-PLATFORM.md` are the review
+   documents.
+0b. **Contract hardening** (`ARCHITECTURE-MOBILE.md` §18 items 1-3, 6): `/api/v1`
+   aliases, a normalized error envelope, idempotency keys on mutating endpoints,
+   the WebSocket envelope. Cheap while the server and its only client update in
+   lockstep; a migration the day one exists that cannot.
+1. **Run the market-data manual QA** (`docs/QA_MARKET_DATA.md`, 84 checks).
    Everything automatable is automated and green; what remains genuinely needs a
    human, market hours, and DevTools throttling. Sections F (degraded states)
    and D (history paging) carry the most value.

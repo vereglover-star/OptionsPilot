@@ -5,12 +5,116 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-28, end of V0.6.1 — intelligent user experience
-& interactive onboarding.
+**Last updated:** 2026-07-28, end of V0.7.0 — platform foundation &
+cross-platform architecture.
 
-## What was completed most recently? (V0.6.1 — intelligent UX & onboarding)
+## What was completed most recently? (V0.7.0 — platform foundation)
 
-1849 -> **1908 tests** (+54); a new **135-check** headless-browser suite
+1908 -> **2046 tests** (+138); a new **21-check** headless-browser suite
+(`scripts/workspace_check.py`, wired into `verify.ps1`). **Not committed.**
+Full design, decisions and remaining blockers: **`docs/ARCHITECTURE-PLATFORM.md`**
+— read it before touching `optionspilot/services/` or `optionspilot/host/`.
+
+**The one thing to understand:** OptionsPilot was already a client-server system
+that ships both halves in one process. What it lacked was a boundary between
+*the application* and *the desktop transport*. `ui/server.py` held FastAPI
+routing and, in the same 1,700 lines, the decisions about what a client is
+shown — which twelve of thirty-eight metrics are a headline, how a maximum
+drawdown is computed, what four buckets a pasted ticker list falls into. All
+correct, none of it reachable without importing a web framework. This milestone
+extracted that; **it moved code, it did not rewrite it.** `UIServer` kept every
+method name and every wire shape.
+
+**No trading-behaviour change, no new dependency, no new tab, no UI redesign,
+and no test removed.** `RiskManager` is still the only entry gate,
+`OrderManager` still the only execution path, and `orchestrator.run_cycle()` is
+still the only composition of a cycle.
+
+**New packages:**
+- `optionspilot/services/` — `PortfolioService`, `WatchlistService`,
+  `IntelligenceService`, `NotificationService`, `WorkspaceService`, `sync.py`
+  (the persisted-object inventory), `viewmodels.py`, `ServiceRegistry`.
+- `optionspilot/host/` — `capabilities.py` (declarative `HostProfile` per target,
+  including the three that do not exist yet) and `adapter.py` (`HostAdapter`,
+  `DesktopHost`, `HeadlessHost`).
+
+**New API:** `GET/POST/DELETE /api/workspace`, `GET /api/host`,
+`GET /api/diagnostics/sync`.
+
+> ### ⚠ Four things here are load-bearing — read before changing any of them
+>
+> 1. **`services/` may not import `ui/`, and may not import a web or GUI
+>    framework at all.** The second rule is the stronger one: `services/` could
+>    stay free of `optionspilot.ui` and still `import fastapi` for a response
+>    model, at which point a Flutter backend, a CLI or a test pulls a web server
+>    in to compute a win rate. Both are asserted, and both were verified to fail
+>    when deliberately broken.
+> 2. **`host/` is core-only, and a capability question is not a platform
+>    question.** `if not host.supports(Capability.TOAST)` survives a port; `if
+>    sys.platform == "win32"` is a bug on every platform that is not Windows and
+>    a silent one on most. A guard forbids the second outside `core/paths.py`,
+>    `host/` and `update/installer.py`.
+> 3. **The workspace service holds no second catalogue.** `tab` and indicator
+>    names are frontend vocabulary and are checked for type and length only —
+>    a Python copy would be the two-catalogue drift `ui/guide.py` exists to
+>    avoid. `timeframe` IS validated against `core.models.Timeframe`, because
+>    that value is handed straight back to `/api/candles` and an unparseable one
+>    502s.
+> 4. **`localStorage` is still the synchronous source; the server is the durable
+>    one.** `CH.sym`/`CH.tf`/`wlSort`/`tkChartOpen` are read at script-eval time,
+>    before any fetch resolves. Making the server synchronous would mean
+>    restructuring chart initialisation around an `await` in a 7,900-line file
+>    with no per-flow coverage. Writes mirror up; only a profile with NO
+>    workspace keys adopts the server's copy.
+
+> ### ⚠ One shipped defect found, and three introduced-then-caught
+>
+> **Shipped, for three milestones:** `/api/learning` built its `WeightStore`
+> from `Path("data") / "learning" / "weights.json"` — relative to the process
+> CWD, one of the hardcodes V0.4.4's storage split was meant to remove. The
+> engine reads the per-user root, so the Learning tab was reading a *different
+> file*: on a real install one that does not exist, and in a dev checkout
+> whichever `./data/learning/weights.json` sat next to the process. The
+> `effective` column came from the live scorer and really was right, which is
+> what made it look plausible. Regression test verified to fail against the old
+> code; `test_no_cwd_relative_storage_paths` now forbids the class.
+>
+> **Introduced by this milestone and caught before it landed:** a bound method
+> captured at construction (so a reassigned `_live_symbol_check` was silently
+> ignored — an existing test found it); a default tab id of `dash` where the
+> frontend uses `dashboard`; and a declared `SyncDomain.WORKSPACE` with no
+> entries, so the inventory report omitted the one domain the milestone built.
+
+**Honest limitations** (§7 of `ARCHITECTURE-PLATFORM.md` has all nine): chart
+drawings are still `localStorage`-trapped and are the last blocked domain; there
+is no API versioning, no error envelope, no idempotency keys and no
+authentication; `/ws` still pushes a raw unenveloped payload; notifications have
+no durable store; the tab is restored only on adoption, never on every launch
+(deliberate — resuming the last tab every launch would change desktop
+behaviour); `tkChartOpen` takes effect on the next launch rather than live; and
+`sidebar_collapsed` exists in the model with nothing writing it.
+
+**Verified:** 2046 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+`intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
+market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
+
+## What to do next
+
+Three candidates, in the order they would add most:
+
+1. **Review V0.6.0, V0.6.1 and V0.7.0 and decide on the commits.** None of the
+   three is committed. `docs/TRADING_INTELLIGENCE.md`, `docs/ONBOARDING.md` and
+   `docs/ARCHITECTURE-PLATFORM.md` are the review documents.
+2. **Contract hardening** — `ARCHITECTURE-MOBILE.md` §18 items 1-3 and 6:
+   `/api/v1` aliases, a normalized error envelope, idempotency keys on mutating
+   endpoints, and the WebSocket envelope. All cheap now and all expensive once
+   any client exists that cannot update in lockstep.
+3. **Sign the installer** (the plan already sits in `update/validation.py`) —
+   removes SmartScreen warnings and closes the updater's last security gap.
+
+## What was completed before that? (V0.6.1 — intelligent UX & onboarding)
+
+1849 -> a **1908-test suite** (+54); a new **135-check** headless-browser suite
 (`scripts/guide_check.py`, wired into `verify.ps1`). **Not committed.**
 Full design, decisions and limitations: **`docs/ONBOARDING.md`** — read it before
 touching `optionspilot/ui/guide.py` or the guided-onboarding block in
@@ -100,7 +204,7 @@ welcome dialog would otherwise sit over every assertion. `browser_check.py` is
 the deliberate exception — it *clicks* the dialog away, so the genuine
 first-launch path is covered rather than avoided.
 
-**Verified:** 1908 tests, 135/135 `guide_check`, 54/54 `intelligence_check`,
+**Verified at the time:** the then-1908-test suite, 135/135 `guide_check`, 54/54 `intelligence_check`,
 46/46 `marketdata_check`, `chart_check` green, `browser_check` +
 `check_html_ids` + `check_docs` green, plus screenshot review of the welcome
 screen, both tour styles, the help centre, the glossary, the guardrail and three
@@ -113,18 +217,6 @@ or synonyms ("IV" finds implied volatility, "vol" does not); a tour cannot
 recover from the user navigating away mid-step (Esc and restart is the recovery);
 and `when` predicates are evaluated at tour start, so a panel that appears
 *during* a tour gains its step only on a restart.
-
-## What to do next
-
-Three candidates, in the order they would add most:
-
-1. **Review V0.6.0 and V0.6.1 and decide on the commits.** Neither milestone is
-   committed. `docs/TRADING_INTELLIGENCE.md` and `docs/ONBOARDING.md` are the
-   review documents.
-2. **Sign the installer** (the plan already sits in `update/validation.py`) —
-   removes SmartScreen warnings and closes the updater's last security gap.
-3. **Run the 84-item market-data manual QA** (`docs/QA_MARKET_DATA.md`), which
-   has still never been done by hand.
 
 ## What was completed before that? (V0.6.0 — the Trading Intelligence Engine)
 

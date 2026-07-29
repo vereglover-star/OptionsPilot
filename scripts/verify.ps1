@@ -70,6 +70,10 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: guided onboarding & help UI check"
     & $python "$PSScriptRoot\guide_check.py" @browserArgs
     $results["Guided onboarding UI check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: server-owned workspace check"
+    & $python "$PSScriptRoot\workspace_check.py" @browserArgs
+    $results["Workspace persistence check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

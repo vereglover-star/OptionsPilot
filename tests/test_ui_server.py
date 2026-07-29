@@ -37,6 +37,10 @@ def client(tmp_path, monkeypatch):
 
 
 class TestStatusAPI:
+    def test_request_app_does_not_start_global_memory_tracing(self, client):
+        """Memory sampling belongs to the live runtime, never app creation."""
+        assert client.server._owns_memory_tracing is False
+
     def test_status_shape(self, client):
         s = client.get("/api/status").json()
         assert s["paper"] is True

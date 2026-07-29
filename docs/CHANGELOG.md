@@ -4,6 +4,122 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-28 — V0.7.0: platform foundation & cross-platform architecture
+
+*1908 → **2027 tests** (+119); a new **21-check** headless-browser suite
+(`scripts/workspace_check.py`, wired into `verify.ps1`). **No trading-behaviour
+change, no new runtime dependency, no new tab, no UI redesign, and no test
+removed.** Full design: `docs/ARCHITECTURE-PLATFORM.md`.*
+
+**The problem.** OptionsPilot was already a client-server system that happens to
+ship both halves in one process, but it had no boundary between *the application*
+and *the desktop transport*. `ui/server.py` held FastAPI routing and, in the same
+1,700 lines, the decisions about what a client should be shown: which twelve of
+thirty-eight metrics are a headline, how a maximum drawdown is computed, what
+four buckets a pasted list of tickers falls into, how many periods of a five-year
+series to ship. All of it correct — and none of it reachable without importing a
+web framework. A second client asking *"what is my max drawdown"* had exactly two
+options: import FastAPI, or recompute it. The second is how two screens come to
+disagree about one number, which is the failure this codebase has already paid
+for three times (`data/health.py` V0.5.3, the settings ranking V0.5.7, the guide
+catalogue V0.6.1).
+
+**What was built.**
+
+1. **`optionspilot/services/` — the platform-independent application layer.**
+   `PortfolioService` (positions, account, realised performance, P&L windows,
+   setup history), `WatchlistService` (parse/validate/edit and the four-bucket
+   classification), `IntelligenceService` (the snapshot projections),
+   `NotificationService`, `WorkspaceService`, `sync.py` (the persisted-object
+   inventory), `viewmodels.py` (frozen dataclasses of primitives) and
+   `ServiceRegistry` (the one place they are wired). Every service takes
+   injected, duck-typed collaborators and returns view models — the concrete
+   answer to *"if Flutter needed this tomorrow, what interface would it want?"*
+   **Nothing was rewritten**: `UIServer` kept every method name and every wire
+   shape, and the bodies delegate.
+
+2. **`optionspilot/host/` — the host platform abstraction.** `capabilities.py`
+   is data: a `HostProfile` per target (`desktop`, `headless`, `web`, `ios`,
+   `android`) over thirteen `Capability` values, with a stated *reason* for
+   every notable absence, and `implemented=False` on the three that do not
+   exist. `adapter.py` is behaviour: storage root, temp space, external URLs and
+   the single-instance lock (moved out of `ui/desktop.py`, same socket, same
+   port). The rule it enforces: a business-logic module may ask a **capability**
+   question, never an `sys.platform` question.
+
+3. **The workspace moved off `localStorage`.** Selected symbol, timeframe,
+   indicators, extended hours, auto-follow, watchlist sort, tab and saved
+   layouts now persist server-side through `RuntimeSettings`
+   (`GET/POST/DELETE /api/workspace`). `localStorage` remains the synchronous
+   fast path — `CH.sym` and friends are read at script-eval time, long before a
+   fetch can resolve — but the server is now the **durable** copy, and a profile
+   with no workspace keys adopts it. Proven the only way it can be:
+   `scripts/workspace_check.py` wipes `localStorage` in a real browser, reloads,
+   and asserts the symbol and timeframe **on screen**.
+
+4. **Synchronization boundaries, classified.** `services/sync.py` inventories 20
+   durable objects plus 2 still client-trapped, each with a `SyncDomain` and a
+   `SyncPolicy`. Nothing syncs anything — this is the classification that has to
+   exist *before* one could, and it is answerable today only because there is
+   exactly one device and it therefore cannot yet be wrong. Exposed at
+   `GET /api/diagnostics/sync`; `data/credentials.json` is the only `NEVER`.
+
+5. **Notifications gained a catalogue.** Thirteen kinds with severity and a
+   `pushable` flag deliberately orthogonal to it, six of them events V0.6.0 and
+   V0.6.1 already produced but which could only be discovered by polling.
+
+> ### ⚠ One real defect found and fixed, and it had shipped for three milestones
+>
+> `/api/learning` built its `WeightStore` from `Path("data") / "learning" /
+> "weights.json"` — **relative to the process working directory**, one of the
+> CWD-relative hardcodes V0.4.4's storage split was meant to eliminate. The
+> engine loads its learned weights from the per-user storage root, so the
+> Learning tab was reading a *different file*: on a real install, one that does
+> not exist (so it reported no learned weights however much the engine had
+> learned), and in a dev checkout, whichever `./data/learning/weights.json`
+> happened to be next to the process. The `effective` column came from the live
+> scorer and really was right, which is exactly what made it look plausible.
+> `tests/test_architecture.py::test_no_cwd_relative_storage_paths` now forbids
+> the whole class, and the regression test was verified to fail against the old
+> code.
+
+> ### ⚠ Three defects found by attacking this milestone's own work
+>
+> 1. **A bound method captured at construction.** `ServiceRegistry` first took
+>    `self._live_symbol_check` directly, so a later reassignment was silently
+>    ignored — an existing test caught it within minutes. The three overridable
+>    seams are bound late now.
+> 2. **A default that matched nothing.** The workspace's default tab was `dash`;
+>    the frontend's landing button is `dashboard`. Every fresh profile called
+>    `switchTab("dash")` and relied on that function's unknown-name early return
+>    to do nothing — harmless and wrong, which is the combination that survives
+>    review.
+> 3. **A declared sync domain with no entries.** `SyncDomain.WORKSPACE` was
+>    empty because every workspace fact had been folded into the
+>    `data/settings.json` PREFERENCES row, so `report()` omitted the domain
+>    entirely and the inventory read as complete while saying nothing about the
+>    one domain the milestone built. A domain with no entries is not evidence
+>    that nothing is in it.
+
+**Also fixed while attacking the frontend:** `typeof X` does not guard a `const`
+in its temporal dead zone (it throws), which would have made the first tab click
+of every session a console error; adoption echoed its own `localStorage` writes
+back to the server; and the "is this a fresh profile" check read `localStorage`
+*after* an `await`, so a user reaching the Charts tab mid-fetch would have made a
+genuinely fresh profile look established — on the one launch where adoption
+matters.
+
+**Seven new architecture guards**, each verified to fail when its invariant is
+deliberately broken: `services/` may not import `ui/`; `services/` and `host/`
+may import no web or GUI framework at all; `host/` stays core-only; no
+`sys.platform` branch outside `core/paths.py`, `host/` and `update/installer.py`;
+no CWD-relative storage path anywhere; every `AppPaths` file has a sync policy;
+every declared sync domain has at least one object.
+
+**Verified:** 2027 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+`intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
+market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
+
 ## [Uncommitted] 2026-07-28 — V0.6.1: intelligent user experience & interactive onboarding
 
 *1849 → **1908 tests** (+54); a new **135-check** headless-browser suite

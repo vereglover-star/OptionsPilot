@@ -209,6 +209,10 @@ class MarketDataService:
         #: served, which is a defect to chase rather than a cost to absorb.
         self._quarantines = 0
 
+    def close(self) -> None:
+        if self.cache is not None:
+            self.cache.close()
+
     # ── public API ───────────────────────────────────────────────────────────
 
     def get_history(self, symbol: str, timeframe: Timeframe,
