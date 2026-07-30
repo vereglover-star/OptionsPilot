@@ -333,9 +333,15 @@ def test_desktop_notifier_uses_the_action_capable_toast_adapter(monkeypatch):
 
         def show_toast(self, toast):
             self.sent.append(toast)
+    class FakeToast:
+        def __init__(self, actions=None):
+            self.actions = actions or []
+            self.text_fields = []
+            self.on_activated = None        
 
     monkeypatch.setattr(desktop_notify, "_AVAILABLE", True)
     monkeypatch.setattr(desktop_notify, "InteractableWindowsToaster", Interactable)
+    monkeypatch.setattr(desktop_notify, "Toast", FakeToast)
     notifier = desktop_notify.DesktopNotifier()
     notifier.send(NotificationEvent(
         kind="info", title="Test", body="Action", event_id="test-action",
