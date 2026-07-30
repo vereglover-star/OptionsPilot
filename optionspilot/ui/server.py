@@ -285,7 +285,12 @@ class UIServer:
 
     def _start_memory_monitoring(self) -> None:
         if not tracemalloc.is_tracing():
-            tracemalloc.start(10)
+            # ONE frame, not ten. The health check reads `get_traced_memory()`,
+            # which reports totals and never looks at a traceback; nothing in
+            # the application calls `take_snapshot()`. Ten frames per live
+            # allocation was pure overhead — paid on every allocation, for the
+            # whole life of a desktop session, to produce identical numbers.
+            tracemalloc.start(1)
             self._owns_memory_tracing = True
         self._health_memory_baseline = tracemalloc.get_traced_memory()[0]
 

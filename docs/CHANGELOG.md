@@ -4,6 +4,199 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] 2026-07-30 — V0.8.2 hotfix: the tray icon never appeared
+
+*+23 tests. One line of behaviour, one line of cause.*
+
+With the close deadlock fixed, closing the window worked: the dialog appeared,
+the window vanished, the process stayed alive, the runtime kept monitoring — and
+**no tray icon ever showed up**, in the dev build and the packaged exe alike, not
+even in the overflow.
+
+**Root cause.** `PystrayTray._run_icon` passed a custom `setup` callback to
+`pystray.Icon.run()` (added in V0.8.1 to close a genuine start/stop race). From
+pystray's own docstring:
+
+> *"If not specified, a simple setup function setting `visible` to `True` is
+> used. If you specify a custom setup function, you must explicitly set this
+> attribute."*
+
+It is an `if/else`, not an addition — `pystray/_base.py::_start_setup`:
+
+```python
+def setup_handler():
+    self.__queue.get()
+    if setup:
+        setup(self)          # ours: recorded "active", nothing else
+    else:
+        self.visible = True  # the ONLY path to _show()
+```
+
+`visible = True` is the sole caller of `_show()`, which is the sole caller of
+`Shell_NotifyIcon(NIM_ADD)`. So the adapter created a real `Icon`, started a real
+thread, entered a real Win32 message loop, reported `lifecycle_state == "active"`,
+raised no exception — and **never asked Windows for an icon**. Measured on the
+real stack, the old adapter issues `NIM_ADD` exactly **0 times**. The same gate
+silently disabled tooltip updates too: `Icon.title`'s setter only calls
+`_update_title()` `if self.visible`.
+
+**The second half of the bug, which mattered more.** `start()` returned `True`
+after *starting a thread*, not after the icon existed. The launcher stored that
+in `tray_started`, and `on_closing` uses `tray_started` to choose between hiding
+and exiting — so the app hid itself into a tray that had no icon. `start()` now
+waits for readiness and returns whether the icon is genuinely in the notification
+area; a failure means close-behaves-as-exit, which is wrong-but-visible rather
+than a disappearing application.
+
+**Also fixed while in there.** Failures were swallowed at `log.debug`/`log.warning`
+with no traceback and no way for a caller to ask what went wrong (`last_error`
+now exposes it, and the setup callback catches `BaseException` because it runs on
+*pystray's* thread, where an escape vanishes into the default excepthook).
+`Image.open` is lazy, so a corrupt icon failed on the tray thread after `start()`
+had already claimed success — the decode is now forced inside `start()`. Every
+menu entry was drawn as an empty **checkbox**, because `checked=` was passed
+unconditionally and pystray renders any non-`None` `checked` as one. And no item
+was marked `default`, so left-clicking the tray icon did nothing at all; `Open
+OptionsPilot` is now the default action.
+
+**Not the cause, checked anyway** (the questions this kind of bug invites):
+`run_detached()` is *not* required — on win32 it is literally
+`Thread(target=self._run).start()`, so calling it from our own thread would only
+add a thread we no longer hold a handle to. pystray performs **no COM
+initialisation** anywhere and needs none. pywebview does not own pystray's pump:
+`_win32._run` creates its own hidden window and its own thread message queue. And
+the `Icon` object is not garbage collected — the adapter holds `_icon` and the
+live tray thread's frame holds the same object (asserted by a `weakref` test).
+
+**Verified on real Windows, old vs repaired**, with `Shell_NotifyIcon` wrapped to
+capture the return value pystray discards:
+
+| | `start()` | `lifecycle_state` | `icon.visible` | `NIM_ADD` | `NIM_DELETE` on stop |
+|---|---|---|---|---|---|
+| V0.8.1 | True (thread only) | `active` | **False** | **0 calls** | False (nothing to remove) |
+| Repaired | True in 0.47 s | `active` | True | **1, returned True** | **returned True** |
+
+And end-to-end through the real application — real uvicorn, real `UIServer`, real
+pywebview/WebView2 window, real `WM_CLOSE`, real pystray — **17/17 steps**:
+window appears, tray icon added by the shell, X hides the window while the GUI
+thread keeps pumping, icon still present, restore works, five hide/restore cycles
+add no second icon, exit removes the icon (`NIM_ADD` count == `NIM_DELETE` count),
+no orphan icon, no zombie process, no non-daemon thread left.
+
+**Tests added** (`tests/test_desktop_tray.py`): the fake `pystray.Icon` now models
+the real contract — `run(setup)` does **not** show the icon — because a fake that
+showed it on `run` is exactly why this shipped. Covers: the icon reaches the
+notification area; `start()` is False until it does; the thread stays alive; the
+`Icon` survives a `gc.collect()`; repeated start reuses one icon; hide/restore
+cycles leave it alone; stop removes it and ends the thread; a missing icon file, a
+corrupt one, an unshowable one and a loop that dies immediately each surface a
+real error instead of a silent "healthy".
+
+## [Uncommitted] 2026-07-30 — V0.8.2: independent audit of the V0.8/V0.8.1 runtime
+
+*2056 → **2065 tests** (+9). No new feature, no new dependency, no architectural
+change. An independent audit of every V0.8/V0.8.1 change, treating the previous
+certification as an unverified claim.*
+
+**The headline defect: clicking X froze the app, and the tests said it was fine.**
+
+pywebview binds its `closing` event as `Event(window, should_lock=True)`, which
+means handlers run **synchronously on the WinForms message pump**, inside
+`Form.FormClosing`. `_DesktopController.on_closing` did three things that cannot
+be done from there:
+
+* `window.evaluate_js(...)` — WebView2's `ExecuteScriptAsync` continuation is
+  scheduled on `syncContextTaskScheduler`, i.e. that same message pump, and
+  pywebview then calls `semaphore.acquire()` with **no timeout**. Called from the
+  pump, the release can never arrive. Unbreakable deadlock, no traceback, white
+  title bar, "Not Responding" — exactly the reported symptom, and on the branch a
+  **fresh install takes by default** (`close_behavior="tray"` with the close
+  prompt not yet dismissed).
+* `server.close()` and `tray.stop()` — up to five and two seconds of thread
+  joins. Windows ghosts a window that stops pumping for five.
+* `window.destroy()` — re-entrant `Form.Close()` from inside `FormClosing`.
+
+`on_closing` now *decides* and returns; every consequence runs on a worker
+(`_defer`). The class docstring records the thread-ownership rule, because the
+rule is invisible from the call site.
+
+**Why the tests missed it.** `tests/test_desktop_tray.py`'s window double was a
+plain recorder: `evaluate_js` appended a string, `close()` returned instantly.
+It modelled none of the thread contract, so a guaranteed deadlock passed — and
+`test_disabled_tray_close_exits_instead_of_hiding_an_orphan_process` actively
+asserted the blocking behaviour by requiring `server.closed == 1` *inside* the
+handler. The double now raises `GuiThreadViolation` (a `BaseException`, because
+the lifecycle code wraps these calls in `except Exception` and a real deadlock is
+not catchable) when a pump-hostile call arrives on the closing thread.
+
+**Other defects found and fixed.**
+
+* **`Restart` could not work.** `exit()` spawned the successor *before* releasing
+  the single-instance port, so the new process lost the race to its own parent
+  and greeted the user with "OptionsPilot is already running". The lock is now
+  released first, and the mutex retries briefly to absorb the overlap.
+* **A frozen build restarted itself wrongly.** `[sys.executable, *sys.argv]` in a
+  PyInstaller build passes the exe its own path as `argv[1]`.
+* **Two implementations of the single-instance mutex.** `ui/desktop.py` carried
+  its own copy of the socket lock *and* its own copy of port 8786, duplicating
+  `host.adapter.DesktopHost` — the drift class this codebase has paid for three
+  times. The launcher now asks the host.
+* **The one maintenance slot admitted several workers.** `start_maintenance`
+  checked `job.running` and then started a thread that claimed the slot *later* —
+  a check-then-act, measured admitting 8 of 8 concurrent requests. Two concurrent
+  cache rebuilds is the exact thing one slot exists to prevent. `job.claim()` is
+  now atomic, and it also fixes the flaky `test_progress_is_reported_and_ends_at_one`
+  (which read a job that had been accepted but had not yet begun) and a
+  cancellation silently discarded by validation's second `begin`.
+* **A WebSocket client could stall every HTTP request in the process.** The v1
+  `/api/v1/ws` loop called `server.status_payload()` — which takes `UIServer.lock`
+  — directly on the asyncio event loop. FastAPI gives the synchronous REST
+  handlers a threadpool for free; an `async def` handler gets no such thing. Now
+  `asyncio.to_thread`.
+* **`hello.accepted` carried `"timestamp": null`** in every fresh session: it read
+  the last health check, which is null until the first six-hourly sweep.
+* **The idempotency store held an open SQLite write transaction across the
+  callback** — and one of those callbacks is an update check that talks to GitHub.
+  The lock still spans the callback (that *is* the contract); the connection no
+  longer does.
+* **`tracemalloc.start(10)`** stored ten stack frames per live allocation for the
+  whole life of a desktop session, to feed a health field that only ever calls
+  `get_traced_memory()`. Nothing calls `take_snapshot()`. Now `start(1)`.
+
+**Tests added** (`tests/test_runtime_lifecycle.py`, new): a full session
+(start → hide → restore → pause → resume → exit) leaves no worker thread behind;
+five restart cycles produce exactly one scheduler and no duplicated task; shutdown
+stays bounded when a callback wedges; a permanently failing task gets one retry,
+not a hot loop. Nothing previously asserted any of this, though "no thread leaks"
+and "no scheduler duplication" were both certification criteria.
+
+**Verified on the real stack, before and after.** A harness
+(`scratchpad/live_close_harness.py`, not shipped) runs the real `launch()` — real
+uvicorn, real `UIServer`, real pystray tray, real pywebview/WebView2 window, real
+`events.closing` wiring — posts a real `WM_CLOSE` (byte-for-byte what the X
+button sends) and polls
+`SendMessageTimeout(WM_NULL, SMTO_ABORTIFHUNG|SMTO_BLOCK)`, the same predicate the
+shell uses to decide a window is not responding:
+
+| Branch | V0.8.1 handler | Repaired handler |
+|---|---|---|
+| `tray` + prompt not dismissed (**a fresh install's default**) | pump dead for the whole 40 s budget, window never closed | pump stalled **0.0 s**, dialog raised, window responsive |
+| `exit` | closed in 1.1 s, no measurable stall | closed in **1.14 s**, pump stalled 0.0 s, `launch()` returned cleanly |
+| `tray` + prompt dismissed | — | hid to tray, pump stalled 0.0 s |
+
+The deadlock reproduced exactly as reported and is gone. Note the honest detail:
+on the `exit` branch the old code was **not** observably broken in this
+environment — shutdown happened to be fast. The blocking-shutdown hazard there is
+real by construction (up to 7 s of thread joins against the 5 s the shell ghosts
+a window at) but its worst case did not trigger in the measurement, so that part
+of the fix is defensive rather than demonstrated.
+
+**Remaining gap.** No human has clicked the button, and the audit environment's
+windows are not on the interactive desktop, so the *visual* symptom (white title
+bar, shell ghost frame) was never on screen to observe — only the message-pump
+condition underneath it, which is what produces it. One manual click on a real
+desktop closes this out.
+
 ## [Uncommitted] 2026-07-28 — V0.7.0: platform foundation & cross-platform architecture
 
 *1908 → **2027 tests** (+119); a new **21-check** headless-browser suite

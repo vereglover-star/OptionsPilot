@@ -3,9 +3,50 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-28, after **V0.7.0 — platform foundation &
-cross-platform architecture** (branch `feature/v0.7`, uncommitted). 1908 →
-**2027 tests** (+119); a new **21-check** headless-browser suite
+**Last updated:** 2026-07-30, after the **V0.8.2 independent audit** of the
+V0.8/V0.8.1 runtime (branch `feature/v0.7`, uncommitted). 2056 → **2065 tests**
+(+9). Full detail: **`docs/CHANGELOG.md`**, `[Uncommitted] 2026-07-30 — V0.8.2`.
+
+## Exact stopping point
+
+The audit is complete and every automated suite is green: 2065 pytest tests,
+`browser_check` (9 tabs, zero console errors), `chart_check`, `marketdata_check`
+46/46, `guide_check` 135/135, `workspace_check` 21/21, `intelligence_check`
+54/54, `marketdata_stress` 88/88, `check_html_ids` 254/254, `check_docs`,
+`api_contract_check`, `pip check`.
+
+**Ten defects were found in V0.8/V0.8.1 and fixed at the root.** The headline one
+— the reported close-button freeze — is an unbreakable deadlock caused by calling
+`window.evaluate_js` from pywebview's `closing` handler, which runs on the
+WinForms message pump; WebView2 schedules the continuation that would release its
+semaphore on that same pump. It is on the branch a fresh install takes by
+default. The other nine (broken `Restart`, a frozen build relaunching itself
+wrongly, a duplicated single-instance mutex, a maintenance slot that admitted 8
+of 8 concurrent workers, a WebSocket handler that could stall every HTTP request,
+a null protocol timestamp, a SQLite transaction held across a network call, and
+tracemalloc storing ten frames per allocation for nothing) are listed in the
+changelog with their root causes.
+
+The close defect was **reproduced and then re-verified fixed on the real stack**
+— real uvicorn, real `UIServer`, real pystray, real pywebview/WebView2, a real
+`WM_CLOSE`, with `SendMessageTimeout(WM_NULL, SMTO_ABORTIFHUNG|SMTO_BLOCK)` as
+the responsiveness probe. On the branch a fresh install takes by default, the old
+handler left the pump dead for the whole 40 s budget with the window never
+closing; the repaired handler stalls the pump 0.0 s, raises the dialog, and
+closes in 1.14 s on the `exit` branch with `launch()` returning cleanly. It is
+also covered by regression tests whose doubles reject the old code.
+
+**Next recommended task: one manual click of the X button on a real desktop.**
+What the audit could not cover is a human mouse click and the *visual* symptom —
+this environment's windows are not on the interactive desktop, so the white title
+bar and shell ghost frame were never on screen to observe, only the pump
+condition underneath them. **Tray Restart** deserves the same one-minute pass:
+its fix (release the single-instance lock before spawning the successor) is
+unit-tested but has never been run end to end.
+
+## Previously: V0.7.0 — platform foundation
+
+1908 → **2027 tests** (+119); a new **21-check** headless-browser suite
 (`scripts/workspace_check.py`). Full design: **`docs/ARCHITECTURE-PLATFORM.md`**.
 
 **What it is.** OptionsPilot was already a client-server system that ships both

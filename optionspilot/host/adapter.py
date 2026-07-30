@@ -24,6 +24,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -132,21 +133,29 @@ class DesktopHost(HostAdapter):
     def temp_dir(self) -> Path:
         return Path(tempfile.gettempdir())
 
-    def acquire_single_instance(self):
+    def acquire_single_instance(self, attempts: int = 5, delay: float = 0.2):
         """Hold a loopback port for the process lifetime as a mutex.
 
         Two instances sharing one SQLite paper account is corruption waiting to
         happen. A bound socket is used rather than a lock file because a lock
         file survives a hard kill and a socket does not — a crashed instance
         must never lock the user out of their own app.
+
+        Retried briefly because "Restart" launches the successor from the
+        outgoing process and the two necessarily overlap. The parent releases
+        the port before spawning, so the retries only absorb scheduling jitter;
+        a genuine second instance still gives up in about a second.
         """
-        lock = socket.socket()
-        try:
-            lock.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
-            return lock
-        except OSError:
-            lock.close()
-            return None
+        for attempt in range(max(1, attempts)):
+            lock = socket.socket()
+            try:
+                lock.bind(("127.0.0.1", SINGLE_INSTANCE_PORT))
+                return lock
+            except OSError:
+                lock.close()
+                if attempt < attempts - 1:
+                    time.sleep(delay)
+        return None
 
     def set_startup(self, enabled: bool, command: str) -> bool:
         if sys.platform != "win32":

@@ -12,6 +12,8 @@ because every one of them sits on a path where an OS refusal is a normal state.
 from __future__ import annotations
 
 import socket
+import threading
+import time
 
 import pytest
 
@@ -154,6 +156,38 @@ class TestAdapters:
         second = host.acquire_single_instance()
         assert second is not None
         second.close()
+
+    def test_the_mutex_waits_out_a_departing_predecessor(self, tmp_path):
+        """"Restart" spawns the successor from the outgoing process.
+
+        The two overlap by however long the parent needs to unwind, so a
+        single-attempt bind turned an ordinary restart into "OptionsPilot is
+        already running" — the successor lost the race to its own parent.
+        """
+        host = DesktopHost(tmp_path)
+        outgoing = host.acquire_single_instance()
+        if outgoing is None:
+            pytest.skip(f"port {SINGLE_INSTANCE_PORT} already held by a real app")
+        threading.Timer(0.3, outgoing.close).start()
+        successor = host.acquire_single_instance()
+        try:
+            assert successor is not None, "the successor never got the port"
+        finally:
+            if successor is not None:
+                successor.close()
+
+    def test_a_genuine_second_instance_is_still_refused_promptly(self, tmp_path):
+        """Retrying must not turn "already running" into a long stall."""
+        host = DesktopHost(tmp_path)
+        held = host.acquire_single_instance()
+        if held is None:
+            pytest.skip(f"port {SINGLE_INSTANCE_PORT} already held by a real app")
+        try:
+            started = time.monotonic()
+            assert host.acquire_single_instance() is None
+            assert time.monotonic() - started < 3.0
+        finally:
+            held.close()
 
     def test_describe_carries_no_user_data(self, tmp_path):
         """`describe()` is diagnostics-safe by contract; anything a user is

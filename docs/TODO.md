@@ -5,6 +5,29 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [ ] **Click the X button on a real desktop, once.** The only thing the V0.8.2
+      audit could not cover. The deadlock was reproduced and verified fixed
+      against the real stack with a real `WM_CLOSE` (old: pump dead 40s, window
+      never closes; new: 0.0s stall, closes in 1.14s), but nobody clicked the
+      button by hand and the audit environment's windows are not on the
+      interactive desktop, so the visual symptom was never on screen. Same
+      one-minute pass for **tray Restart** (fix is unit-tested, never run end to
+      end) and tray Exit.
+- [x] **V0.8.2 Independent audit of the V0.8/V0.8.1 runtime** — done
+      2026-07-30. Ten defects found and fixed at the root, headed by the
+      close-button freeze: pywebview runs `closing` handlers on the WinForms
+      message pump, and `on_closing` called `evaluate_js`, whose WebView2
+      continuation is scheduled on that same pump behind an untimed
+      `semaphore.acquire()`. Also: `Restart` could never work, a frozen build
+      relaunched itself with its own path as `argv[1]`, the single-instance mutex
+      existed twice, the one maintenance slot admitted 8 of 8 concurrent
+      workers, an `async def` WebSocket handler could stall every HTTP request,
+      `hello.accepted` sent a null timestamp, the idempotency store held a SQLite
+      write transaction across a network call, and `tracemalloc` stored ten
+      frames per allocation to feed a field that reads none. 2056 → 2065 tests,
+      new `tests/test_runtime_lifecycle.py` (nothing previously asserted "no
+      thread leaks" or "no scheduler duplication", both certification criteria).
+      Root causes and reasoning: `docs/CHANGELOG.md`.
 - [x] **V0.7.0 Platform foundation & cross-platform architecture** — done
       2026-07-28. The desktop UI stopped owning application logic. New
       `optionspilot/services/` (portfolio, watchlist, intelligence projections,

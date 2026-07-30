@@ -250,7 +250,11 @@ def register_v1_routes(app: FastAPI, server) -> None:
             "version": "v1",
             "type": "hello.accepted",
             "message_id": uuid.uuid4().hex,
-            "timestamp": server.runtime_payload()["health"].get("last_check"),
+            # Protocol time, not the last health check — which is null until the
+            # first six-hourly sweep runs, so every hello in a fresh session
+            # carried `"timestamp": null` while every other frame carried a real
+            # one.
+            "timestamp": utc_timestamp(),
             "data": {
                 "server_capabilities": sorted(SERVER_CAPABILITIES),
                 "negotiated_capabilities": list(negotiated),
@@ -259,10 +263,20 @@ def register_v1_routes(app: FastAPI, server) -> None:
             "meta": {"request_id": request_id},
         })
         last_digest = ""
+
+        def read_status() -> tuple[dict, str]:
+            payload = server.status_payload()
+            return payload, json.dumps(payload, sort_keys=True, default=str)
+
         try:
             while True:
-                payload = server.status_payload()
-                digest = json.dumps(payload, sort_keys=True, default=str)
+                # OFF THE EVENT LOOP. `status_payload` takes `UIServer.lock`,
+                # which a background scan can hold for seconds, and serialising
+                # it is real CPU. The synchronous REST handlers get a threadpool
+                # from FastAPI for free; an `async def` websocket does not, so
+                # calling it inline stalled every other request in the process
+                # for as long as the lock was held.
+                payload, digest = await asyncio.to_thread(read_status)
                 if digest != last_digest:
                     last_digest = digest
                     kind = "status.snapshot"

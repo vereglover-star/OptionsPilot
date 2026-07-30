@@ -10,8 +10,16 @@ from optionspilot.notify.base import NotificationEvent, Notifier
 
 log = get_logger("ui")
 
+# Always bind optional platform symbols.  Desktop tests and alternate hosts can
+# then replace the adapter deliberately, while a minimal server installation
+# remains a harmless log-only notification sink.
+InteractableWindowsToaster = None
+Toast = None
 try:
-    from windows_toasts import InteractableWindowsToaster, Toast, WindowsToaster
+    from windows_toasts import InteractableWindowsToaster as _InteractableWindowsToaster
+    from windows_toasts import Toast as _Toast
+    InteractableWindowsToaster = _InteractableWindowsToaster
+    Toast = _Toast
     _AVAILABLE = True
 except Exception:  # pragma: no cover - environment-dependent
     _AVAILABLE = False
@@ -23,7 +31,7 @@ class DesktopNotifier(Notifier):
     def __init__(self, app_name: str = "OptionsPilot"):
         self._action_handler = None
         self._toaster = None
-        if _AVAILABLE:
+        if _AVAILABLE and InteractableWindowsToaster is not None:
             try:
                 # WindowsToaster silently drops ToastButton actions.  The
                 # platform-neutral action contract requires the interactable

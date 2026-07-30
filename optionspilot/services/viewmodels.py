@@ -160,7 +160,12 @@ class WatchlistEditView(ViewModel):
     error: str | None = None
 
     def to_dict(self) -> dict:
-        doc = super().to_dict()
+        # ``@dataclass(slots=True)`` can replace the class object on Python
+        # versions used by CI, making zero-argument ``super()`` retain the
+        # pre-transform class cell.  Call the stable serialization boundary
+        # explicitly; this preserves the legacy wire rule without coupling it
+        # to dataclass implementation details.
+        doc = ViewModel.to_dict(self)
         if doc.get("error") is None:
             doc.pop("error")     # absent, not null — the pre-V0.7.0 wire shape
         return doc

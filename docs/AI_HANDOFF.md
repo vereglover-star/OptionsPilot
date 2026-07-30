@@ -584,7 +584,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2046 tests as of this writing, all passing)
+# Tests (2079 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -593,9 +593,31 @@ python -m venv .venv
 
 `scripts/build_exe.ps1` refuses to build over a running instance (open
 SQLite handles) and backs up/restores `dist\OptionsPilot\data\` around the
-PyInstaller `--clean` wipe. The exe has a single-instance guard
-(`ui/desktop.py`) — a second launch shows a friendly "already running"
-window instead of corrupting the shared account database.
+PyInstaller `--clean` wipe. The app has a single-instance guard — a bound
+loopback socket on port 8786, owned by `host.adapter.DesktopHost` and reached
+from `ui/desktop.py` via `current_host()` (**one** implementation: it existed
+twice until V0.8.2). A second launch shows a friendly "already running" window
+instead of corrupting the shared account database.
+
+**Desktop thread ownership (V0.8.2) — read before touching `ui/desktop.py`.**
+pywebview binds its `closing` event as `Event(window, should_lock=True)`, which
+means handlers run **synchronously on the WinForms message pump**, inside
+`Form.FormClosing`. Three things are therefore forbidden inside
+`_DesktopController.on_closing`:
+
+| Operation | Why it cannot run on the pump |
+|---|---|
+| `window.evaluate_js` | WebView2 schedules the `ExecuteScriptAsync` continuation on `syncContextTaskScheduler` — the same pump — and pywebview then blocks on an **untimed** `semaphore.acquire()`. Deadlock, no traceback. |
+| `window.hide` / `window.show` / `window.destroy` | All marshal through `Control.Invoke`, which needs the pump. |
+| `server.close()` / `tray.stop()` | Up to 5s and 2s of thread joins. Windows ghosts a window that stops pumping for 5s. |
+
+`on_closing` **decides and returns**; every consequence runs on a worker via
+`_defer`. The other callbacks — tray menu items (pystray's thread), the JS bridge
+(pywebview spawns a thread per call), toast activations, and `refresh_tray` (the
+background runtime) — are already off the pump and may call these directly.
+`tests/test_desktop_tray.py`'s window double raises `GuiThreadViolation` (a
+`BaseException`, so the lifecycle code's `except Exception` cannot swallow it) if
+this is violated.
 
 **Release pipeline (V0.4.5).** Releases are automated by GitHub Actions:
 `.github/workflows/ci.yml` (push/PR: pytest + selftest + doc/id checks, reusable)
@@ -679,7 +701,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2046 tests cover this
+   exercises the FastAPI layer via `TestClient` (2079 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

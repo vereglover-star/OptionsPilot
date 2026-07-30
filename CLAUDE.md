@@ -698,6 +698,54 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   domain entirely — and the inventory looked complete while saying nothing about
   the one domain V0.7.0 built. A test now asserts every declared domain has at
   least one object.
+- **A GUI event handler is not just "code that runs late" — it is code that runs
+  ON the message pump.** pywebview binds `window.events.closing` as
+  `Event(window, should_lock=True)`, so handlers execute **synchronously on the
+  WinForms thread**, inside `Form.FormClosing`. `_DesktopController.on_closing`
+  called `window.evaluate_js` there. WebView2 runs `ExecuteScriptAsync` and
+  schedules its continuation on `syncContextTaskScheduler` — that same pump —
+  then pywebview blocks on an **untimed** `semaphore.acquire()`. The release can
+  never arrive. That is the whole V0.8.1 "clicking X freezes it, white title bar,
+  Not Responding, no traceback" report, and the default preferences send a fresh
+  install straight down that branch. `window.hide/show/destroy` are the same
+  hazard through `Control.Invoke`, and `server.close()` + `tray.stop()` hold the
+  pump for ~7s of thread joins, which alone is past the 5s the shell ghosts a
+  window at. **A close handler decides and returns; the work goes to a worker.**
+- **Replacing a library's default callback silently discards what the default
+  DID.** `pystray.Icon.run(setup=...)` is an if/else: supply a `setup` and you
+  lose `self.visible = True`, which is the only path to `_show()`, which is the
+  only caller of `Shell_NotifyIcon(NIM_ADD)`. V0.8.1 added a custom `setup` to
+  close a real start/stop race and thereby shipped a tray that could never
+  appear — `Icon` constructed, thread alive, message loop running,
+  `lifecycle_state == "active"`, no exception, and **zero** `NIM_ADD` calls. The
+  same gate silently killed tooltip updates (`Icon.title` only refreshes `if
+  self.visible`). When you override a hook, go and read what the default body
+  did; a library's default is usually load-bearing.
+- **`start()` must mean the thing STARTED, not that a thread was created.** The
+  tray's `start()` returned True after `Thread.start()`, the launcher stored that
+  in `tray_started`, and `on_closing` uses `tray_started` to decide between
+  hiding and exiting — so the app hid itself into a tray with no icon. A boolean
+  that a caller will act on must describe the observable end state, and where the
+  end state is asynchronous, waiting for it is the honest implementation. The
+  failure mode of lying is never "a smaller bug"; it is a *different, worse* bug
+  in whatever acted on the lie.
+- **A test double that models timing but not THREADS proves nothing about a GUI.**
+  The entire suite passed over a guaranteed deadlock because `tests/test_desktop_tray.py`'s
+  window was a recorder — `evaluate_js` appended a string and returned — and one
+  test *asserted the blocking behaviour* by requiring `server.closed == 1` inside
+  the handler. Two rules came out of it: the double now knows which thread it is
+  on, and it raises a **`BaseException`**, because the lifecycle code legitimately
+  wraps these calls in `except Exception` (a window that has already gone must not
+  break shutdown) and an ordinary exception was silently swallowed by the very
+  code under test — a guard that passed while testing nothing.
+- **"Check then start a thread that claims the slot" is not claiming the slot.**
+  `MarketDataControl.start_maintenance` tested `job.running` and then spawned a
+  worker that called `job.begin()` — measured, 8 of 8 simultaneous requests were
+  accepted, against a single slot whose entire purpose is that two concurrent
+  cache rebuilds cannot happen. The tell was a *flaky test*: `wait_for_job` polled
+  a job that had been accepted but had not yet begun, saw `running == False`, and
+  read the previous job's 0% progress. A flaky concurrency test is usually a real
+  race wearing a costume.
 - PyInstaller only bundles what it can see in literal `import` statements.
   A lazy `importlib.import_module("...")` (added for startup speed in
   `f1bae42`) silently dropped yfinance from every exe built afterwards —

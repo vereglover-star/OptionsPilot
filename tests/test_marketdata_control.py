@@ -25,6 +25,7 @@ Groups:
 from __future__ import annotations
 
 import json
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -580,6 +581,51 @@ class TestMaintenance:
             assert result["job"]["action"] == ACTION_VALIDATE
         finally:
             control.job.finish({})
+
+    def test_the_slot_is_claimed_before_the_worker_starts(self, scripted):
+        """``start_maintenance`` must return with the job already running.
+
+        It used to let the worker thread claim the slot, so for a few
+        microseconds after accepting an action the job still reported
+        ``running == False`` and described the PREVIOUS one. A poller reading
+        that window saw a finished job with 0% progress.
+        """
+        control = scripted()
+        accepted = control.start_maintenance(ACTION_VERIFY_CACHE)
+        assert accepted["ok"]
+        assert accepted["job"]["state"] == "running"
+        assert accepted["job"]["action"] == ACTION_VERIFY_CACHE
+        wait_for_job(control)
+
+    def test_two_simultaneous_requests_cannot_both_run(self, scripted):
+        """One slot means one worker. The old check-then-act let both through.
+
+        Threads are released together so both calls sit in the same instant the
+        race needed; exactly one must be refused.
+        """
+        control = scripted()
+        gate = threading.Barrier(8)
+        outcomes: list[dict] = []
+        lock = threading.Lock()
+
+        def attempt():
+            gate.wait()
+            result = control.start_maintenance(ACTION_VERIFY_CACHE)
+            with lock:
+                outcomes.append(result)
+
+        threads = [threading.Thread(target=attempt) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(20)
+        wait_for_job(control)
+
+        accepted = [r for r in outcomes if r.get("ok")]
+        refused = [r for r in outcomes if "error" in r]
+        assert len(accepted) == 1, f"{len(accepted)} workers claimed one slot"
+        assert len(refused) == 7
+        assert all("is still running" in r["error"] for r in refused)
 
     def test_progress_is_reported_and_ends_at_one(self, scripted):
         control = scripted()

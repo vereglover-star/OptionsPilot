@@ -404,6 +404,17 @@ into long-term memory:
 
 Lessons the project has actually hit, not hypothetical ones:
 
+- **A green test suite is evidence about the doubles, not about the platform.**
+  On 2026-07-30 an audit found that clicking the window's X button deadlocked the
+  process outright — pywebview runs `closing` handlers on the WinForms message
+  pump, and the handler called `evaluate_js`, which waits on a semaphore that only
+  that pump can release. The whole suite passed over it, because the window double was
+  a recorder that knew nothing about threads, and one test had actively enshrined
+  the blocking behaviour as its contract. **When a defect is reported from real
+  use and the tests disagree, the tests are describing a different system. Go and
+  read the platform's source — the answer was in `webview/event.py` and
+  `webview/platforms/edgechromium.py`, forty lines apart.** Full mechanism:
+  `CLAUDE.md` "Known traps", and `_DesktopController`'s class docstring.
 - **A halted account bypassing risk gates via a code path that "looks"
   gated but isn't wired up.** Concretely: on 2026-07-16 a session added
   `RiskManager.approve_manual_entry` and `OrderManager.evaluate`'s

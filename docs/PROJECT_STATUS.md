@@ -6,7 +6,7 @@ are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
 **Last verified:** 2026-07-28, **V0.7.0 — platform foundation &
-cross-platform architecture**. Full **2046-test** `pytest` suite green (+138),
+cross-platform architecture**. Full **2079-test** `pytest` suite green (+140),
 HTML-id + doc checks green, `scripts/marketdata_stress.py` **88/88** offline,
 `scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
 `scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
@@ -14,7 +14,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2046 tests run against canned
+against its real API with a real key — all 2079 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -365,7 +365,43 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. **Fixed in V0.7.0:** `/api/learning` read its `WeightStore` from a
+None open. **Fixed in V0.8.2** (independent audit of V0.8/V0.8.1; each found by
+reading the platform's own source, each covered by a regression test verified
+against the old code):
+
+1. **Clicking X froze the app.** pywebview binds `closing` as
+   `Event(should_lock=True)`, so the handler runs on the WinForms message pump.
+   `on_closing` called `evaluate_js`, whose WebView2 continuation is scheduled on
+   that same pump behind an untimed `semaphore.acquire()` — an unbreakable
+   deadlock on the branch a fresh install takes by default. It also ran the whole
+   shutdown (up to 7s of thread joins) and a re-entrant `window.destroy()` there.
+   The handler now decides and returns; the work runs on a worker.
+2. **`Restart` was broken**: the successor was spawned before the single-instance
+   port was released, so it lost the race to its own parent.
+3. **A frozen build relaunched itself with its own path as `argv[1]`.**
+4. **Two implementations of the single-instance mutex** (`ui/desktop.py` and
+   `host/adapter.py`), each with its own copy of port 8786.
+5. **The one maintenance slot admitted several workers** — a check-then-act,
+   measured admitting 8 of 8 concurrent requests. This also caused the
+   intermittent `test_progress_is_reported_and_ends_at_one` failure.
+6. **A WebSocket client stalled every HTTP request** in the process: the
+   `async def` v1 socket handler called the lock-taking `status_payload()`
+   directly on the event loop.
+7. `hello.accepted` sent `"timestamp": null`; the idempotency store held an open
+   SQLite write transaction across a network call; `tracemalloc` kept ten stack
+   frames per allocation to feed a field that never reads them.
+
+Defect 1 was **reproduced and then re-verified on the real stack** (real
+uvicorn + `UIServer` + pystray + pywebview/WebView2, a real `WM_CLOSE`, and
+`SendMessageTimeout(SMTO_ABORTIFHUNG)` as the responsiveness probe): on the
+default branch the old handler left the pump dead for the whole 40 s budget with
+the window never closing; the repaired handler stalls the pump **0.0 s** and
+closes in 1.14 s on the `exit` branch. **Outstanding:** nobody has clicked the
+button by hand, and the audit environment's windows are not on the interactive
+desktop, so the visual symptom itself was never on screen — only the pump
+condition that causes it.
+
+**Fixed in V0.7.0:** `/api/learning` read its `WeightStore` from a
 CWD-relative `Path("data")`, so the Learning tab reported the wrong learned
 weights on every real install (the `effective` column came from the live scorer
 and was right, which is what hid it). Regression test verified against the old
@@ -447,7 +483,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2046 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
+**2079 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), `scripts/chart_check.py` (65 chart, drawing and history

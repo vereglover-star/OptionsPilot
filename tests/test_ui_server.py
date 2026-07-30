@@ -332,6 +332,7 @@ class TestWatchlistAPI:
         r = self.add(client, "aapl")
         assert r["added"] == ["AAPL"]
         assert "Apple" in r["names"]["AAPL"]
+        assert "error" not in r  # retain the established successful wire shape
         assert client.get("/api/watchlist").json()["watchlist"] == ["SPY", "AAPL"]
 
     def test_bulk_add_mixed_separators(self, client):

@@ -47,19 +47,27 @@ class IdempotencyStore:
                 callback: Callable[[], Any]) -> tuple[Any, bool]:
         if not key:
             return callback(), False
-        with self._lock, self._session() as db:
-            row = db.execute(
-                "SELECT result_json FROM idempotency_records WHERE operation=? AND key=?",
-                (operation, key)).fetchone()
+        # `_lock` spans the callback because "execute once per key" is the whole
+        # contract. The SQLite connection deliberately does NOT: a mutation can
+        # be an update check that talks to GitHub, and holding an open write
+        # transaction across a network round trip blocks every other connection
+        # to this file until its ten-second busy timeout expires.
+        with self._lock:
+            with self._session() as db:
+                row = db.execute(
+                    "SELECT result_json FROM idempotency_records "
+                    "WHERE operation=? AND key=?", (operation, key)).fetchone()
             if row is not None:
                 return json.loads(row[0]), True
             result = callback()
             encoded = json.dumps(result, default=str, separators=(",", ":"))
-            db.execute("INSERT INTO idempotency_records(operation,key,result_json) VALUES(?,?,?)",
-                       (operation, key, encoded))
-            db.execute("""DELETE FROM idempotency_records WHERE rowid IN (
-                SELECT rowid FROM idempotency_records ORDER BY rowid DESC
-                LIMIT -1 OFFSET ?)""", (self._limit,))
+            with self._session() as db:
+                db.execute("INSERT OR REPLACE INTO idempotency_records"
+                           "(operation,key,result_json) VALUES(?,?,?)",
+                           (operation, key, encoded))
+                db.execute("""DELETE FROM idempotency_records WHERE rowid IN (
+                    SELECT rowid FROM idempotency_records ORDER BY rowid DESC
+                    LIMIT -1 OFFSET ?)""", (self._limit,))
             return result, False
 
     def close(self) -> None:

@@ -24,6 +24,10 @@ class TrayMenuItem:
     enabled: bool = True
     checked: bool = False
     separator: bool = False
+    #: The item a plain left-click / double-click on the icon invokes. Without
+    #: one, clicking a Windows tray icon does nothing at all and the menu is
+    #: reachable only by right-click.
+    default: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,7 +94,21 @@ class NullTray(TrayAdapter):
 
 
 class PystrayTray(TrayAdapter):
+    """The Windows tray icon.
+
+    ``start()`` returns True only when the icon is actually **in the
+    notification area**, not merely when a thread has been created. That
+    distinction is the whole point: V0.8.1 returned True for "I started a
+    thread", the desktop controller believed the tray existed, and closing the
+    window hid it into a tray that was never there.
+    """
+
     available = True
+
+    #: How long ``start`` waits for the icon to appear. The setup callback runs
+    #: as soon as pystray's message loop is up, so this is normally
+    #: milliseconds; the ceiling only bounds a pathological startup.
+    READY_TIMEOUT = 10.0
 
     def __init__(self, icon_path: str | Path, name: str = "OptionsPilot"):
         self.icon_path = Path(icon_path)
@@ -101,7 +119,16 @@ class PystrayTray(TrayAdapter):
         self._status = TrayStatus(tooltip=name)
         self._lock = threading.RLock()
         self._stop_requested = threading.Event()
+        #: Set once the icon is visible, has failed, or its loop has exited —
+        #: whichever happens first. `start` must never wait on a dead thread.
+        self._ready = threading.Event()
+        self._ready_error: BaseException | None = None
         self._lifecycle_state = "stopped"
+
+    @property
+    def last_error(self) -> BaseException | None:
+        with self._lock:
+            return self._ready_error
 
     @property
     def lifecycle_state(self) -> str:
@@ -117,7 +144,13 @@ class PystrayTray(TrayAdapter):
         except Exception:
             return False
 
-    def start(self) -> bool:  # pragma: no cover - requires desktop session
+    def start(self) -> bool:
+        """Create the icon and wait until it is really in the notification area.
+
+        Blocking is deliberate. A tray adapter that answers "yes" before the
+        icon exists hands every caller a claim it cannot check, and the desktop
+        controller acts on that claim by hiding the only window.
+        """
         with self._lock:
             if self._lifecycle_state == "active":
                 return True
@@ -125,7 +158,10 @@ class PystrayTray(TrayAdapter):
                 return False
             self._lifecycle_state = "starting"
             self._stop_requested.clear()
+            self._ready.clear()
+            self._ready_error = None
         if not self.supported():
+            log.warning("system tray unsupported: pystray/Pillow unavailable")
             with self._lock:
                 self._lifecycle_state = "unavailable"
             return False
@@ -134,22 +170,49 @@ class PystrayTray(TrayAdapter):
 
         try:
             image = Image.open(self.icon_path)
+            # `Image.open` only reads the header; decoding is lazy. Force it
+            # here so a missing or corrupt icon fails in the caller's hands
+            # with a real traceback, rather than on the tray thread later.
+            image.load()
+        except Exception as exc:
+            log.exception("system tray icon could not be loaded from %s",
+                          self.icon_path)
+            with self._lock:
+                self._icon = None
+                self._ready_error = exc
+                self._lifecycle_state = "unavailable"
+            return False
+
+        try:
             with self._lock:
                 self._icon = pystray.Icon(
                     self.name, image, self._status.tooltip, self._build_menu())
                 icon = self._icon
             self._thread = threading.Thread(
-                target=self._run_icon, args=(icon,), name="system-tray", daemon=True)
+                target=self._run_icon, args=(icon,), name="system-tray",
+                daemon=True)
             self._thread.start()
-            return True
         except Exception as exc:
-            log.warning("system tray unavailable: %s", exc)
+            log.exception("system tray could not be started")
             with self._lock:
                 self._icon = None
+                self._ready_error = exc
                 self._lifecycle_state = "unavailable"
             return False
 
-    def _run_icon(self, icon) -> None:  # pragma: no cover - requires desktop session
+        if not self._ready.wait(self.READY_TIMEOUT):
+            log.error("system tray did not appear within %.0fs — treating it "
+                      "as unavailable", self.READY_TIMEOUT)
+            with self._lock:
+                self._lifecycle_state = "unavailable"
+            return False
+        with self._lock:
+            if self._ready_error is not None:
+                log.error("system tray failed to appear: %r", self._ready_error)
+                return False
+            return self._lifecycle_state == "active"
+
+    def _run_icon(self, icon) -> None:
         """Own pystray readiness and the start/stop hand-off in one thread.
 
         ``Icon.stop`` issued before ``Icon.run`` reaches its setup callback can
@@ -157,23 +220,52 @@ class PystrayTray(TrayAdapter):
         closes that start/stop race and guarantees the sole tray thread exits.
         """
         def ready(ready_icon) -> None:
-            with self._lock:
-                stopping = self._stop_requested.is_set()
-                if not stopping:
+            try:
+                with self._lock:
+                    stopping = self._stop_requested.is_set()
+                if stopping:
+                    ready_icon.stop()
+                    return
+                # THE line this whole subsystem turns on. pystray's default
+                # setup callback is exactly `self.visible = True`, and passing
+                # a custom `setup` REPLACES it rather than adding to it
+                # (pystray/_base.py::_start_setup). `visible = True` is the
+                # only path to `_show()`, which is the only caller of
+                # Shell_NotifyIcon(NIM_ADD). Without it the Icon exists, the
+                # message loop runs, every status read says "healthy", and no
+                # icon is ever added to the notification area — which is
+                # exactly how V0.8.1 shipped.
+                ready_icon.visible = True
+                with self._lock:
                     self._lifecycle_state = "active"
-            if stopping:
-                ready_icon.stop()
+            except BaseException as exc:  # noqa: BLE001 - reported, not hidden
+                log.exception("system tray icon could not be shown")
+                with self._lock:
+                    self._ready_error = exc
+                    self._lifecycle_state = "unavailable"
+            finally:
+                # Always release `start`, including on the stop-during-start
+                # path, so it can never wait out its timeout on a thread that
+                # has already decided not to run.
+                self._ready.set()
 
         try:
             icon.run(setup=ready)
-        except Exception:
-            log.debug("system tray loop stopped with an error", exc_info=True)
+        except BaseException as exc:  # noqa: BLE001 - reported, not hidden
+            log.exception("system tray loop stopped with an error")
+            with self._lock:
+                if self._ready_error is None:
+                    self._ready_error = exc
+                self._lifecycle_state = "unavailable"
         finally:
             with self._lock:
                 if self._icon is icon:
                     self._icon = None
                 if self._lifecycle_state != "unavailable":
                     self._lifecycle_state = "stopped"
+            # A loop that exits before ever becoming ready must not leave
+            # `start` blocked for the full timeout.
+            self._ready.set()
 
     def stop(self) -> None:  # pragma: no cover - requires desktop session
         with self._lock:
@@ -221,9 +313,13 @@ class PystrayTray(TrayAdapter):
             if item.separator:
                 entries.append(pystray.Menu.SEPARATOR)
                 continue
+            # `checked` must stay None for a plain command. pystray renders any
+            # item with a non-None `checked` as a CHECKBOX, so the previous
+            # unconditional lambda drew an empty checkbox beside every entry.
+            checked = (lambda _item: True) if item.checked else None
             entries.append(pystray.MenuItem(
                 item.label, invoke(item), enabled=item.enabled,
-                checked=lambda _item, value=item.checked: value,
+                checked=checked, default=item.default,
             ))
         return pystray.Menu(*entries)
 

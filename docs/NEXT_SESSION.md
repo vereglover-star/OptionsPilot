@@ -5,12 +5,70 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-28, end of V0.7.0 — platform foundation &
-cross-platform architecture.
+**Last updated:** 2026-07-30, end of the V0.8.2 independent audit of the
+V0.8/V0.8.1 runtime.
 
-## What was completed most recently? (V0.7.0 — platform foundation)
+## What was completed most recently? (V0.8.2 — independent audit)
 
-1908 -> **2046 tests** (+138); a new **21-check** headless-browser suite
+2056 -> **2079 tests** (+9). **Not committed.** No feature, no dependency, no
+architectural change: an audit of every V0.8/V0.8.1 change that treated the
+previous certification as an unverified claim. Full detail:
+**`docs/CHANGELOG.md`**, entry `[Uncommitted] 2026-07-30 — V0.8.2`.
+
+**The one thing to understand.** The reported "clicking X freezes the app" was
+real, reproducible from first principles, and *caused by a thread-ownership rule
+that is invisible at the call site*. pywebview binds its `closing` event as
+`Event(window, should_lock=True)` — handlers run **synchronously on the WinForms
+message pump**. `_DesktopController.on_closing` called `window.evaluate_js`,
+which posts a script to WebView2 and blocks on a semaphore released by a
+continuation scheduled on *that same pump*. From the pump it can never arrive:
+untimed `semaphore.acquire()`, no traceback, white title bar, "Not Responding".
+The default preferences (`close_behavior="tray"`, prompt not yet dismissed) send
+a fresh install straight down that branch. `on_closing` now decides and returns;
+every consequence runs on a worker via `_defer`. **Read
+`_DesktopController`'s class docstring before touching anything in that file.**
+
+**Why the whole suite did not catch it.** The window double in
+`tests/test_desktop_tray.py` was a plain recorder — `evaluate_js` appended a
+string — so it modelled none of the thread contract, and one test actively
+asserted the blocking behaviour (`server.closed == 1` *inside* the handler). The
+double now raises `GuiThreadViolation`, a **`BaseException`** (the lifecycle code
+wraps these calls in `except Exception`, and a real deadlock is not catchable),
+whenever a pump-hostile call arrives on the closing thread.
+
+**Also fixed:** `Restart` could never work (successor spawned before the
+single-instance port was released); a frozen build relaunched itself with its own
+path as `argv[1]`; two implementations of the single-instance mutex with two
+copies of port 8786; the one maintenance slot admitted 8 of 8 concurrent workers
+(a check-then-act, and the cause of the intermittent
+`test_progress_is_reported_and_ends_at_one` failure); an `async def` WebSocket
+handler called the lock-taking `status_payload()` on the event loop and could
+stall every HTTP request in the process; `hello.accepted` sent
+`"timestamp": null`; the idempotency store held a SQLite write transaction across
+a network call; `tracemalloc` kept ten frames per allocation for a field that
+reads none.
+
+**New file:** `tests/test_runtime_lifecycle.py` — nothing previously asserted
+"no thread leaks" or "no scheduler duplication", both of which were certification
+criteria.
+
+### Do this first
+
+**Click the X button on a real desktop, once.** The close path was reproduced
+broken and then verified fixed against the *real* stack (real uvicorn, real
+`UIServer`, real pystray, real pywebview/WebView2, a real `WM_CLOSE`, with
+`SendMessageTimeout(SMTO_ABORTIFHUNG)` as the probe): old handler = pump dead for
+40 s and the window never closes; new handler = pump stalls 0.0 s, closes in
+1.14 s. What is *not* covered is a human mouse click, and the visual symptom
+itself — the audit environment's windows are not on the interactive desktop, so
+the white title bar was never on screen to look at, only the pump condition that
+produces it. Also worth the same one-minute pass: **tray Restart** (its fix — the
+instance lock is now released before the successor spawns — is unit-tested but
+never run end to end) and **tray Exit**.
+
+## What was completed before that? (V0.7.0 — platform foundation)
+
+1908 -> **2079 tests** (+140); a new **21-check** headless-browser suite
 (`scripts/workspace_check.py`, wired into `verify.ps1`). **Not committed.**
 Full design, decisions and remaining blockers: **`docs/ARCHITECTURE-PLATFORM.md`**
 — read it before touching `optionspilot/services/` or `optionspilot/host/`.
@@ -94,7 +152,7 @@ no durable store; the tab is restored only on adoption, never on every launch
 behaviour); `tkChartOpen` takes effect on the next launch rather than live; and
 `sidebar_collapsed` exists in the model with nothing writing it.
 
-**Verified:** 2046 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+**Verified:** 2079 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
 `intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
 market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
 
