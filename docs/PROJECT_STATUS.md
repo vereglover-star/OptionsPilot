@@ -483,7 +483,33 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2083 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
+**2083 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+
+### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
+
+Measured with `pytest --cov` over `optionspilot/` only: **15,519 statements,
+1,320 missed, 91.49% line coverage**. `fail_under = 91` in `pyproject.toml`
+is the ratchet — CI fails on any drop below it. The threshold is the
+measured number floored to an integer, never an aspiration; raise it when
+coverage genuinely improves, and justify any lowering in a commit message.
+
+Until V0.9.0-C4 this project had never measured coverage at all, so "2083
+tests passing" carried no information about how much of the code those
+tests reach. It now does, and the answer is better than the audit assumed.
+
+Line coverage, not branch coverage: enabling branches will lower the
+percentage and must come with a re-measured threshold.
+
+Weakest modules, as a queue rather than a complaint — `core/logging_setup.py`
+(37%), `__main__.py` (42%), `data/yfinance_adapter.py` (60%), `ui/api_v1.py`
+(65%), `update/ui.py` (68%), `ui/desktop.py` (72%). Two of these are already
+scheduled: `ui/api_v1.py` is rewritten in V0.9.3, and `ui/desktop.py` gains
+a testable `DesktopApplication` in V0.9.1.
+
+Coverage runs in CI only, not in `scripts/test.ps1` or `verify.ps1` — it
+costs ~30s on a ~95s suite, and a slower inner loop gets run less often.
+
+Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), `scripts/chart_check.py` (65 chart, drawing and history

@@ -59,8 +59,22 @@ jobs:
       - name: Lint (ruff)
         run: ruff check optionspilot tests scripts
 
-      - name: Run test suite
-        run: pytest
+      # The suite runs WITH coverage here and without it locally: the ratchet
+      # (`fail_under` in pyproject.toml) is what turns a test count into a
+      # signal, and it is only meaningful if it runs on every change. A drop
+      # below the recorded baseline fails the build.
+      - name: Run test suite (with coverage ratchet)
+        run: pytest --cov --cov-report=term --cov-report=xml
+
+      # Kept even when the suite fails: a coverage drop is far easier to
+      # diagnose from the report than from the one-line fail_under message.
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.xml
+          if-no-files-found: warn
 
       - name: Selftest (storage layout + lazy-import bundle gate)
         run: python -m optionspilot selftest

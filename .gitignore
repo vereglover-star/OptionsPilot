@@ -10,6 +10,14 @@ OptionsPilot.spec
 config.local.yaml
 .pytest_cache/
 
+# Coverage measurement output (V0.9.0-C4). The ratchet threshold lives in
+# pyproject.toml; these are per-run artifacts and CI uploads coverage.xml
+# as a build artifact rather than committing it.
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
 .Rhistory
 
 # Inno Setup installer build output
