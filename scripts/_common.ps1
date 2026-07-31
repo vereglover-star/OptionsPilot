@@ -29,8 +29,21 @@ function Ensure-Environment {
         if ($LASTEXITCODE -ne 0) { throw "python -m venv failed" }
     }
     $spec = ".[$($Extras -join ',')]"
-    Write-Step "Ensuring dependencies ($spec)"
-    & $venvPython -m pip install -q -e $spec
+    # Version-locked install. This function is the ONLY dependency install on
+    # the release path (release.yml -> build.ps1 -> here), so an unconstrained
+    # install here means the shipped executable is built against whatever
+    # resolved that day, however carefully CI is pinned. pyproject.toml still
+    # decides which packages are needed; requirements-lock.txt only decides
+    # which version. Missing lock = fall back rather than fail, so a fresh
+    # clone that has not fetched it can still bootstrap.
+    $lock = Join-Path $RepoRoot "requirements-lock.txt"
+    if (Test-Path $lock) {
+        Write-Step "Ensuring dependencies ($spec, version-locked)"
+        & $venvPython -m pip install -q -e $spec -c $lock
+    } else {
+        Write-Step "Ensuring dependencies ($spec, UNLOCKED - requirements-lock.txt not found)"
+        & $venvPython -m pip install -q -e $spec
+    }
     if ($LASTEXITCODE -ne 0) { throw "pip install -e $spec failed" }
     return $venvPython
 }

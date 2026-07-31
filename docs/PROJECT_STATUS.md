@@ -14,7 +14,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2079 tests run against canned
+against its real API with a real key — all 2083 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -483,7 +483,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2079 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
+**2083 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
 console errors), `scripts/chart_check.py` (65 chart, drawing and history

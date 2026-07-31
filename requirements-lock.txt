@@ -1,0 +1,123 @@
+# OptionsPilot dependency lock (pip constraints format).
+#
+# WHY THIS FILE EXISTS
+# pyproject.toml declares floors only ("pandas>=2.2"), so an unconstrained
+# install resolves whatever is newest that day. A release built on Monday and
+# the "same" release rebuilt on Friday could ship different libraries. This
+# file pins the exact set that the test suite was last verified green against,
+# so a build is reproducible and an upstream release cannot ship itself to
+# users through a tag push.
+#
+# HOW IT IS APPLIED
+# As a pip *constraints* file, never as a requirements file:
+#     pip install -e ".[dev,ui]" -c requirements-lock.txt
+# pyproject.toml stays the source of truth for WHICH packages are needed;
+# this file only decides WHICH VERSION of them is installed. A pin for a
+# package nobody requests is inert, which is what keeps one lock correct on
+# both Windows and Linux: the Windows-only entries below (pythonnet, pystray,
+# pywin32-ctypes, clr_loader, ...) simply never install on a Linux runner.
+#
+# WHY CONSTRAINTS AND NOT A HASH-PINNED LOCKFILE
+# `pip install -e .` is incompatible with `--require-hashes`, and every
+# workflow in this repo (dev, CI, release, the PyInstaller build) is built on
+# an editable install. A hash-pinned lock would mean giving that up. Known
+# limitation, stated plainly: a NEW transitive dependency that appears in a
+# future upstream release is not listed here and would float until this file
+# is regenerated. Constraints bound the versions of what is already known,
+# not the shape of the dependency graph.
+#
+# HOW TO REGENERATE
+# Only from an environment whose full test suite is green — this file is a
+# record of a verified state, not a wish:
+#     .venv\Scripts\python -m pytest          # must pass first
+#     .venv\Scripts\python -m pip freeze --exclude-editable
+# Sort the result and replace the block below. `--exclude-editable` matters:
+# without it pip emits the project itself as a VCS URL and the lock becomes
+# self-referential. tests/test_release_tooling.py::TestDependencyLock checks
+# that this file and pyproject.toml never disagree about a direct dependency.
+#
+# Verified green: 2079 tests, Python 3.12, Windows.
+
+PyYAML==6.0.3
+Pygments==2.20.0
+Windows-Toasts==1.3.1
+altgraph==0.17.5
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.14.1
+attrs==26.1.0
+beautifulsoup4==4.15.0
+bottle==0.13.4
+certifi==2026.6.17
+cffi==2.1.0
+charset-normalizer==3.4.9
+click==8.4.2
+clr_loader==0.3.1
+colorama==0.4.6
+curl_cffi==0.15.0
+fastapi==0.139.0
+greenlet==3.5.3
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1
+idna==3.18
+iniconfig==2.3.0
+jsonschema-path==0.5.0
+jsonschema-specifications==2025.9.1
+jsonschema==4.26.0
+lazy-object-proxy==1.12.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
+multitasking==0.0.13
+numpy==2.5.1
+openapi-schema-validator==0.9.0
+openapi-spec-validator==0.9.0
+packaging==26.2
+pandas==3.0.3
+pathable==0.6.0
+peewee==4.1.2
+pefile==2024.8.26
+pillow==12.3.0
+platformdirs==4.10.0
+playwright==1.61.0
+pluggy==1.6.0
+protobuf==7.35.1
+proxy_tools==0.1.0
+pycparser==3.0
+pydantic-settings==2.14.2
+pydantic==2.13.4
+pydantic_core==2.46.4
+pyee==13.0.1
+pyinstaller-hooks-contrib==2026.6
+pyinstaller==6.21.0
+pystray==0.19.5
+pytest==9.1.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+pythonnet==3.1.0
+pytz==2026.2
+pywebview==6.2.1
+pywin32-ctypes==0.2.3
+referencing==0.37.0
+requests==2.34.2
+rfc3339-validator==0.1.4
+rich==15.0.0
+rpds-py==2026.6.3
+setuptools==83.0.0
+six==1.17.0
+soupsieve==2.8.4
+starlette==1.3.1
+typing-inspection==0.4.2
+typing_extensions==4.16.0
+tzdata==2026.3
+urllib3==2.7.0
+uvicorn==0.51.0
+watchfiles==1.2.0
+websockets==16.1
+winrt-Windows.Data.Xml.Dom==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.UI.Notifications==3.2.1
+winrt-runtime==3.2.1
+yfinance==1.5.1

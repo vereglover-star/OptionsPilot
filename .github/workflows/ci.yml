@@ -37,12 +37,22 @@ jobs:
         with:
           python-version: "3.12"          # project requires >=3.12; matrix can be added later
           cache: pip
-          cache-dependency-path: pyproject.toml
+          # Both files decide what gets installed now — pyproject.toml which
+          # packages, requirements-lock.txt which versions — so both belong in
+          # the cache key. Keying on pyproject alone would reuse a stale cache
+          # after a lock-only change.
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-lock.txt
 
-      - name: Install project (dev + ui extras)
+      # `-c requirements-lock.txt` pins every version to the set the suite was
+      # last verified green against. pyproject.toml still decides WHICH
+      # packages are installed; the lock only decides which version, so a
+      # Windows-only pin is inert on a Linux runner.
+      - name: Install project (dev + ui extras, version-locked)
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,ui]"
+          pip install -e ".[dev,ui]" -c requirements-lock.txt
 
       - name: Run test suite
         run: pytest
