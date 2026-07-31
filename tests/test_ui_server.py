@@ -37,6 +37,10 @@ def client(tmp_path, monkeypatch):
 
 
 class TestStatusAPI:
+    def test_request_app_does_not_start_global_memory_tracing(self, client):
+        """Memory sampling belongs to the live runtime, never app creation."""
+        assert client.server._owns_memory_tracing is False
+
     def test_status_shape(self, client):
         s = client.get("/api/status").json()
         assert s["paper"] is True
@@ -328,6 +332,7 @@ class TestWatchlistAPI:
         r = self.add(client, "aapl")
         assert r["added"] == ["AAPL"]
         assert "Apple" in r["names"]["AAPL"]
+        assert "error" not in r  # retain the established successful wire shape
         assert client.get("/api/watchlist").json()["watchlist"] == ["SPY", "AAPL"]
 
     def test_bulk_add_mixed_separators(self, client):

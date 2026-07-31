@@ -121,7 +121,11 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
     failures: list[str] = []
 
     def check(cond: bool, label: str) -> None:
-        print(("  ok   " if cond else "  FAIL ") + label)
+        # A live UI string can contain Unicode while Windows stdout is still
+        # cp1252.  Preserve the failed assertion rather than crashing while
+        # formatting its diagnostic.
+        message = ("  ok   " if cond else "  FAIL ") + label
+        print(message.encode("ascii", "backslashreplace").decode("ascii"))
         if not cond:
             failures.append(label)
 
@@ -726,7 +730,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             del_ok = page.evaluate("() => DRAW.items.length") == n_before_del - 1
             check(drawn and selected and recolor_ok and width_ok and dup_ok and
                   lock_ok and hide_ok and del_ok,
-                  "toolbar actions via REAL MOUSE (draw→select→recolour/width/dup/lock/hide/delete)")
+                  "toolbar actions via REAL MOUSE (draw->select->recolour/width/dup/lock/hide/delete)")
             page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
             page.click('#ch-tools button[data-tool="trend"]')  # disarm the tool if still armed
             page.evaluate("() => chSetTool(null)")
@@ -1123,7 +1127,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.unroute("**/api/candles*", hang_route)
             page.evaluate("() => { window.__chFetchTimeoutMs = 0; }")
             check(timed_out_to_error and recovered,
-                  "hung backend → bounded-timeout error overlay (not a permanent spinner), then auto-recovers")
+                  "hung backend -> bounded-timeout error overlay (not a permanent spinner), then auto-recovers")
             page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
 
             # 33. Rapid symbol switching ABORTS superseded fetches instead of

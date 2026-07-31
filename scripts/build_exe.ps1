@@ -41,6 +41,8 @@ if (Test-Path $dataDir) {
   --add-data "optionspilot\ui\static;optionspilot\ui\static" `
   --add-data "optionspilot\data_assets;optionspilot\data_assets" `
   --collect-all webview `
+  --collect-all pystray `
+  --collect-all PIL `
   --collect-all yfinance `
   --collect-submodules optionspilot `
   --hidden-import uvicorn.logging `

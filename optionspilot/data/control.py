@@ -238,21 +238,48 @@ class MaintenanceJob:
         #: thread) would leave the provider's counters half-written.
         self._cancel = threading.Event()
 
+    def claim(self, action: str) -> bool:
+        """Take the single slot atomically, or report that it is taken.
+
+        The slot used to be taken by the worker thread's own ``begin`` call,
+        which left a window between accepting an action and the job reporting
+        itself as running. In that window a second request read ``running ==
+        False`` and started a *second* worker — two concurrent cache rebuilds,
+        which is exactly what one slot exists to prevent — and the dict handed
+        back to the caller described the previous, idle job.
+        """
+        with self._lock:
+            if self._state == "running":
+                return False
+            self._begin_locked(action, 1)
+        self._cancel.clear()
+        return True
+
     def begin(self, action: str, total: int) -> None:
         with self._lock:
-            self._state = "running"
-            self._action = action
-            self._step = "Starting…"
-            self._done = 0
-            self._total = max(1, total)
-            self._lines = []
-            self._summary = {}
-            self._error = ""
-            self._started = _time.time()
-            self._finished = 0.0
+            continuing = self._state == "running" and self._action == action
+            self._begin_locked(action, total)
         # Cleared here rather than in `cancel()`, so a cancellation arriving
-        # between two runs cannot silently apply to the next one.
-        self._cancel.clear()
+        # between two runs cannot silently apply to the next one. A worker
+        # re-declaring the total of the job it is ALREADY running (validation
+        # does this once it knows how many pairs it found) is a continuation,
+        # not a new run, and must not discard a cancellation the user has
+        # already asked for in the meantime.
+        if not continuing:
+            self._cancel.clear()
+
+    def _begin_locked(self, action: str, total: int) -> None:
+        """Reset to a running job. Caller holds ``_lock``."""
+        self._state = "running"
+        self._action = action
+        self._step = "Starting…"
+        self._done = 0
+        self._total = max(1, total)
+        self._lines = []
+        self._summary = {}
+        self._error = ""
+        self._started = _time.time()
+        self._finished = 0.0
 
     def cancel(self) -> bool:
         """Ask the running action to stop at its next checkpoint."""
@@ -940,7 +967,10 @@ class MarketDataControl:
         if action not in ALL_ACTIONS:
             return {"error": f"unknown maintenance action {action!r} "
                              f"(known: {', '.join(ALL_ACTIONS)})"}
-        if self.job.running:
+        # Claim the slot BEFORE spawning the worker. Checking `job.running` and
+        # then starting a thread that claims it later is a check-then-act: two
+        # clicks landing together both passed, and both ran.
+        if not self.job.claim(action):
             running = self.job.as_dict()
             # Naming the action matters more than it looks: "Re-measure
             # capabilities" probes every provider at every depth and takes
@@ -953,7 +983,13 @@ class MarketDataControl:
                     "job": running}
         thread = threading.Thread(target=self._run_maintenance, args=(action,),
                                   name=f"marketdata-{action}", daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            # A claimed slot with no worker behind it would block every later
+            # action for the life of the process.
+            self.job.fail(f"could not start the maintenance worker: {exc}")
+            return {"error": f"could not start '{action}': {exc}"}
         return {"ok": True, "action": action, "job": self.job.as_dict()}
 
     def maintenance_status(self) -> dict:

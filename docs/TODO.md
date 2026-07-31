@@ -5,6 +5,62 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [ ] **Click the X button on a real desktop, once.** The only thing the V0.8.2
+      audit could not cover. The deadlock was reproduced and verified fixed
+      against the real stack with a real `WM_CLOSE` (old: pump dead 40s, window
+      never closes; new: 0.0s stall, closes in 1.14s), but nobody clicked the
+      button by hand and the audit environment's windows are not on the
+      interactive desktop, so the visual symptom was never on screen. Same
+      one-minute pass for **tray Restart** (fix is unit-tested, never run end to
+      end) and tray Exit.
+- [x] **V0.8.2 Independent audit of the V0.8/V0.8.1 runtime** — done
+      2026-07-30. Ten defects found and fixed at the root, headed by the
+      close-button freeze: pywebview runs `closing` handlers on the WinForms
+      message pump, and `on_closing` called `evaluate_js`, whose WebView2
+      continuation is scheduled on that same pump behind an untimed
+      `semaphore.acquire()`. Also: `Restart` could never work, a frozen build
+      relaunched itself with its own path as `argv[1]`, the single-instance mutex
+      existed twice, the one maintenance slot admitted 8 of 8 concurrent
+      workers, an `async def` WebSocket handler could stall every HTTP request,
+      `hello.accepted` sent a null timestamp, the idempotency store held a SQLite
+      write transaction across a network call, and `tracemalloc` stored ten
+      frames per allocation to feed a field that reads none. 2056 → 2065 tests,
+      new `tests/test_runtime_lifecycle.py` (nothing previously asserted "no
+      thread leaks" or "no scheduler duplication", both certification criteria).
+      Root causes and reasoning: `docs/CHANGELOG.md`.
+- [x] **V0.7.0 Platform foundation & cross-platform architecture** — done
+      2026-07-28. The desktop UI stopped owning application logic. New
+      `optionspilot/services/` (portfolio, watchlist, intelligence projections,
+      notifications, workspace, sync inventory, frozen view models,
+      `ServiceRegistry`) and `optionspilot/host/` (capability profiles per
+      target + OS adapter). Workspace state moved off `localStorage` onto the
+      server (`GET/POST/DELETE /api/workspace`); `GET /api/host` and
+      `GET /api/diagnostics/sync` added. Seven new architecture guards, each
+      verified to fail when deliberately broken. 1908 → 2027 tests, new 21-check
+      `scripts/workspace_check.py`. **Fixed a three-milestone-old defect:**
+      `/api/learning` read its `WeightStore` from a CWD-relative `Path("data")`,
+      so the Learning tab reported the wrong learned weights on every real
+      install. Full design + the nine remaining platform blockers:
+      `docs/ARCHITECTURE-PLATFORM.md`.
+- [ ] **Contract hardening for a second client** (`ARCHITECTURE-MOBILE.md` §18
+      items 1-3, 6). `/api/v1` aliases, a normalized `{"error": {...}}`
+      envelope, `Idempotency-Key` on mutating endpoints, and the
+      `{type, v, seq, data}` WebSocket envelope. All four are cheap while the
+      server and its only client update in lockstep, and all four become
+      migrations the day a client exists that cannot. Nothing in V0.7.0 depends
+      on them; they are the next thing that gets more expensive by waiting.
+- [ ] **Move chart drawings server-side.** The last client-trapped domain
+      (`localStorage: chDraw:<symbol>`, `{version:3, items:[…]}`) — recorded in
+      `services/sync.CLIENT_TRAPPED`. Needs a real one-time import path and a
+      migration, not a default: these are user work-product and shipping half of
+      it would risk the annotations it is meant to protect. Also
+      desktop-improving on its own (drawings would survive a WebView reset).
+- [ ] **A durable notification store.** `NotificationService` routes and
+      catalogues; history is still the `NotificationCenter`'s in-memory ring of
+      200, so a restart loses unread items and a device that was asleep cannot
+      catch up. Already flagged as H5 in `ROADMAP-V3-UX.md`; V0.7.0 strengthens
+      the case rather than resolving it.
+
 - [x] **V0.6.1 Intelligent user experience & interactive onboarding** — done
       2026-07-28. The backend had become far more sophisticated than the
       experience of using it: nothing was missing, everything was unexplained.

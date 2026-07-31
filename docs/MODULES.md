@@ -463,6 +463,54 @@ preferences document, and which walkthrough to offer next.
   to the same kind of claim is exactly the drift this codebase has paid for
   twice.
 
+## Host platform (`host/`, V0.7.0) — full design in `docs/ARCHITECTURE-PLATFORM.md` §3
+Core-only. Everything OptionsPilot needs from the machine underneath it.
+- `capabilities.py` is **data**: `Capability` (13 values), `HostProfile` per
+  target — `desktop`, `headless`, `web`, `ios`, `android` — and `HOST_PROFILES`.
+  The three that do not exist carry `implemented=False`; every notable missing
+  capability carries a `notes` entry saying *why*, so a blocker travels with its
+  reason instead of living in a commit message. The load-bearing entry: neither
+  mobile target has `BIND_LISTENER`, which is where the desktop-as-host model and
+  the single-writer paper account both come from.
+- `adapter.py` is **behaviour**: `HostAdapter` (abstract), `DesktopHost`,
+  `HeadlessHost`, and process-wide `current_host()` / `set_host()`. Owns the
+  storage root, temp space, opening an external URL, and the single-instance
+  socket mutex moved here from `ui/desktop.py` (same socket, same port 8786).
+  No host call raises — every one sits where an OS refusal is a normal state.
+
+## Services (`services/`, V0.7.0) — full design in `docs/ARCHITECTURE-PLATFORM.md` §2
+The platform-independent application layer: between the orchestrator and any
+transport. Every service takes **injected, duck-typed** collaborators and returns
+**frozen view models of primitives**. Never imports `ui/` or any web framework.
+- `viewmodels.py` — `PositionView`, `AccountView`, `PerformanceView`,
+  `PnLWindowsView`, `WatchlistView`, `WatchlistEditView`, `WorkspaceView`,
+  `HostView`. Frozen, because a view model two renderers can both mutate is the
+  same "two objects tracking one fact" drift paid for in V0.5.3, V0.5.7 and
+  V0.6.1. `finite()` is the `Infinity`/`NaN` boundary.
+- `portfolio.py` — positions, account, `performance()` (win rate, profit factor,
+  max drawdown), `pnl_windows()`, `setup_history()`. Reproduces exactly which
+  reads happen under the orchestrator lock and which do not.
+- `watchlist.py` — parse, validate, add/remove/reorder. The four disjoint outcome
+  buckets (`added` / `invalid` / `duplicates` / `over_cap`) exist because a user
+  who pastes twelve tickers and gets eight must be able to see which four went
+  missing and why.
+- `intelligence.py` — `payload()` and `summary()`, the projections of one
+  snapshot. `PERIOD_LIMITS` and `SUMMARY_METRICS` live here.
+- `notifications.py` — `CATALOGUE` (13 kinds; severity + a `pushable` flag
+  deliberately orthogonal to it), `NotificationService.recent()` (newest first,
+  a service decision so two clients cannot disagree about it). Not a store.
+- `workspace.py` — pure `normalize` / `merge` plus `WorkspaceService`. Holds no
+  second catalogue: `tab` and indicator names are frontend vocabulary and are
+  checked for type and length only; `timeframe` IS validated against
+  `core.models.Timeframe` because it is handed back to `/api/candles`.
+- `sync.py` — `INVENTORY` (20 durable objects) + `CLIENT_TRAPPED` (2), each with
+  a `SyncDomain` and a `SyncPolicy`. **Syncs nothing**; it is the classification
+  that must exist before anything could. `data/credentials.json` is the only
+  `NEVER`.
+- `registry.py` — `ServiceRegistry`, the one place they are wired. Its
+  constructor signature is the honest statement of what a second client's
+  backend must supply.
+
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop, runtime)` — FastAPI app.
   `/api/scan` is non-blocking by default (background cycle; progress in the

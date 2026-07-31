@@ -227,6 +227,14 @@ class CandleCache:
         if self.config.retention_days is not None:
             self.prune(self.config.retention_days)
 
+    def close(self) -> None:
+        """Release the long-lived SQLite handle during application shutdown."""
+        with self._lock:
+            conn = getattr(self, "_conn", None)
+            self._conn = None
+            if conn is not None:
+                conn.close()
+
     # ── lifecycle ────────────────────────────────────────────────────────────
 
     def _open(self) -> sqlite3.Connection:
