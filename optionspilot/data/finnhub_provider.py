@@ -68,8 +68,7 @@ from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Timeframe
 from optionspilot.data.adapter import (
     ProviderAuthError, ProviderEntitlementError, ProviderError,
-    ProviderQuotaExceeded, ProviderRateLimited, ProviderSymbolError,
-    ProviderUnavailable,
+    ProviderRateLimited, ProviderUnavailable,
 )
 from optionspilot.data.capabilities import FINNHUB_CAPABILITIES, IntervalSpec
 from optionspilot.data.http_adapter import KeyedHTTPAdapter, to_frame

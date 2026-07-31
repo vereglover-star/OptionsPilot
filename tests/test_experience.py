@@ -10,7 +10,6 @@ from optionspilot.experience import ExperienceEngine, ExperienceStore, SimilarTr
 from optionspilot.experience.features import (
     build_experience, build_feature_vector, build_query_record, market_regime,
 )
-from optionspilot.experience.models import ExperienceRecord
 from optionspilot.experience.store import _migration_1, _to_payload
 
 TS = datetime(2026, 7, 10, 14, 30, tzinfo=timezone.utc)

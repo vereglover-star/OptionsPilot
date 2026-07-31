@@ -15,7 +15,6 @@ text rather than a KeyError.
 
 from __future__ import annotations
 
-import pytest
 
 from optionspilot.data.report import render
 

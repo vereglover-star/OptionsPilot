@@ -11,7 +11,6 @@ because every one of them sits on a path where an OS refusal is a normal state.
 
 from __future__ import annotations
 
-import socket
 import threading
 import time
 

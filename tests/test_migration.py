@@ -2,7 +2,6 @@
 the versioned-migration framework. The overriding guarantee under test: a user
 never loses data when the executable is replaced."""
 
-import json
 import os
 
 import pytest

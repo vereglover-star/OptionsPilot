@@ -24,27 +24,33 @@ param(
 
 $results = [ordered]@{}
 
-Write-Step "1/5 Tests"
+Write-Step "1/6 Tests"
 & "$PSScriptRoot\test.ps1"
 $results["Tests"] = ($LASTEXITCODE -eq 0)
 
 $python = Ensure-Environment -Extras @("dev", "ui")
 
-Write-Step "2/5 Frontend id() references"
+# Same rule set and same paths as the CI job, so a contributor never
+# discovers in CI a lint failure they could have seen locally.
+Write-Step "2/6 Lint (ruff)"
+& $python -m ruff check optionspilot tests scripts
+$results["Lint (ruff)"] = ($LASTEXITCODE -eq 0)
+
+Write-Step "3/6 Frontend id() references"
 & $python "$PSScriptRoot\check_html_ids.py"
 $results["HTML id references"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "3/5 Documentation consistency"
+Write-Step "4/6 Documentation consistency"
 & $python "$PSScriptRoot\check_docs.py"
 $results["Docs consistency"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "4/5 Dependency check (pip check)"
+Write-Step "5/6 Dependency check (pip check)"
 & $python -m pip check
 $results["pip check"] = ($LASTEXITCODE -eq 0)
 
 # Offline by default (scripted providers, no network) so it is deterministic
 # and safe here; `--live` probes the real provider chain and is a manual step.
-Write-Step "5/5 Market-data stress scenarios"
+Write-Step "6/6 Market-data stress scenarios"
 & $python "$PSScriptRoot\marketdata_stress.py"
 $results["Market-data stress"] = ($LASTEXITCODE -eq 0)
 

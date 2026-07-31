@@ -25,8 +25,8 @@ a veto, not a pass.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from optionspilot.config.settings import RiskConfig

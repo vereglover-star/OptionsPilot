@@ -1,6 +1,5 @@
 from email.message import EmailMessage
 
-import pytest
 
 from optionspilot.config.settings import NotifyConfig
 from optionspilot.notify import (

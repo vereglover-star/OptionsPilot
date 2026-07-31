@@ -1,6 +1,5 @@
 """AI Coach 2.0 — per-trade category scorecard tests."""
 
-from optionspilot.coach import TradeCoach
 from optionspilot.coach.categories import CATEGORY_ORDER, score_categories
 from optionspilot.coach.coach import Finding
 from tests.test_coach import coach, ctx, stop_order

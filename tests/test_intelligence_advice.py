@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
 
 from optionspilot.intelligence.behavior import BEHAVIORS, BehaviorEngine
 from optionspilot.intelligence.confidence import ConfidenceEngine, ScoreInput

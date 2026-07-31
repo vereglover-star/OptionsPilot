@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import time
 
-import pytest
 from fastapi.testclient import TestClient
 
 from optionspilot.config.settings import AppConfig

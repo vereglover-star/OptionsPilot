@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from optionspilot.config.settings import RiskConfig
 from optionspilot.risk import RiskManager

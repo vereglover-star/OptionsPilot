@@ -15,7 +15,6 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-import pytest
 
 from optionspilot.core.models import Timeframe
 from optionspilot.data.adapter import (
@@ -25,7 +24,7 @@ from optionspilot.data.capabilities import (
     IntervalSpec, ProviderCapabilities, YAHOO_CAPABILITIES,
 )
 from optionspilot.data.discovery import (
-    LADDER, CapabilityStore, DiscoveryResult, discover, drift, measure_depth,
+    CapabilityStore, DiscoveryResult, discover, drift, measure_depth,
     refresh_if_stale,
 )
 from tests.marketdata_helpers import frame

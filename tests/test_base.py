@@ -11,7 +11,6 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from optionspilot.data.base import validate_candles
 from optionspilot.data.base import SESSION_TZ, session_index

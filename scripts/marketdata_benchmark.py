@@ -45,7 +45,7 @@ from optionspilot.data.adapter import (                          # noqa: E402
     HistoryAdapter, HistoryRequest, ProviderError,
 )
 from optionspilot.data.capabilities import (                     # noqa: E402
-    YAHOO_CAPABILITIES, IntervalSpec, ProviderCapabilities,
+    IntervalSpec, ProviderCapabilities,
 )
 from optionspilot.data.quality import disagreement, validate_history  # noqa: E402
 from optionspilot.data.registry import ProviderRegistry, default_registry  # noqa: E402

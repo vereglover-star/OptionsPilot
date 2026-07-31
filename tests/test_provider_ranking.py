@@ -17,7 +17,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from optionspilot.core.models import Timeframe
-from optionspilot.data.adapter import ProviderUnavailable
 from optionspilot.data.config import MarketDataConfig
 from optionspilot.data.registry import ProviderRegistry
 from optionspilot.data.service import MarketDataService

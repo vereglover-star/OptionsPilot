@@ -8,7 +8,6 @@ claiming to serve intervals it cannot.
 
 from datetime import datetime, timedelta, timezone
 
-import pandas as pd
 import pytest
 
 from optionspilot.core.models import Timeframe

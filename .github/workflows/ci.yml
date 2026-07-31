@@ -54,6 +54,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,ui]" -c requirements-lock.txt
 
+      # Lint before the suite: it takes well under a second and a dead import
+      # or a shadowed definition should not wait on ~95s of tests to report.
+      - name: Lint (ruff)
+        run: ruff check optionspilot tests scripts
+
       - name: Run test suite
         run: pytest
 

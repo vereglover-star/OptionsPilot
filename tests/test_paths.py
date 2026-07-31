@@ -2,7 +2,6 @@
 
 import sys
 
-import pytest
 
 from optionspilot.core.paths import APP_NAME, ENV_HOME, AppPaths, default_root
 

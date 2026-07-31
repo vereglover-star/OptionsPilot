@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from optionspilot.coach import CoachProfile, TradeCoach
 from tests.test_journal import make_trade

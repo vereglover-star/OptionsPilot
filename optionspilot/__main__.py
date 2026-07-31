@@ -70,7 +70,6 @@ def cmd_scan(args) -> int:
 def cmd_status(args) -> int:
     from optionspilot.broker import PaperBroker
     from optionspilot.journal import TradeJournal
-    from optionspilot.risk import RiskManager
 
     cfg, runtime, paths = _bootstrap(args)
     broker = PaperBroker(cfg.broker, paths.get_paper_db(),

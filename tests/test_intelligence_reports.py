@@ -10,12 +10,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from optionspilot.intelligence.reports import MIN_PERIOD_TRADES, ReportEngine
 from optionspilot.intelligence.timeline import TimelineEngine
 
-from tests.intelligence_helpers import BASE, fact, series
+from tests.intelligence_helpers import fact, series
 
 NOW = datetime(2026, 8, 1, 12, 0, tzinfo=timezone.utc)
 

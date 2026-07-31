@@ -18,9 +18,7 @@ because bars are keyed by timestamp.
 
 from __future__ import annotations
 
-import io
 import json
-import urllib.error
 from datetime import datetime, timedelta, timezone
 
 import pandas as pd
@@ -37,7 +35,7 @@ from optionspilot.data.alphavantage_provider import AlphaVantageAdapter
 from optionspilot.data.config import ProviderConfig
 from optionspilot.data.finnhub_provider import FinnhubAdapter
 from optionspilot.data.health import (
-    KIND_AUTH, KIND_QUOTA, STATUS_AUTH_FAILED, STATUS_NO_API_KEY, STATUS_OK,
+    STATUS_AUTH_FAILED, STATUS_NO_API_KEY, STATUS_OK,
     STATUS_PREMIUM_REQUIRED,
 )
 from optionspilot.data.twelvedata_provider import TwelveDataAdapter
@@ -974,7 +972,7 @@ class TestNoPathSpendsADoomedRequest:
         assert result is not None and result.intervals == {}
 
     def test_discovery_still_probes_a_configured_provider(self, tmp_path):
-        from optionspilot.data.discovery import CapabilityStore, discover
+        from optionspilot.data.discovery import discover
 
         adapter = build(FinnhubAdapter, finnhub_payload(3))
         result = discover(adapter, "AAPL", timeframes=[Timeframe.D1],

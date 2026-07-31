@@ -5,7 +5,7 @@ import pytest
 from optionspilot.broker import BrokerError, PaperBroker, PositionManager
 from optionspilot.config.settings import BrokerConfig
 from optionspilot.core.models import Direction
-from tests.engine_helpers import make_call, make_plan, make_put
+from tests.engine_helpers import make_call, make_plan
 
 TS = datetime(2026, 7, 10, 15, 0, tzinfo=timezone.utc)
 CFG = BrokerConfig(commission_per_contract=0.65, slippage_pct=0.01)

@@ -408,7 +408,6 @@ def test_prune_keeps_bars_inside_the_retention_window(tmp_path):
 def test_retention_is_off_by_default(tmp_path):
     """History is small, and the deeper the cache the better the last tier
     before a blank chart — so bounding it is opt-in."""
-    from optionspilot.data.config import CacheConfig
 
     old = make_candles([100, 101], start="2020-01-05 14:30")
     with CandleCache(tmp_path / "c.db") as cache:

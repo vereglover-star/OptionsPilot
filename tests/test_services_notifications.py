@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-import pytest
 
 from optionspilot.notify.base import KINDS as NOTIFY_KINDS
 from optionspilot.services import sync

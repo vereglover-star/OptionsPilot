@@ -17,7 +17,7 @@ import pytest
 from optionspilot.intelligence.behavior import BehaviorEngine
 from optionspilot.intelligence.confidence import ConfidenceEngine, ScoreInput
 from optionspilot.intelligence.models import Confidence, Trend
-from optionspilot.intelligence.performance import PerformanceEngine, compute
+from optionspilot.intelligence.performance import PerformanceEngine
 
 from tests.intelligence_helpers import BASE, fact, series
 

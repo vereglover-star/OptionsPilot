@@ -203,10 +203,8 @@ class YFinanceProvider(MarketDataProvider):
     def get_quote(self, symbol: str) -> Quote:
         self._throttle()
         last = 0.0
-        used_symbol = symbol
         info = None
         for candidate in _symbol_candidates(symbol):
-            used_symbol = candidate
             try:
                 info = _yf().Ticker(candidate).fast_info
                 last = float(info["last_price"])
@@ -254,9 +252,7 @@ class YFinanceProvider(MarketDataProvider):
     def get_option_chain(self, symbol: str, expiration: date) -> list[OptionContract]:
         self._throttle()
         chain = None
-        used_symbol = symbol
         for candidate in _symbol_candidates(symbol):
-            used_symbol = candidate
             try:
                 chain = _yf().Ticker(candidate).option_chain(
                     expiration.strftime("%Y-%m-%d"))

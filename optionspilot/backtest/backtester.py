@@ -23,7 +23,7 @@ counts as a stop-out.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 import numpy as np

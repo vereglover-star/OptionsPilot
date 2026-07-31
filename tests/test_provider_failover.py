@@ -15,15 +15,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-import pytest
 
 from optionspilot.core.models import Timeframe
 from optionspilot.data.adapter import (
-    ProviderAuthError, ProviderQuotaExceeded, ProviderRateLimited,
-    ProviderUnavailable,
+    ProviderAuthError, ProviderQuotaExceeded, ProviderUnavailable,
 )
 from optionspilot.data.cache import CandleCache
-from optionspilot.data.config import MarketDataConfig, ProviderConfig
 from optionspilot.data.diagnostics import (
     OUTCOME_FAILED, OUTCOME_LIVE, OUTCOME_STALE,
 )

@@ -625,8 +625,8 @@ class MarketDataControl:
                 out.append({
                     "severity": "warning",
                     "title": f"{name} has used its entire daily allowance",
-                    "detail": f"It has been taken out of rotation and will "
-                              f"return when the quota resets."
+                    "detail": "It has been taken out of rotation and will "
+                              "return when the quota resets."
                               + (f" {alternative} is configured and can carry "
                                  f"the load until then."
                                  if alternative else

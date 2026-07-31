@@ -615,7 +615,20 @@ class CandleCache:
 
     # ── teardown ─────────────────────────────────────────────────────────────
 
-    def close(self) -> None:
+    # KNOWN DEFECT, deliberately left in place — see the V0.9 specification's
+    # Future Findings. `CandleCache` defines `close` TWICE: once at line ~230
+    # and again here. Python keeps the last definition, so THIS one is the
+    # live implementation and the earlier one is dead code — even though the
+    # earlier one is the more careful of the two (it reads `_conn` defensively
+    # via getattr and, crucially, sets `self._conn = None` afterwards, which
+    # this one does not; a closed handle is therefore left in place after
+    # shutdown).
+    #
+    # Reconciling them is a BEHAVIOUR change and belongs in its own commit
+    # with a test for double-close and for use-after-close, not in the commit
+    # that merely turned the linter on. The `noqa` keeps ruff green without
+    # pretending the problem is not here.
+    def close(self) -> None:  # noqa: F811 — duplicate definition, see above
         with self._lock:
             try:
                 self._conn.close()

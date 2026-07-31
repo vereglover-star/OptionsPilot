@@ -13,7 +13,7 @@ indicator's fields are NaN/None/0 and the scorer emits no evidence for them.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 
 import pandas as pd

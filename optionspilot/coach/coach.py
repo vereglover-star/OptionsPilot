@@ -291,10 +291,8 @@ class TradeCoach:
 
         gate = entry.get("gate") or {}
         quality = gate.get("setup_quality", "unknown")
-        # signed confidence: + when the engine agreed with the user's direction
         agreed = entry.get("direction") == trade.direction.value
         conf = entry.get("confidence", 0.0)
-        signed = conf if agreed else -conf
 
         good_setup = quality in ("excellent", "good") and agreed
         out.append(Finding(

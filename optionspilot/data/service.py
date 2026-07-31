@@ -56,7 +56,7 @@ from __future__ import annotations
 
 import threading
 import time as _time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 

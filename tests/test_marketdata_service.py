@@ -21,7 +21,7 @@ import pytest
 from optionspilot.core.models import Timeframe
 from optionspilot.data import diagnostics as diag
 from optionspilot.data.adapter import (
-    ProviderRangeError, ProviderRateLimited, ProviderSymbolError,
+    ProviderRateLimited, ProviderSymbolError,
     ProviderUnavailable,
 )
 from optionspilot.data.cache import CandleCache

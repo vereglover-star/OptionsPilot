@@ -19,7 +19,6 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.learning import WeightStore
 from optionspilot.notify import NotificationCenter
 from optionspilot.orchestrator import Orchestrator

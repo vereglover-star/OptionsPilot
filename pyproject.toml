@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "httpx>=0.27", "Pillow>=10.0", "jsonschema>=4.22", "openapi-spec-validator>=0.7"]
+dev = ["pytest>=8.0", "httpx>=0.27", "Pillow>=10.0", "jsonschema>=4.22", "openapi-spec-validator>=0.7", "ruff>=0.6"]
 ui = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "pywebview>=5.0", "pystray>=0.19", "Pillow>=10.0"]
 notify = ["windows-toasts>=1.1"]
 build = ["pyinstaller>=6.0"]
@@ -33,6 +33,64 @@ include = ["optionspilot*"]
 
 [tool.setuptools.package-data]
 optionspilot = ["ui/static/*", "data_assets/*"]
+
+[tool.ruff]
+target-version = "py312"
+# Committed build artifacts (see the V0.9 spec's H-1). They are vendored
+# third-party Python that this project neither wrote nor maintains, so linting
+# them reports other people's style as our debt. C7 untracks them entirely;
+# until then, exclude rather than lint.
+extend-exclude = ["_internal", "dist_old", "build", "dist"]
+
+[tool.ruff.lint]
+# DELIBERATELY NARROW, AND DELIBERATELY A RATCHET.
+#
+# `select` names the families we intend to enforce; `ignore` below names the
+# specific rules whose backlog is large enough that clearing it would be a
+# repo-wide reformat rather than a review. Enabling everything at once would
+# have meant a 637-violation autofix touching almost every file — a diff no
+# reviewer can meaningfully read, which buys the appearance of quality and
+# none of the substance.
+#
+# The rules left ACTIVE are the ones that find defects rather than opinions:
+# F401 (dead imports), F811 (a definition silently shadowing another), F841
+# (a computed value nobody reads), F541. Turning them on immediately found a
+# real production bug — two `close()` methods on CandleCache, the more
+# careful one dead. That is the whole argument for the linter.
+select = ["E", "F", "I"]
+
+ignore = [
+    # Each entry below is a BACKLOG, not a decision that the rule is wrong.
+    # Enable one at a time, in its own commit, when someone can review the
+    # resulting diff properly. The count is this repo's violation count at
+    # the moment the linter was introduced.
+    "E501",   # line-too-long (339). The house style runs to long explanatory
+              # comments; reflowing them is a prose edit, not a lint fix.
+    "E701",   # multiple-statements-on-one-line: colon (2)
+    "E702",   # multiple-statements-on-one-line: semicolon (102) — 71 of them
+              # in scripts/chart_check.py alone, i.e. concentrated, not systemic.
+    "E741",   # ambiguous-variable-name (22), mostly `l` in comprehensions.
+    "I001",   # unsorted-imports (108). Auto-fixable and purely mechanical,
+              # which is exactly the problem: it would rewrite the import
+              # block of ~100 files in one commit and bury anything else.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# A package __init__ that re-exports its public surface is doing its job, not
+# leaving dead imports behind. `__all__` already documents the intent.
+"optionspilot/*/__init__.py" = ["F401"]
+
+# F841 (unused variable) is enforced in shipped code, where a computed-and-
+# discarded value is usually a bug, and was fixed there. It is NOT enforced
+# in tests and check scripts, because every occurrence there binds the result
+# of a call that must still happen — `b.open_position(...)`, `page.evaluate(
+# ...)` — or one half of a tuple unpack whose other half is used. Ruff can
+# only "fix" those by deleting the statement, which would silently remove the
+# call: its own classification of the fix as unsafe is correct. Rewriting
+# them by hand is an edit to test and diagnostic code with no correctness
+# gain, so it is deferred rather than smuggled into a linting change.
+"tests/*" = ["F841"]
+"scripts/*" = ["F841"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
