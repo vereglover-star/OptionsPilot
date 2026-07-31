@@ -9,6 +9,7 @@ checking, corruption recovery, and versioned schema evolution.
 
 import sqlite3
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -437,3 +438,108 @@ def test_an_oversized_cache_is_flagged(tmp_path):
                      config=CacheConfig(warn_bytes=1)) as cache:
         cache.store("SPY", Timeframe.M5, df)
         assert cache.stats()["oversized"] is True
+
+
+class TestMigration3CollapsesDailyConventions:
+    """Repairing an already-poisoned cache.db in place.
+
+    Fixing the adapters stops NEW divergence; it does nothing for the rows
+    already written. Every existing install has a cache holding a row per
+    provider-convention per trading day, and until those collapse onto one
+    instant the frame's spacing still says "wrong interval served" and 1D still
+    refuses to draw. Rewriting rather than deleting keeps decades of otherwise
+    correct end-of-day history: the prices were never wrong, only the instants
+    they were filed under.
+    """
+
+    @staticmethod
+    def _poisoned(path):
+        """A v2 cache holding the real defect: SPY daily written twice, once at
+        the Yahoo session open and once at yfinance's exchange midnight."""
+        conn = sqlite_connect(path)
+        conn.executescript(
+            "CREATE TABLE IF NOT EXISTS candles ("
+            " symbol TEXT NOT NULL, timeframe INTEGER NOT NULL, ts INTEGER NOT NULL,"
+            " open REAL NOT NULL, high REAL NOT NULL, low REAL NOT NULL,"
+            " close REAL NOT NULL, volume REAL NOT NULL, provider TEXT,"
+            " fetched_at INTEGER, PRIMARY KEY (symbol, timeframe, ts))"
+            " WITHOUT ROWID;")
+        rows = []
+        for day in range(1, 6):
+            # 2026-07-0X, EDT: 13:30 UTC is 09:30 ET, 04:00 UTC is 00:00 ET
+            base = datetime(2026, 7, day, tzinfo=timezone.utc)
+            for hour, provider, fetched in ((13.5, "yahoo", 200),
+                                            (4.0, "yfinance", 100)):
+                ts = int((base.timestamp()) + hour * 3600)
+                rows.append(("SPY", 1440, ts, 100.0, 101.0, 99.0, 100.5, 10.0,
+                             provider, fetched))
+        # an intraday row, to prove the migration leaves it alone
+        rows.append(("SPY", 5, 1784923200, 1.0, 2.0, 0.5, 1.5, 3.0, "yahoo", 1))
+        conn.executemany(
+            "INSERT INTO candles VALUES (?,?,?,?,?,?,?,?,?,?)", rows)
+        conn.execute("PRAGMA user_version=2")
+        conn.commit()
+        conn.close()
+
+    def test_two_rows_per_day_become_one(self, tmp_path):
+        path = tmp_path / "c.db"
+        self._poisoned(path)
+        cache = CandleCache(path)                      # opening runs migration 3
+        rows = cache._query(
+            "SELECT ts FROM candles WHERE timeframe=1440 ORDER BY ts", ())
+        assert len(rows) == 5                          # was 10
+        cache.close()
+
+    def test_the_survivors_are_one_day_apart(self, tmp_path):
+        """The property that makes 1D validate again."""
+        path = tmp_path / "c.db"
+        self._poisoned(path)
+        cache = CandleCache(path)
+        ts = [r[0] for r in cache._query(
+            "SELECT ts FROM candles WHERE timeframe=1440 ORDER BY ts", ())]
+        assert all(b - a == 86400 for a, b in zip(ts, ts[1:]))
+        cache.close()
+
+    def test_they_land_on_exchange_midnight(self, tmp_path):
+        path = tmp_path / "c.db"
+        self._poisoned(path)
+        cache = CandleCache(path)
+        ts = [r[0] for r in cache._query(
+            "SELECT ts FROM candles WHERE timeframe=1440", ())]
+        for t in ts:
+            local = datetime.fromtimestamp(t, timezone.utc).astimezone(
+                ZoneInfo("America/New_York"))
+            assert (local.hour, local.minute) == (0, 0)
+        cache.close()
+
+    def test_the_attributed_newer_row_wins(self, tmp_path):
+        path = tmp_path / "c.db"
+        self._poisoned(path)
+        cache = CandleCache(path)
+        rows = cache._query(
+            "SELECT provider, fetched_at FROM candles WHERE timeframe=1440", ())
+        assert {r[0] for r in rows} == {"yahoo"}       # fetched_at 200 > 100
+        cache.close()
+
+    def test_intraday_rows_are_untouched(self, tmp_path):
+        """The defect is a daily+ one; rewriting minute bars would be churn
+        with a real chance of damage."""
+        path = tmp_path / "c.db"
+        self._poisoned(path)
+        cache = CandleCache(path)
+        rows = cache._query("SELECT ts FROM candles WHERE timeframe=5", ())
+        assert rows == [(1784923200,)]
+        cache.close()
+
+    def test_a_clean_cache_survives_the_migration_unchanged(self, tmp_path):
+        """Idempotence: the common case is a cache that needs no repair."""
+        path = tmp_path / "c.db"
+        cache = CandleCache(path)
+        cache.store("SPY", Timeframe.D1,
+                    make_candles([100.0] * 5, start="2026-07-01 04:00",
+                                 freq="1D"), provider="yahoo")
+        before = cache._query("SELECT ts FROM candles ORDER BY ts", ())
+        cache.close()
+        reopened = CandleCache(path)
+        assert reopened._query("SELECT ts FROM candles ORDER BY ts", ()) == before
+        reopened.close()

@@ -73,9 +73,73 @@ ALTER TABLE candles ADD COLUMN provider TEXT;
 ALTER TABLE candles ADD COLUMN fetched_at INTEGER;
 """
 
+#: Daily-and-coarser timeframes, in Timeframe minutes. Kept as a literal rather
+#: than imported so a future change to the Timeframe enum cannot silently
+#: re-interpret an already-applied migration.
+_DAILY_MINUTES = 1440
+
+
+def _migration_3(conn) -> None:
+    """Collapse daily+ bars onto ONE timestamp convention: exchange midnight.
+
+    Before `base.session_index` existed, each adapter stamped a daily bar
+    wherever its upstream happened to put it — Yahoo at the 09:30 ET session
+    open (13:30 UTC), yfinance at 00:00 ET (04:00 UTC), Stooq and the keyed
+    HTTP providers at 00:00 UTC. The cache is keyed `(symbol, timeframe, ts)`,
+    so those are not the same row: a symbol fetched by two providers ended up
+    with two rows for every trading day, 9.5 hours apart.
+
+    That is a data defect with a visible consequence. The frame's tightest
+    spacing became ~0.40 days instead of 1.0, `quality.validate_history`
+    correctly reported "wrong interval served", and the disk tier discarded the
+    bars — so **every symbol on 1D showed "the cached bars failed validation and
+    were discarded"** and could not recover. Measured on a real cache: SPY held
+    6,517 daily rows for ~3,258 trading days.
+
+    Rewriting rather than deleting keeps decades of end-of-day history that is
+    otherwise correct — the prices were never wrong, only the instants they were
+    filed under. Where two rows collapse onto the same session the newer fetch
+    wins, and a row with a known provider beats an unattributed v1 row.
+    """
+    rows = conn.execute(
+        "SELECT symbol, timeframe, ts, open, high, low, close, volume, "
+        "provider, fetched_at FROM candles WHERE timeframe >= ?",
+        (_DAILY_MINUTES,),
+    ).fetchall()
+    if not rows:
+        return
+    # Local imports: a migration runs once, and neither belongs in this module's
+    # import-time cost for the 99.99% of opens that apply no migration.
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    zone = ZoneInfo("America/New_York")
+    best: dict[tuple, tuple] = {}
+    for r in rows:
+        symbol, timeframe, ts = r[0], r[1], r[2]
+        local = datetime.fromtimestamp(ts, timezone.utc).astimezone(zone)
+        midnight = local.replace(hour=0, minute=0, second=0, microsecond=0)
+        new_ts = int(midnight.timestamp())
+        key = (symbol, timeframe, new_ts)
+        # rank: attributed beats unattributed, then newer fetch wins
+        rank = (1 if r[8] else 0, r[9] or 0)
+        if key not in best or rank > best[key][0]:
+            best[key] = (rank, (symbol, timeframe, new_ts, r[3], r[4], r[5],
+                                r[6], r[7], r[8], r[9]))
+    conn.execute("DELETE FROM candles WHERE timeframe >= ?", (_DAILY_MINUTES,))
+    conn.executemany(
+        "INSERT OR REPLACE INTO candles (symbol, timeframe, ts, open, high, "
+        "low, close, volume, provider, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        [v[1] for v in best.values()],
+    )
+    log.warning("cache.db migration 3: %d daily+ rows collapsed to %d on the "
+                "exchange-midnight convention", len(rows), len(best))
+
+
 _MIGRATIONS = [
     lambda conn: conn.executescript(_SCHEMA),
     lambda conn: conn.executescript(_MIGRATION_2),
+    _migration_3,
 ]
 
 SCHEMA_VERSION = len(_MIGRATIONS)
@@ -162,6 +226,14 @@ class CandleCache:
         self._conn = self._open()
         if self.config.retention_days is not None:
             self.prune(self.config.retention_days)
+
+    def close(self) -> None:
+        """Release the long-lived SQLite handle during application shutdown."""
+        with self._lock:
+            conn = getattr(self, "_conn", None)
+            self._conn = None
+            if conn is not None:
+                conn.close()
 
     # ── lifecycle ────────────────────────────────────────────────────────────
 
@@ -372,6 +444,109 @@ class CandleCache:
             return None
         return (datetime.fromtimestamp(lo, tz=timezone.utc),
                 datetime.fromtimestamp(hi, tz=timezone.utc))
+
+    def coverage_pairs(self) -> list[tuple[str, Timeframe]]:
+        """Every (symbol, timeframe) this cache actually holds bars for.
+
+        The maintenance validator walks this rather than the watchlist: the
+        question it answers is "is the data on this disk usable", and a
+        watchlist symbol with nothing cached has nothing to say about that.
+        Rows whose stored timeframe is not a `Timeframe` member are skipped —
+        a file written by a future build must not crash an older one.
+        """
+        pairs = []
+        for symbol, minutes in self._query(
+                "SELECT DISTINCT symbol, timeframe FROM candles "
+                "ORDER BY symbol, timeframe", ()):
+            try:
+                pairs.append((str(symbol), Timeframe(int(minutes))))
+            except ValueError:
+                continue
+        return pairs
+
+    # ── maintenance (V0.5.7) ─────────────────────────────────────────────────
+
+    def verify(self) -> dict:
+        """Integrity report: is this file sound, and does it hold sane rows?
+
+        Deliberately more than SQLite's own `integrity_check`. A cache can be
+        *structurally* perfect and still unusable — that is exactly what the
+        V0.5.6 daily-bar defect was: two valid rows per trading day, nine and a
+        half hours apart, which `integrity_check` is delighted with and
+        `validate_history` correctly refuses. So this also counts the rows that
+        would fail a read, and reports them as findings rather than only as a
+        pass/fail, because "your cache is fine" and "your cache has 14 bad bars
+        out of 400,000" are different answers.
+
+        Read-only. Repairing is `rebuild()`, which is a separate, explicit act.
+        """
+        findings: list[str] = []
+        with self._lock:
+            try:
+                row = self._conn.execute("PRAGMA integrity_check").fetchone()
+                integrity = str(row[0]) if row else "unknown"
+            except sqlite3.DatabaseError as exc:
+                return {"ok": False, "integrity": f"failed: {exc}",
+                        "findings": [f"the database could not be read: {exc}"],
+                        "bars": 0, "suspect_bars": 0, "schema_version": None}
+        if integrity.lower() != "ok":
+            findings.append(f"SQLite integrity_check reported: {integrity}")
+
+        # Rows that could never be served. Each clause is a real defect this
+        # repo has shipped and fixed, so a hit here names a regression rather
+        # than a hypothetical.
+        checks = [
+            ("non-finite or non-positive prices",
+             "open<=0 OR high<=0 OR low<=0 OR close<=0"),
+            ("high below low", "high < low"),
+            ("negative volume", "volume < 0"),
+            ("bars stamped in the future",
+             f"ts > {int(datetime.now(timezone.utc).timestamp()) + 86400}"),
+        ]
+        suspect = 0
+        for label, clause in checks:
+            rows = self._query(f"SELECT COUNT(*) FROM candles WHERE {clause}", ())
+            count = int(rows[0][0]) if rows else 0
+            if count:
+                suspect += count
+                findings.append(f"{count} bar(s) with {label}")
+
+        total = self._query("SELECT COUNT(*) FROM candles", ())
+        bars = int(total[0][0]) if total else 0
+        version = self._query("PRAGMA user_version", ())
+        return {
+            "ok": integrity.lower() == "ok" and not suspect,
+            "integrity": integrity,
+            "bars": bars,
+            "suspect_bars": suspect,
+            "schema_version": int(version[0][0]) if version else None,
+            "findings": findings or ["no problems found"],
+        }
+
+    def rebuild(self, reason: str = "requested from Settings") -> dict:
+        """Quarantine the current file and start an empty one.
+
+        The old database is MOVED, not deleted (`_rebuild`), for the same
+        reason it is on a corruption recovery: a cache is reconstructible from
+        the providers, so the cost of being wrong about needing this is
+        re-downloads — but only if the evidence still exists when someone asks
+        what went wrong.
+        """
+        with self._lock:
+            before = 0
+            try:
+                row = self._conn.execute("SELECT COUNT(*) FROM candles").fetchone()
+                before = int(row[0]) if row else 0
+            except sqlite3.DatabaseError:
+                pass                       # a cache too broken to count is the
+            try:                           # case this exists for
+                self._conn.close()
+            except Exception:  # noqa: BLE001 — closing a broken handle is best-effort
+                pass
+            self._conn = self._rebuild(reason=reason)
+            self.metrics.rebuilds = self._rebuilds
+        log.warning("candle cache rebuilt on request (%d bars discarded)", before)
+        return {"rebuilt": True, "bars_discarded": before, "reason": reason}
 
     def stats(self) -> dict:
         """Size/shape of the cache, for the diagnostics endpoint."""

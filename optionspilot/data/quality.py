@@ -85,6 +85,21 @@ class HistoryReport:
         self.issues.append(message)
         self.score = max(0.0, self.score - penalty)
 
+    def summary(self) -> str:
+        """One line naming what was wrong, for a person.
+
+        Exists so that a caller reporting a validation failure to the USER
+        (the connection test, the maintenance validator) does not each invent
+        its own way of flattening `issues` — three slightly different
+        renderings of the same finding is how a support conversation gets
+        confusing.
+        """
+        if not self.issues:
+            return ("nothing to report" if self.usable
+                    else "the bars were not usable, with no specific finding")
+        return "; ".join(self.issues[:4]) + (
+            f" (+{len(self.issues) - 4} more)" if len(self.issues) > 4 else "")
+
     def as_dict(self) -> dict:
         return {
             "bars": self.bars,
@@ -263,10 +278,34 @@ def _interval_stats(df: pd.DataFrame,
     tightest-gap test passes it and still catches the real defect (a provider
     answering a 1-minute request with daily bars, or vice versa).
 
-    A frame is the interval it claims to be when its tightest spacing is
-    exactly one interval: never shorter (that would be a finer interval) and
-    never longer than one (that would be a coarser one). Calendar frames get
+    A frame is the interval it claims to be when its TYPICAL within-session
+    spacing is one interval: never shorter (that would be a finer interval) and
+    never longer (that would be a coarser one). Calendar frames get
     `CALENDAR_TOLERANCE` slack because months and holiday weeks are uneven.
+
+    "Typical", not "tightest" — that distinction is load-bearing, and getting
+    it wrong cost every 1-hour chart. Yahoo closes a US equity session with a
+    THIRTY-MINUTE stub bar (15:30 → 16:00 ET, the closing auction), so a
+    perfectly good 1h frame contains exactly one 0.5-interval gap among ~1,900
+    gaps of exactly 1.0. The old strict-minimum test read that single bar as
+    "wrong interval served", set `usable = False`, scored the frame 0 and
+    charged the provider a validation failure — on every 1h request that
+    included the last completed session, i.e. all of them once the market
+    closed. Measured against the real cache: IWM 60m, 2,180 bars, 1 sub-interval
+    gap, whole frame rejected.
+
+    So conformance is judged on the MEDIAN of the within-session gaps (those
+    under two intervals — wider ones are overnight/weekend breaks and carry no
+    information about the interval). That still catches every defect the strict
+    test caught, because a genuinely wrong interval is wrong in the bulk of its
+    spacings, not in one bar: 30m served for a 1h request gives a median of
+    0.5, 90m gives 1.5, 1m data for a 1h request gives 0.017. When every gap is
+    a session break (a coarse interval with one bar per session) there is no
+    within-session evidence, so the tightest gap is used as before — which is
+    what rejects daily bars served for a 1m request.
+
+    `min_gap` is still REPORTED, unchanged: it is a useful statistic about the
+    frame. It is simply no longer a veto.
     """
     if len(df) < 3:
         # Too short to infer spacing from — accept it rather than guess. Two
@@ -281,13 +320,17 @@ def _interval_stats(df: pd.DataFrame,
     deltas = deltas[deltas > 0]
     if deltas.size == 0:  # pragma: no cover — duplicates are removed upstream
         return True, 1.0, 1
-    min_gap = float(deltas.min()) / step
-    max_gap = int(max(1, round(float(deltas.max()) / step)))
+    gaps = deltas / step
+    min_gap = float(gaps.min())
+    max_gap = int(max(1, round(float(gaps.max()))))
+    within_session = gaps[gaps < 2.0]
+    typical = (float(np.median(within_session)) if within_session.size
+               else min_gap)
     if timeframe.minutes >= Timeframe.D1.minutes:
-        ok = CALENDAR_TOLERANCE <= min_gap < (1.0 / CALENDAR_TOLERANCE)
+        ok = CALENDAR_TOLERANCE <= typical < (1.0 / CALENDAR_TOLERANCE)
     else:
         # Allow 1% slack for providers that stamp bars a second or two off.
-        ok = 0.99 <= min_gap <= 1.01
+        ok = 0.99 <= typical <= 1.01
     return ok, min_gap, max_gap
 
 

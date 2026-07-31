@@ -13,11 +13,27 @@ data:
 # can be deleted and the shipped chain (Yahoo JSON -> yfinance -> Stooq) behaves
 # exactly as it does today. Full reference: docs/MARKET_DATA.md section 16.
 #
+# MOST OF THIS IS NOW EDITABLE IN THE APP: Settings > Market data lets you add
+# API keys, reorder providers, switch them on and off, test connections and run
+# maintenance — no file editing and no restart. Those choices persist to
+# <data>/marketdata.json and <data>/credentials.json and take precedence over
+# this section. Edit here for things the UI does not expose (timeouts, retries,
+# breaker thresholds) or to pin a configuration for a deployment.
+#
 # market_data:
-#   # Order providers by MEASURED health (latency, recent failure rate, data
-#   # quality) rather than by the fixed priorities below. With no traffic
-#   # recorded every provider ranks at its priority, so a fresh start always
-#   # uses the documented order; set false to pin that order permanently.
+#   # How the provider chain is ORDERED. Three modes, explained in the UI:
+#   #   static   ask in exactly the configured order; health is ignored for
+#   #            ordering (an unusable provider is still skipped)
+#   #   hybrid   your order stands, and a provider only loses its place when it
+#   #            is genuinely FAILING — not when it is merely slower
+#   #   dynamic  fastest healthy provider per request (the default)
+#   ordering_mode: dynamic
+#   # Your explicit order, best first. Normally written by Settings > Market
+#   # data. Unknown names are ignored, so a config survives a downgrade.
+#   provider_order: []
+#   # The older spelling of "static", kept because existing configs set it.
+#   # false STILL WINS over ordering_mode: someone who turned ranking off did so
+#   # deliberately and must not be overruled by a newer field.
 #   dynamic_ranking: true
 #   memo_max_entries: 400        # in-memory frames (symbol x timeframe x session)
 #   structured_logging: true     # one key=value line per request in logs/data.log
@@ -34,7 +50,25 @@ data:
 #                                # last tier before a blank chart)
 #     warn_bytes: 536870912      # log a warning past 512 MB
 #
-#   providers:                   # any of: yahoo, yfinance, stooq
+#   # Where daily request counts persist, so restarting the app cannot mint an
+#   # allowance a plan never granted. Defaults to <data>/quota.json.
+#   quota_state_path: null
+#   # Where API keys pasted into Settings are stored (owner-only, and the ONLY
+#   # file in the app that holds a secret), and where the control centre's live
+#   # choices persist. Default to <data>/credentials.json and
+#   # <data>/marketdata.json. null keeps both in memory only.
+#   credentials_path: null
+#   control_state_path: null
+#
+#   # Developer fault injection: temporarily break a provider on demand to watch
+#   # failover, breakers and the chart's recovery for real. OFF, and the
+#   # /api/marketdata/qa/* endpoints return 404 while it is. For this
+#   # repository's own manual QA — there is no reason to enable it in an install
+#   # you are trading from.
+#   qa_mode: false
+#
+#   providers:                   # keyless: yahoo, yfinance, stooq
+#                                # keyed:   finnhub, twelvedata, alphavantage
 #     yahoo:
 #       enabled: true
 #       priority: 10             # lower is tried first; null keeps the adapter's
@@ -47,7 +81,36 @@ data:
 #       breaker_max_cooldown: 300.0
 #       min_quality_score: 0.0   # refuse frames validating below this (0-100)
 #     stooq:
-#       enabled: true            # false drops a provider entirely
+#       enabled: false           # benched, not deleted: a disabled provider is
+#                                # still built and still listed in Settings, so
+#                                # it can explain itself and be switched back on
+#
+#     # ── keyed providers ──────────────────────────────────────────────────
+#     # All OPTIONAL. Without a key a provider reports "missing_api_key" in
+#     # Help > Diagnostics and is simply never used — the app works exactly as
+#     # it does today. Adding one buys a source independent of Yahoo, so a
+#     # Yahoo outage stops taking intraday charts with it.
+#     #
+#     # BEST: paste the key into Settings > Market data. It is stored in a
+#     # separate owner-only file, masked in the UI, and never reaches an
+#     # export.
+#     # ALSO GOOD: the environment — FINNHUB_API_KEY, TWELVEDATA_API_KEY,
+#     # ALPHAVANTAGE_API_KEY are read automatically and need no configuration
+#     # here. The environment OUTRANKS both this file and a pasted key, so a
+#     # variable left set will silently override what you type in the app (the
+#     # settings page says so when that is happening).
+#     # LEAST GOOD: here. This file is the one people attach to bug reports.
+#     # (A key set here IS redacted from every diagnostics export, but keeping
+#     # it out of the file entirely is better still.)
+#     finnhub:                   # 60 req/min, real-time — finnhub.io/register
+#       api_key: null            # or: api_key_env: MY_FINNHUB_VAR
+#     twelvedata:                # 800/day, 8/min — twelvedata.com/pricing
+#       api_key: null
+#     alphavantage:              # 25/DAY, 5/min — alphavantage.co
+#       api_key: null
+#       # Override the published limits only on a paid plan:
+#       # requests_per_day: 1000
+#       # requests_per_minute: 75
 
 engine:
   min_confidence: 80        # the conservative bar; also the base for high-risk tiers

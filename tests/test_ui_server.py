@@ -37,6 +37,10 @@ def client(tmp_path, monkeypatch):
 
 
 class TestStatusAPI:
+    def test_request_app_does_not_start_global_memory_tracing(self, client):
+        """Memory sampling belongs to the live runtime, never app creation."""
+        assert client.server._owns_memory_tracing is False
+
     def test_status_shape(self, client):
         s = client.get("/api/status").json()
         assert s["paper"] is True
@@ -328,6 +332,7 @@ class TestWatchlistAPI:
         r = self.add(client, "aapl")
         assert r["added"] == ["AAPL"]
         assert "Apple" in r["names"]["AAPL"]
+        assert "error" not in r  # retain the established successful wire shape
         assert client.get("/api/watchlist").json()["watchlist"] == ["SPY", "AAPL"]
 
     def test_bulk_add_mixed_separators(self, client):
@@ -563,6 +568,103 @@ class TestCoachAPI:
         # second call with no new review reuses the cached object
         client.get("/api/coach")
         assert client.server._coach_cache is cached
+
+
+class TestGuideAPI:
+    """The guided-onboarding endpoints (V0.6.1).
+
+    Progress lives in settings.json rather than localStorage so a reinstall does
+    not greet a returning user as a beginner — which means these two routes are
+    the only thing standing between that promise and a lost tour, and the tests
+    below check both that the write survives and that a bad write cannot break
+    the read.
+    """
+
+    def test_fresh_install_is_offered_the_tour(self, client):
+        d = client.get("/api/guide").json()
+        assert d["state"]["onboarded"] is False
+        assert d["recommendations"][0]["tutorial"] == "welcome"
+        assert d["tutorials"]
+
+    def test_facts_are_measured_not_stored(self, client):
+        facts = client.get("/api/guide").json()["facts"]
+        assert facts["closed_trades"] == 0
+        assert facts["open_positions"] == 0
+        assert facts["watchlist_size"] == len(client.orch.cfg.data.watchlist)
+        assert facts["order_kinds_used"] == []
+
+    def test_completion_persists_and_stops_the_offer(self, client):
+        d = client.post("/api/guide/state", json={"completed": ["welcome"]}).json()
+        assert d["state"]["onboarded"] is True
+        assert not [r for r in d["recommendations"] if r["tutorial"] == "welcome"]
+        # …and survives a re-read, i.e. it actually reached the settings file
+        assert client.get("/api/guide").json()["state"]["completed"] == ["welcome"]
+
+    def test_feature_marks_accumulate(self, client):
+        client.post("/api/guide/state", json={"features": ["tab.charts"]})
+        d = client.post("/api/guide/state",
+                        json={"features": ["tab.charts", "tab.journal"]}).json()
+        assert d["state"]["features"]["tab.charts"] == 2
+        assert d["state"]["features"]["tab.journal"] == 1
+
+    def test_preferences_round_trip(self, client):
+        client.post("/api/guide/state", json={"reduce_motion": True, "tips": False})
+        state = client.get("/api/guide").json()["state"]
+        assert state["reduce_motion"] is True and state["tips"] is False
+
+    def test_forget_resets(self, client):
+        client.post("/api/guide/state",
+                    json={"completed": ["welcome", "charts"], "reduce_motion": True})
+        d = client.post("/api/guide/state", json={"forget": True}).json()
+        assert d["state"]["completed"] == []
+        assert d["state"]["onboarded"] is False
+
+    @pytest.mark.parametrize("body", [
+        None, {}, {"completed": "welcome"}, {"completed": ["nope"]},
+        {"features": {"a": 1}}, {"onboarded": "yes"}, {"junk": [1, 2, 3]},
+    ])
+    def test_a_malformed_patch_is_absorbed_not_rejected(self, client, body):
+        """This endpoint records that someone finished a tour. Failing it would
+        be a 4xx in the middle of a celebration, and nothing downstream depends
+        on the write."""
+        r = client.post("/api/guide/state", json=body)
+        assert r.status_code == 200
+        assert "state" in r.json()
+
+    def test_a_corrupt_settings_file_costs_progress_not_the_app(self, client):
+        client.server.runtime.set_guide_state({"completed": "everything",
+                                               "features": [1, 2, 3]})
+        d = client.get("/api/guide").json()
+        assert d["state"]["completed"] == []
+        assert d["state"]["features"] == {}
+
+    def test_order_kinds_reach_the_facts(self, client):
+        from optionspilot.broker.orders import OrderKind
+        from optionspilot.core.models import OptionRight, utcnow
+        chain = client.orch.provider.get_option_chain(
+            "SPY", client.orch.provider.get_expirations("SPY")[0])
+        contract = next(c for c in chain if c.right is OptionRight.CALL)
+        client.orch.orders.place(kind=OrderKind.LIMIT, side="buy_to_open",
+                                 contract=contract, quantity=1, ts=utcnow(),
+                                 limit_price=1.0)
+        facts = client.get("/api/guide").json()["facts"]
+        assert facts["order_kinds_used"] == ["limit"]
+        assert facts["orders_placed"] == 1
+
+    def test_market_only_history_recommends_the_trade_tour(self, client):
+        from optionspilot.broker.orders import OrderKind
+        from optionspilot.core.models import OptionRight, utcnow
+        client.post("/api/guide/state", json={"completed": ["welcome"]})
+        chain = client.orch.provider.get_option_chain(
+            "SPY", client.orch.provider.get_expirations("SPY")[0])
+        contract = next(c for c in chain if c.right is OptionRight.CALL)
+        for _ in range(3):
+            client.orch.orders.place(kind=OrderKind.MARKET, side="buy_to_open",
+                                     contract=contract, quantity=1, ts=utcnow())
+        recs = client.get("/api/guide").json()["recommendations"]
+        trade = next(r for r in recs if r["tutorial"] == "trade")
+        assert "market orders" in trade["reason"]
+        assert trade["evidence"]["orders_placed"] >= 3
 
 
 class TestMarketDataStateAPI:

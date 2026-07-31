@@ -128,11 +128,28 @@ coach/        → TradeCoach (deterministic post-trade review, manual trades) +
                 and a mentor dashboard (analytics.py: category trends, streaks,
                 pattern detection with confidence, improvement timeline, ≤5
                 ranked action items) served on GET /api/coach → `dashboard`
+intelligence/ → the Trading Intelligence Engine (V0.6.0). build_facts() joins
+                journal + experience + coach into one TradeFact per trade; ten
+                engines (performance, behavior, patterns, risk, confidence,
+                goals, curriculum, recommendations, timeline, achievements,
+                reports) produce ONE IntelligenceSnapshot that the Dashboard,
+                Coach, Journal and Learning tabs all project from. Imports
+                `core` ONLY — it reads the three record types structurally, not
+                by import, which keeps it BELOW the coach so the coach can
+                become a presentation layer over it. Never gates a trade.
+                See docs/TRADING_INTELLIGENCE.md
 notify/       → desktop toast / email notifications
 orchestrator.py → composes everything into one scan cycle; the only class
                    the UI and CLI actually drive
 ui/           → FastAPI app (server.py), pywebview shell (desktop.py),
-                   static/index.html (the entire frontend)
+                   static/index.html (the entire frontend), guide.py (the
+                   guided-onboarding domain layer, V0.6.1: state validation,
+                   merge semantics and feature-usage → tutorial
+                   recommendations; pure, no I/O. The tutorials themselves are
+                   DATA in index.html — a step is a CSS selector plus a
+                   sentence, which is not knowledge Python should hold. The two
+                   catalogues share IDS only, asserted in both directions by
+                   tests/test_guide.py. See docs/ONBOARDING.md)
 __main__.py   → CLI: run / ui / serve / scan / status / journal / backtest / learn / selftest
                 (_bootstrap builds AppPaths + runs initialize_storage; selftest
                 verifies the storage layout is writable + the migration marker is
@@ -307,7 +324,10 @@ Two config layers, by design:
    `config/settings.py`; invalid values refuse to start.
 2. **`data/settings.json`** (via `config/runtime.py::RuntimeSettings`) — the
    in-app-editable overlay: watchlist (+ pinned + favorites), `trading_mode`
-   (+ custom-mode tunables), `operating_mode`. Applied on top of the yaml
+   (+ custom-mode tunables), `operating_mode`, updater preferences, the
+   guided-onboarding document (`guide`, V0.6.1) and the workspace document
+   (`workspace`, V0.7.0 — selected tab, symbol, timeframe, indicators, sidebar,
+   recent symbols, saved layouts). Applied on top of the yaml
    config at startup (`RuntimeSettings.apply()`), then mutated live by UI
    actions under the `UIServer.lock`. A `baseline` snapshot (yaml values,
    taken before any runtime overlay) lets mode switches restore exact yaml
@@ -338,6 +358,71 @@ and forgetting the other fails the suite rather than silently dropping it.
 An unknown key raises at startup; an unknown *provider* is accepted, so a
 config can pin a future provider's settings before its adapter ships.
 
+**API keys (V0.5.4).** Three providers need credentials: Finnhub, Twelve Data,
+Alpha Vantage. Resolution is **environment-first** —
+`market_data.providers.<n>.api_key_env`, then the conventional
+`<PROVIDER>_API_KEY` (so the common case needs no configuration at all), then
+`market_data.providers.<n>.api_key` in the file. A whitespace-only value counts
+as absent.
+
+Two things to know before touching this:
+
+1. **A missing key must never crash or fail loudly.** The adapter is still
+   constructed and reports `missing_api_key` (plus a signup URL) through
+   diagnostics; it is simply never selected. The app ships with zero keys and
+   must chart normally in that state. **Since V0.5.7 `enabled: false` behaves
+   the same way** — the provider is constructed, benched, listed and
+   self-explaining, rather than being dropped from the registry. A provider
+   that is not constructed cannot be shown in Settings, cannot explain its own
+   absence, and cannot be switched back on without editing a file. It
+   contributes no `deepest_earliest` history floor either way.
+2. **Keys are redacted by default.** `ProviderConfig.as_dict()` returns `***`
+   unless explicitly asked not to, because that dict reaches
+   `/api/diagnostics/marketdata`, the JSON export and the text report — all of
+   which users are invited to attach to public bug reports. Do not add a new
+   path that serialises config without going through it.
+
+**Budgets (V0.5.4).** `market_data.providers.<n>.requests_per_minute` /
+`requests_per_day` override a provider's published limits (worth setting only
+on a paid plan). `market_data.quota_state_path` is where daily counts persist;
+the orchestrator defaults it to `<data>/quota.json` so a restart cannot mint an
+allowance the plan never granted.
+
+**Credentials and live control (V0.5.7).** Keys pasted into **Settings ▸ Market
+data** are stored in `<data>/credentials.json` (`market_data.credentials_path`)
+— its own owner-only file, deliberately *not* `settings.json`, because
+everything in `settings.json` is treated as ordinary backed-up user data and a
+secret needs the opposite defaults. Resolution order is
+**`environment → credentials.json → config.yaml → missing`**, and it has one
+implementation: `CredentialStore.overlay()` fills in `ProviderConfig.api_key`,
+which `resolve_api_key` consults *after* the environment. So a key set in an
+environment variable silently outranks one pasted in the UI — which is why the
+dashboard reports `credential.source` and the save response says so explicitly.
+
+**A plaintext key leaves `data/credentials.py` only through `resolve()`.** Every
+other accessor returns `••••••••abcd`. `tests/test_credentials.py::TestNoLeak`
+enumerates every payload this repo invites users to attach to a bug report and
+asserts the key is absent; **a new export path belongs in that test before it
+ships.**
+
+Live choices (provider order, per-provider enable, ordering mode) persist to
+`<data>/marketdata.json` (`market_data.control_state_path`) and are folded into
+the startup config by `control.apply_control_state()` — before the providers
+are constructed, so a provider disabled last session is off from the first
+request rather than from whenever Settings is next opened. Every field is
+type-checked on the way in: a hand-edited preferences file must cost a user
+their preferences, never their app.
+
+**Ordering has three modes** (`market_data.ordering_mode`): `static` (rank =
+priority), `hybrid` (the full rank formula **minus its latency term** — your
+order stands until a provider is genuinely failing), and `dynamic` (the
+default, full health ranking). `dynamic_ranking: false` is the older, more
+explicit spelling of `static` and still wins.
+
+**`market_data.qa_mode`** exposes the developer fault-injection panel. **Off in
+every shipped build**, and the `/api/marketdata/qa/*` endpoints return **404**
+(not 403 — a 403 confirms the endpoint exists) while it is.
+
 ## APIs and endpoints (FastAPI, `optionspilot/ui/server.py`)
 
 | Method | Path | Purpose |
@@ -346,9 +431,18 @@ config can pin a future provider's settings before its adapter ships.
 | GET | `/api/diagnostics/marketdata?traces=N` | Everything needed to diagnose a chart complaint without reproducing it (V0.5.2): per-provider health (availability, failure rate, latency, rolling data-quality score, circuit-breaker and rate-limit state), cache stats (bars/symbols/bytes/schema version/rebuilds/bars-by-provider), aggregate request outcomes, and the last N request traces — each naming every provider tried, why each was skipped or failed, which tier answered, and what validation found. Returns `{"available": false}` rather than erroring when the injected provider predates this architecture. **V0.5.3** adds, per provider: `rank` and `state` (closed/open/half_open), `p95_latency_ms`, `success_rate`, `requests_today`, `timeouts`, `validation_failures`, `rate_limits`, `breaker_trips`, `last_success_at`, `intervals`, and the `config` in force; plus top-level `ranking` (ordered, with positions), `memo` (entries/max), `config`, `version`, and richer `cache` metrics (hit rate, stale reads, evictions, average age, `provider_requests_saved`, span held). Each trace also carries `chain` — every provider tried and its verdict, the same string the structured log line uses. This is the payload **Help ▸ Diagnostics** renders |
 | GET | `/api/diagnostics/marketdata/export?format=json\|text&traces=N` | The same payload as a dated download (`Content-Disposition: attachment`). `format=text` renders `data/report.py`'s human-readable report — built to be safe to paste into a public issue tracker (no stack traces, no filesystem paths, no credentials) |
 | POST | `/api/diagnostics/marketdata/replay` | `{"trace_id": N}` — re-run a recorded request through the live ladder AND poll every provider directly, returning each one's bars, latency, quality and disagreement against the first that answered. POST because it is not free: one upstream request per provider, deliberately bypassing the memo and cache so it measures the real chain. 400 without a `trace_id`, 404 for a trace no longer in the ring or a provider that cannot support replay |
+| GET | `/api/marketdata` | **V0.5.7** — the whole Market Data Control Centre in one payload: every provider's health row (as `/api/diagnostics/marketdata`, plus `health_state` + `health_detail`, the human-facing derived state and its mandatory explanation), `credential` (required / source / **masked** key / configured-at / last-success / env vars / `env_overrides` / signup URL), `feed` (cost / limits / latency / key labels), `capability` (intraday/daily/weekly/monthly, intervals, max lookback), `quota`, `enabled` and `position`; plus top-level `ranking`, `order`, `default_order`, `ordering_mode` + `ordering_modes` (each with its plain-English explanation), `cache`, `requests`, `failover` (usable providers, **independent** sources — Yahoo and yfinance count as one — primary, next, `single_point_of_failure`), `recommendations`, `maintenance` (job + the eight available actions, each declaring whether it spends upstream requests), `qa_mode` and `health_text`. **Safe to poll**: every number is a counter that already exists and nothing here touches the network. One request rather than N because the settings page auto-refreshes |
+| POST/DELETE | `/api/marketdata/providers/{name}/key` | Store or forget an API key, applied to the live adapter with no restart. The key is written to `credentials.json` and **never echoed back** — the response carries a mask. When an environment variable is shadowing what was just saved, the response says so explicitly (`env_overrides`), because "I typed my key in and it still says no key" is the worst possible bug report. 400 for an unknown provider, a keyless provider, or an empty key |
+| POST | `/api/marketdata/providers/{name}/enabled` | `{"enabled": bool}` — bench or restore a provider without a restart. It stays listed either way |
+| POST | `/api/marketdata/providers/{name}/test` | Run a real request against one provider and report what happened. POST because it spends an upstream request. End to end on purpose — transport, authentication, parsing, normalization **and** semantic validation — so a provider whose response format has changed fails the test rather than passing it. Returns a closed vocabulary (`connected` / `missing_key` / `authentication_failed` / `rate_limited` / `provider_unreachable` / `network_failure` / `unexpected_response` / `disabled` / `unknown_provider`), each with one sentence of explanation and one recommended action. A provider that is out of budget or has no key is answered **without** a request |
+| POST | `/api/marketdata/providers/{name}/move` | `{"direction": "up"\|"down"}` — one place in the configured order. Moving past either end is a no-op, not an error |
+| POST | `/api/marketdata/order` · `/api/marketdata/order/reset` | Set the whole order (`{"order": [names]}`, best first) or restore the shipped chain. Unknown names are ignored and omitted providers keep their relative order at the end, so a stale list from another build reorders what it can and breaks nothing. Priorities are rewritten **10, 20, 30…** because 10 rank points equals one second of latency |
+| POST | `/api/marketdata/ordering_mode` | `{"mode": "static"\|"hybrid"\|"dynamic"}`. 400 for anything else; the response carries the mode's plain-English explanation |
+| POST/GET/DELETE | `/api/marketdata/maintenance` | Start / poll / stop one of eight maintenance actions (clear cache, rebuild cache, verify cache integrity, run validation, run replay, run benchmark, run diagnostics, re-measure capabilities). One background job slot with polled progress — a capability re-measurement takes minutes, so a synchronous endpoint would hold a request open past any client timeout. A busy slot is refused **by name** ("'Re-measure capabilities' is still running"). Cancellation is cooperative, checked between units of work, keeps what it measured, and reports state `cancelled` rather than `error` |
+| GET/POST/DELETE | `/api/marketdata/qa/*` | Developer fault injection: `qa` (state), `qa/fault` (arm/clear), `qa/breaker` (force a provider out of rotation), `qa/reset` (clear every breaker), `qa/corrupt_cache` (the corruption-recovery drill, run on a **copy** — the real cache is never touched). **All return 404 unless `market_data.qa_mode` is true**, which it is in no shipped build |
 | GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes, scan progress) — also pushed over `/ws` |
 | POST | `/api/scan` | Run one cycle: non-blocking by default (background thread; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous |
-| GET | `/api/journal` | Trade history + stats |
+| GET | `/api/journal` | Trade history + stats, plus a `findings` map (`trade_id → [intelligence finding labels]`) so rows can be badged without a request each (V0.6.0) |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
 | GET | `/api/candles?symbol=&tf=&start=&end=` | OHLCV + indicator series for the Charts tab (computed by the same `analysis/` code the engine uses; provider-only, no lock). `tf` is any of the 13 timeframes (1m/2m/3m/5m/10m/15m/30m/1h/2h/4h/1d/1w/1mo). Optional ISO `start`/`end` request an arbitrary window — the UI uses this to prepend history as the user pans left (V3.1-3). Since V3-0 the payload also carries `stale`/`as_of`: when the live fetch fails, disk-cached bars of any age are served flagged stale (display-only fallback — the engine's strict `get_candles` path is unchanged). Since V3.1 RC2 it also carries `market_open` (bool, from `Orchestrator.market_open`): the Charts tab suppresses the "Live data unavailable — showing cached bars" banner when the market is closed (the cached bars ARE the last session, so the banner would be a false alarm) and shows it only when a stale payload arrives during market hours. Bars are sanitized by `validate_candles` (NaN/inf/≤0 dropped, non-finite volume zeroed) so a glitched provider bar can't 500 the endpoint (V3.1-1). Since V3.2, `?ext=1` requests Extended Hours (intraday only): the payload carries `extended_hours` (bool) and each bar a `session` tag (`pre`/`rth`/`post`) from `optionspilot/data/sessions.py`; ext frames are cache-keyed separately and bypass the disk store, and the flag is display-only — the engine/trading path never sets it, so paper execution stays RTH-only . **Since V0.5.2** it also carries the market-data outcome so the frontend never has to infer one from an empty array: `outcome` (`live`/`memo`/`cache`/`stale`/`empty`/`exhausted`/`failed`), `provider`, `quality` (0-100 validation score), `exhausted` (bool — the window predates what ANY provider serves; the chart shows "start of available history" and stops requesting), `earliest_available` (ISO), `message` (a human reason) and `trace_id` (look it up in `/api/diagnostics/marketdata`). Fields are additive; existing consumers are unaffected |
@@ -359,13 +453,27 @@ config can pin a future provider's settings before its adapter ships.
 | GET/POST | `/api/watchlist*` | Add/remove/reorder/pin/favorites/presets, symbol search |
 | POST | `/api/mode` | Switch trading_mode (conservative/high_risk/custom) |
 | POST | `/api/operating_mode` | Switch AI Mode ↔ Human Mode |
-| GET | `/api/coach` | Coach reviews + aggregated profile |
+| GET | `/api/coach` | Coach reviews + aggregated profile + an `intelligence` block (the same snapshot every other view reads, minus `periods`), so the Coach tab costs one request and one analysis (V0.6.0) |
 | GET | `/api/experience` | Experience Engine statistics (overview + by strategy/regime/session + failure modes/success patterns) + recent experiences (V0.4.1) |
 | GET | `/api/experience/similar?symbol=&k=` | Advisory historical-similarity for a symbol's CURRENT setup: the calibrated-confidence explanation + the Similar Trade Viewer rows. Evaluates the symbol deterministically; opens no position and changes no state (V0.4.1) |
+| GET | `/api/intelligence?full=` | The complete Trading Intelligence analysis: metrics, behaviours, patterns, scores, risk, goals, recommendations, lessons, timeline, achievements, reports (V0.6.0). `full=false` drops `periods` — the only unbounded section |
+| GET | `/api/intelligence/summary` | The dashboard projection of the SAME snapshot: headline metrics, the eight scores, top actions, goals, achievements, timeline, lessons, latest report (V0.6.0) |
+| GET | `/api/intelligence/trade/{trade_id}` | Per-trade projection: the patterns it belongs to, the habits it is evidence for, its percentile in your own distribution, the comparable cohort. 200 with `available:false` for an unknown id — a 404 would read as "this trade does not exist" (V0.6.0) |
+| GET | `/api/intelligence/reports` | Weekly + monthly coaching reports (V0.6.0) |
+| GET | `/api/intelligence/goals` | Active goals with computed progress, the suggested templates, and the metric vocabulary a custom goal may target (V0.6.0) |
+| POST | `/api/intelligence/goals` | Create/replace a goal. 422 with the precise reason if it names a metric, comparator or window that could never evaluate (V0.6.0) |
+| DELETE | `/api/intelligence/goals/{goal_id}` | Remove a goal; 404 if unknown (V0.6.0) |
+| GET | `/api/guide` | Guided-onboarding state, measured feature-usage facts, and which walkthrough to offer next (V0.6.1). Progress lives in `settings.json` under a `guide` key, **not** localStorage, so a reinstall or a cleared webview profile does not greet a returning user as a beginner |
+| POST | `/api/guide/state` | Merge a patch (`completed` / `dismissed` union, `features` increment, `onboarded` / `reduce_motion` / `tips` replace, `forget` resets) and return the full state plus fresh suggestions. Deliberately forgiving — an unknown id, an unusable feature key or a garbage body is ignored rather than rejected, because this endpoint records that someone finished a tour and failing it would be a 4xx in the middle of a celebration |
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
-| WS | `/ws` | 1s cadence with change detection: full `status_payload()` when something changed, tiny heartbeat otherwise |
+| GET | `/api/workspace` | Where the user was: tab, symbol, timeframe, indicators, extended hours, auto-follow, watchlist sort, ticket chart, recent symbols, saved layouts (V0.7.0). Persisted in `settings.json` under a `workspace` key — **not** localStorage, which is a cache a cleared profile silently discards, and which a second client cannot see at all |
+| POST | `/api/workspace` | Merge a **partial** patch and return the full document. Partial by design: a client that only knows about `symbol` must be able to say so without overwriting panel layout it has never heard of. Unusable values fall back to their default rather than 4xx-ing, because this records where someone was looking |
+| DELETE | `/api/workspace` | Reset to the shipped defaults, saved layouts included |
+| GET | `/api/host` | What this build's host can do: `optionspilot/host/`'s capability profile, so a client decides which surfaces to offer instead of guessing from a user agent. No user data, no secret |
+| GET | `/api/diagnostics/sync` | The classified inventory of every durable object the app owns, with its sync domain and policy (V0.7.0). **Nothing syncs anything** — this is the classification that must exist first. `never_sync` names what must not leave the machine. Safe in a public bug report |
+| WS | `/ws` | 1s cadence with change detection: full `status_payload()` when something changed, tiny heartbeat otherwise. **Not enveloped** — a known blocker for any client that cannot update in lockstep (`ARCHITECTURE-PLATFORM.md` §7) |
 
 All mutating endpoints acquire `UIServer.lock` (an `RLock`) — the
 orchestrator is not thread-safe, and this lock serializes the background
@@ -401,11 +509,35 @@ schema, so existing on-disk databases open unchanged):
   `market_regime`, `return_pct`, `hold_minutes`) + JSON payload, `PRAGMA
   user_version` migrations; written alongside `journal.db`, safe to delete
   (regenerated only for new trades — it is not the system of record)
-- `data/settings.json` — runtime-mutable settings (watchlist, modes)
+- `data/settings.json` — runtime-mutable settings (watchlist, modes, updater
+  prefs, and since V0.6.1 the `guide` document: tutorials finished/skipped,
+  features used, motion and hint preferences). **Treated as ordinary user data**: backed up by `create_backup()`,
+  small enough to open in Notepad, safe to share. That is exactly why API keys
+  do not live here
+- `data/credentials.json` (V0.5.7) — **market-data API keys. The only file in
+  the app that holds a secret.** Written owner-only, atomically, and read only
+  by `data/credentials.py`; no export path imports that module, so no
+  diagnostics payload can carry a key. Deleting it removes every stored key
+  (environment variables still work). **Never commit one, never attach one to a
+  bug report, and never add a second place a key can be written**
+- `data/marketdata.json` (V0.5.7) — control-centre choices: provider order,
+  per-provider enable, ordering mode. Holds no secrets; safe to delete (the
+  shipped defaults return)
+- `data/quota.json` (V0.5.4) — each metered provider's daily request count, so
+  a restart cannot mint an allowance the plan never granted. Safe to delete,
+  at the cost of over-spending a budget until the next real 429 corrects it
 - `data/state/open_trades.json` — AI trade context (restart-safe journaling)
 - `data/state/manual_trades.json` — manual trade context (V2-3)
 - `data/coach/<trade_id>.json` — one file per coach review
 - `data/learning/weights.json` — versioned evidence-weight history
+- `data/intelligence/goals.json` (V0.6.0) — **the only thing the Trading
+  Intelligence Engine stores.** Every analysis output (scores, behaviours,
+  patterns, achievements, reports) is derived on read and persisted nowhere, so
+  a stored verdict can never drift from the trades it describes. The file is
+  user-editable, so every field's *shape* is validated on load and a malformed
+  entry is dropped with a log line — the failure mode is "you lose a goal",
+  never "the app will not start". The directory is created on demand, so a user
+  who never opens the Goals panel never accumulates it
 - `data/reports/` — backtest JSON/HTML reports
 - `logs/*.log` — rotating per-subsystem logs
 
@@ -452,7 +584,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (1052 tests as of this writing, all passing)
+# Tests (2079 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -461,9 +593,31 @@ python -m venv .venv
 
 `scripts/build_exe.ps1` refuses to build over a running instance (open
 SQLite handles) and backs up/restores `dist\OptionsPilot\data\` around the
-PyInstaller `--clean` wipe. The exe has a single-instance guard
-(`ui/desktop.py`) — a second launch shows a friendly "already running"
-window instead of corrupting the shared account database.
+PyInstaller `--clean` wipe. The app has a single-instance guard — a bound
+loopback socket on port 8786, owned by `host.adapter.DesktopHost` and reached
+from `ui/desktop.py` via `current_host()` (**one** implementation: it existed
+twice until V0.8.2). A second launch shows a friendly "already running" window
+instead of corrupting the shared account database.
+
+**Desktop thread ownership (V0.8.2) — read before touching `ui/desktop.py`.**
+pywebview binds its `closing` event as `Event(window, should_lock=True)`, which
+means handlers run **synchronously on the WinForms message pump**, inside
+`Form.FormClosing`. Three things are therefore forbidden inside
+`_DesktopController.on_closing`:
+
+| Operation | Why it cannot run on the pump |
+|---|---|
+| `window.evaluate_js` | WebView2 schedules the `ExecuteScriptAsync` continuation on `syncContextTaskScheduler` — the same pump — and pywebview then blocks on an **untimed** `semaphore.acquire()`. Deadlock, no traceback. |
+| `window.hide` / `window.show` / `window.destroy` | All marshal through `Control.Invoke`, which needs the pump. |
+| `server.close()` / `tray.stop()` | Up to 5s and 2s of thread joins. Windows ghosts a window that stops pumping for 5s. |
+
+`on_closing` **decides and returns**; every consequence runs on a worker via
+`_defer`. The other callbacks — tray menu items (pystray's thread), the JS bridge
+(pywebview spawns a thread per call), toast activations, and `refresh_tray` (the
+background runtime) — are already off the pump and may call these directly.
+`tests/test_desktop_tray.py`'s window double raises `GuiThreadViolation` (a
+`BaseException`, so the lifecycle code's `except Exception` cannot swallow it) if
+this is violated.
 
 **Release pipeline (V0.4.5).** Releases are automated by GitHub Actions:
 `.github/workflows/ci.yml` (push/PR: pytest + selftest + doc/id checks, reusable)
@@ -546,8 +700,8 @@ Windows 10/11 by default).
    options-only. Adding shares would need a new `OptionContract`-shaped
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
-5. No automated UI/browser test coverage — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (1052 tests cover this
+5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
+   exercises the FastAPI layer via `TestClient` (2079 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

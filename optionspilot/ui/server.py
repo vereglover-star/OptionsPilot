@@ -13,9 +13,10 @@ no CDN, works offline and inside the PyInstaller bundle.
 from __future__ import annotations
 
 import asyncio
+import sys
 import threading
-import time as _time
-from datetime import date, datetime, time, timedelta
+import tracemalloc
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -32,7 +33,7 @@ from optionspilot.backtest import Backtester
 from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.coach import CoachProfile, build_dashboard
-from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
+from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
@@ -44,9 +45,21 @@ from optionspilot.data import symbols as symdir
 from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
 from optionspilot.engine.scorer import DEFAULT_WEIGHTS
+from optionspilot.intelligence import (
+    Goal, IntelligenceSnapshot, build_evidence_index,
+)
+from optionspilot.intelligence.goals import TEMPLATES as GOAL_TEMPLATES
+from optionspilot.intelligence.performance import METRIC_SPECS
 from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
+from optionspilot.services import IdempotencyStore, ServiceRegistry
+from optionspilot.services.runtime import BackgroundRuntime, RuntimeSnapshot, TaskSpec
+from optionspilot.host import current_host
+from optionspilot.services import intelligence as intel_view
+from optionspilot.services import sync as sync_boundaries
+from optionspilot.ui import guide
+from optionspilot.ui.api_v1 import register_v1_routes
 from optionspilot.update.models import UpdateError
 from optionspilot.update.service import UpdateService
 
@@ -76,6 +89,19 @@ ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_EQUITY_POINTS = 2000
 
+# V0.7.0: the intelligence projections moved to `services/intelligence.py`.
+# They decide which twelve of thirty-eight metrics are a headline and how much
+# of a five-year series a client receives — presentation decisions, reachable
+# now without importing a web framework. Re-exported under their historical
+# names so anything importing them from here keeps working.
+PERIOD_LIMITS = intel_view.PERIOD_LIMITS
+SUMMARY_METRICS = intel_view.SUMMARY_METRICS
+_intelligence_payload = intel_view.payload
+
+
+def _intelligence_summary(snapshot: IntelligenceSnapshot) -> dict:
+    return intel_view.summary(snapshot)
+
 
 class UIServer:
     """Owns the orchestrator, the cycle loop, and the backtest job slot."""
@@ -99,6 +125,16 @@ class UIServer:
         self.equity_history: list[tuple[str, float]] = []
         self._loop_thread: threading.Thread | None = None
         self._stop = threading.Event()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self.background = BackgroundRuntime(health_check=self._health_check)
+        self._runtime_health: dict = {"state": "healthy", "last_check": None,
+                                      "issues": [], "repairs": [], "memory": {}}
+        # Tracing every allocation is intentionally a live-runtime diagnostic,
+        # not a side effect of constructing an app for an HTTP request or a
+        # test.  The server that starts it also releases it during shutdown.
+        self._owns_memory_tracing = False
+        self._health_memory_baseline = 0
         self._bt_lock = threading.Lock()
         self.backtest_job: dict = {"state": "idle"}
         # Scan pipeline: candle fetching runs OUTSIDE self.lock (it only
@@ -112,27 +148,160 @@ class UIServer:
         self._meta_path = data_dir / "state" / "symbol_meta.json"
         self._reports_dir = data_dir / "reports"
         self._symbol_meta: dict[str, dict] = self._load_meta()
-        self._kick_meta_refresh(self.cfg.data.watchlist)
+        # Metadata enrichment is background work, not construction work.  In
+        # particular, creating an application for a request/test must not
+        # silently create a network-capable worker with no lifecycle owner.
+        # The runtime drains this queue after it has started.
+        self._meta_pending: set[str] = set()
+        self._queue_meta_refresh(self.cfg.data.watchlist)
         # Self-updater: reads GitHub Releases, downloads to a temp dir, and (on
         # explicit user action) launches the installer. Preferences persist via
         # RuntimeSettings. Constructing it touches no network — a launch-time
         # check is kicked separately (see create_app), only for the real app.
         self.updater = UpdateService(__version__, self.runtime)
+        # V0.7.0: the platform-independent application layer. Everything that
+        # decides WHAT a client is shown — portfolio statistics, watchlist
+        # classification, intelligence projections, workspace state,
+        # notification routing — lives behind this and is reachable without
+        # importing FastAPI. `UIServer` keeps its method names so nothing that
+        # calls them had to change; the bodies now delegate.
+        self._data_dir = data_dir
+        self.idempotency = IdempotencyStore(data_dir / "state" / "idempotency.db")
+        self.services = ServiceRegistry(
+            orchestrator=self.orch,
+            runtime=self.runtime,
+            config=self.cfg,
+            lock=self.lock,
+            directory=symdir,
+            # Bound LATE, through the attribute, rather than by handing over the
+            # bound method here. These three are overridable seams — a test
+            # replaces `_live_symbol_check` to keep validation offline, and a
+            # future host could replace any of them — and a bound method
+            # captured at construction silently ignores every later
+            # reassignment. Caught by an existing test rather than in
+            # production, which is the only reason it is a footnote.
+            trades=lambda: self._all_trades(),
+            verify_symbol=lambda symbol: self._live_symbol_check(symbol),
+            on_symbols_added=self._queue_meta_refresh,
+            log=log,
+        )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
 
     def start_loop(self) -> None:
-        if self._loop_thread is not None:
+        if self._closed:
+            raise RuntimeError("UI server is closed")
+        if self.background.snapshot().running:
             return
-        self._loop_thread = threading.Thread(
-            target=self._loop, name="cycle-loop", daemon=True
-        )
-        self._loop_thread.start()
+        self._start_memory_monitoring()
+        prefs = self.runtime.runtime_prefs()
+        self.background.set_profile(prefs["hidden_profile"])
+        if not prefs["auto_resume_monitoring"]:
+            self.background.pause()
+        task_names = {task["name"] for task in self.background.snapshot().tasks}
+        if "market_monitor" not in task_names:
+            self.background.register(TaskSpec(
+                "market_monitor", self.cfg.engine.scan_interval_seconds,
+                self._background_cycle, policy="monitoring"))
+        if "symbol_metadata" not in task_names:
+            self.background.register(TaskSpec(
+                "symbol_metadata", 60.0, self._refresh_pending_meta,
+                policy="normal"))
+        self.background.start()
 
     def stop_loop(self) -> None:
         self._stop.set()
+        self.background.stop()
+
+    def close(self) -> None:
+        """Stop the one scheduler before releasing owned application resources."""
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        self.stop_loop()
+        self.orch.close()
+        self.idempotency.close()
+        self._stop_memory_monitoring()
+
+    def set_background_visibility(self, visible: bool) -> None:
+        self.background.set_visibility(visible)
+
+    def runtime_payload(self) -> dict:
+        snap = self.background.snapshot()
+        return {
+            "settings": self.runtime.runtime_prefs(),
+            "background": snap.to_dict(),
+            "health": dict(self._runtime_health),
+        }
+
+    def update_runtime(self, patch: dict | None) -> dict:
+        prefs = self.runtime.set_runtime_prefs(**(patch or {}))
+        self.background.set_profile(prefs["hidden_profile"])
+        if prefs["auto_resume_monitoring"] and self.background.snapshot().paused:
+            self.background.resume()
+        current_host().set_startup(
+            prefs["start_with_windows"], "\"%s\" ui" % sys.executable)
+        return self.runtime_payload()
+
+    def pause_background(self) -> dict:
+        self.background.pause()
+        return self.runtime_payload()
+
+    def resume_background(self) -> dict:
+        self.background.resume()
+        return self.runtime_payload()
+
+    def _background_cycle(self) -> None:
+        now = utcnow()
+        if self.orch.market_open(now):
+            self.run_cycle_now()
+        self.orch._maybe_send_summaries(now)
+
+    def _health_check(self, snapshot: RuntimeSnapshot) -> None:
+        issues = []
+        repairs = []
+        for task in snapshot.tasks:
+            if task["recovery_pending"]:
+                repairs.append(f"{task['name']}: retry scheduled")
+            elif task["failures"] and task["last_error"]:
+                issues.append(f"{task['name']}: {task['last_error']}")
+        current, peak = tracemalloc.get_traced_memory()
+        memory = {"current_bytes": current, "peak_bytes": peak,
+                  "baseline_bytes": self._health_memory_baseline}
+        if (self._health_memory_baseline > 1_000_000 and
+                current > self._health_memory_baseline * 3):
+            issues.append("traced memory grew beyond the health threshold")
+        self._runtime_health = {
+            "state": "degraded" if issues else "healthy",
+            "last_check": utcnow().isoformat(),
+            "issues": issues,
+            "repairs": repairs,
+            "memory": memory,
+        }
+        if issues:
+            self.orch.notifier.notify(
+                "error", "Background health check needs attention", issues[0])
+
+    def _start_memory_monitoring(self) -> None:
+        if not tracemalloc.is_tracing():
+            # ONE frame, not ten. The health check reads `get_traced_memory()`,
+            # which reports totals and never looks at a traceback; nothing in
+            # the application calls `take_snapshot()`. Ten frames per live
+            # allocation was pure overhead — paid on every allocation, for the
+            # whole life of a desktop session, to produce identical numbers.
+            tracemalloc.start(1)
+            self._owns_memory_tracing = True
+        self._health_memory_baseline = tracemalloc.get_traced_memory()[0]
+
+    def _stop_memory_monitoring(self) -> None:
+        if self._owns_memory_tracing:
+            tracemalloc.stop()
+            self._owns_memory_tracing = False
+        self._health_memory_baseline = 0
 
     def _loop(self) -> None:
+        """Legacy loop body retained for embedders; new starts use BackgroundRuntime."""
         log.info("cycle loop started (scan every %ds while market open)",
                  self.cfg.engine.scan_interval_seconds)
         while not self._stop.is_set():
@@ -207,29 +376,7 @@ class UIServer:
     def status_payload(self) -> dict:
         with self.lock:
             orch = self.orch
-            acct = orch.broker.get_account()
-            marks = (orch.broker.current_marks()
-                     if hasattr(orch.broker, "current_marks") else {})
-            positions = []
-            for p in orch.broker.get_positions():
-                mark = marks.get(p.contract.symbol, p.avg_price)
-                positions.append({
-                    "contract": p.contract.symbol,
-                    "underlying": p.contract.underlying,
-                    "expiration": p.contract.expiration.isoformat(),
-                    "strike": p.contract.strike,
-                    "right": p.contract.right.value,
-                    "managed_by": p.managed_by,
-                    "direction": p.direction.value,
-                    "quantity": p.quantity,
-                    "avg_price": round(p.avg_price, 2),
-                    "mark": round(mark, 2),
-                    "unrealized": round(p.unrealized_pnl(mark), 2),
-                    "entry_spot": round(p.entry_spot, 2),
-                    "stop": p.stop_current,
-                    "target": p.target,
-                    "opened_at": p.opened_at.isoformat(),
-                })
+            positions = [p.to_dict() for p in self.services.portfolio.positions()]
             now_et = utcnow().astimezone(ET)
             return {
                 "version": __version__,
@@ -237,12 +384,7 @@ class UIServer:
                 "scan": dict(self.scan_state),
                 "market_open": orch.market_open(utcnow()),
                 "paper": True,
-                "account": {
-                    "cash": acct.cash,
-                    "equity": acct.equity,
-                    "realized_pnl": acct.realized_pnl,
-                    "starting_balance": self.cfg.risk.starting_balance,
-                },
+                "account": self.services.portfolio.account().to_dict(),
                 "pnl": self._pnl_windows(now_et),
                 "risk": orch.risk.status(),
                 "positions": positions,
@@ -267,11 +409,11 @@ class UIServer:
                 "quotes": self.last_summary.get("quotes", {}),
                 "setup_history": self._setup_history(),
                 "equity_history": self.equity_history[-300:],
-                "notifications": [
-                    {"kind": e.kind, "title": e.title, "body": e.body,
-                     "ts": e.ts.isoformat()}
-                    for e in orch.notifier.history[-15:]
-                ][::-1],
+                # Newest first, and the ordering is the service's decision
+                # rather than each client's — see NotificationService.recent.
+                "notifications": [n.to_dict()
+                                  for n in self.services.notifications.recent(15)],
+                "runtime": self.runtime_payload(),
             }
 
     # ── chart workspace data ─────────────────────────────────────────────────
@@ -450,6 +592,85 @@ class UIServer:
                              f"(it holds the most recent requests only)"}
         return mdreplay.replay(service, trace).as_dict()
 
+    # ── market data control centre (Settings ▸ Market Data) ──────────────────
+    #
+    # Every method here delegates to `data/control.py`. That is the whole
+    # design: the UI layer decides HTTP status codes and nothing else, so the
+    # control-centre logic is testable without a web server and cannot acquire
+    # a second implementation inside a route handler.
+    #
+    # None of these take `self.lock`. They touch the provider stack, which is
+    # thread-safe and independent of the orchestrator's mutable state — the
+    # same reasoning as `candles_payload` and `marketdata_diagnostics`. Taking
+    # the lock would mean a running scan could block the settings page, which
+    # is precisely when a user is most likely to be looking at it.
+
+    @property
+    def marketdata(self):
+        """The control plane, or None when the provider is not the real stack.
+
+        A test (or an embedding) that injects a `MarketDataProvider` double has
+        no registry to administer. Returning None rather than raising lets the
+        endpoints answer "not available for this provider" the same way the
+        diagnostics endpoint already does, instead of 500ing.
+        """
+        return getattr(self.orch, "marketdata", None)
+
+    def _no_control(self) -> dict:
+        return {"available": False,
+                "reason": "this provider does not expose market-data controls"}
+
+    def marketdata_dashboard(self) -> dict:
+        control = self.marketdata
+        return control.dashboard() if control else self._no_control()
+
+    def marketdata_set_key(self, name: str, api_key: str) -> dict:
+        control = self.marketdata
+        return (control.set_api_key(name, api_key) if control
+                else self._no_control())
+
+    def marketdata_remove_key(self, name: str) -> dict:
+        control = self.marketdata
+        return control.remove_api_key(name) if control else self._no_control()
+
+    def marketdata_set_enabled(self, name: str, enabled: bool) -> dict:
+        control = self.marketdata
+        return (control.set_enabled(name, enabled) if control
+                else self._no_control())
+
+    def marketdata_move(self, name: str, direction: str) -> dict:
+        control = self.marketdata
+        return control.move(name, direction) if control else self._no_control()
+
+    def marketdata_set_order(self, order: list[str]) -> dict:
+        control = self.marketdata
+        return control.set_order(order) if control else self._no_control()
+
+    def marketdata_reset_order(self) -> dict:
+        control = self.marketdata
+        return control.reset_order() if control else self._no_control()
+
+    def marketdata_set_ordering_mode(self, mode: str) -> dict:
+        control = self.marketdata
+        return (control.set_ordering_mode(mode) if control
+                else self._no_control())
+
+    def marketdata_test(self, name: str) -> dict:
+        control = self.marketdata
+        return control.test_connection(name) if control else self._no_control()
+
+    def marketdata_maintenance(self, action: str) -> dict:
+        control = self.marketdata
+        return control.start_maintenance(action) if control else self._no_control()
+
+    def marketdata_maintenance_status(self) -> dict:
+        control = self.marketdata
+        return control.maintenance_status() if control else self._no_control()
+
+    def marketdata_maintenance_cancel(self) -> dict:
+        control = self.marketdata
+        return control.cancel_maintenance() if control else self._no_control()
+
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
     def chain_payload(self, symbol: str, expiration: str = "") -> dict:
@@ -530,115 +751,41 @@ class UIServer:
                 "event": event["event"] if event else "working"}
 
     def account_metrics(self) -> dict:
-        with self.lock:
-            broker = self.orch.broker
-            acct = broker.get_account()
-            trades = self._all_trades()
-            marks = (broker.current_marks()
-                     if hasattr(broker, "current_marks") else {})
-            unrealized = sum(
-                p.unrealized_pnl(marks.get(p.contract.symbol, p.avg_price))
-                for p in broker.get_positions()
-            )
-            history = (broker.equity_history()
-                       if hasattr(broker, "equity_history") else [])
-            now_et = utcnow().astimezone(ET)
-            day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)
-            daily = sum(t.pnl for t in trades
-                        if t.exit_ts.astimezone(ET) >= day_start)
-        start = self.cfg.risk.starting_balance
-        pnls = [t.pnl for t in trades]
-        wins = [p for p in pnls if p > 0]
-        losses = [p for p in pnls if p <= 0]
-        gross_win, gross_loss = sum(wins), abs(sum(losses))
-        max_dd = 0.0
-        peak = start
-        for _, equity in history:
-            peak = max(peak, equity)
-            if peak > 0:
-                max_dd = max(max_dd, (peak - equity) / peak * 100)
-        return {
-            "cash": acct.cash,
-            "buying_power": acct.cash,      # options buying power = cash (no margin)
-            "portfolio_value": acct.equity,
-            "unrealized_pnl": round(unrealized, 2),
-            "realized_pnl": acct.realized_pnl,
-            "daily_pnl": round(daily, 2),
-            "total_return_pct": round((acct.equity / start - 1) * 100, 2),
-            "trades": len(trades),
-            "win_rate": round(len(wins) / len(pnls), 4) if pnls else 0.0,
-            "avg_win": round(gross_win / len(wins), 2) if wins else 0.0,
-            "avg_loss": round(-gross_loss / len(losses), 2) if losses else 0.0,
-            "profit_factor": (round(gross_win / gross_loss, 2)
-                              if gross_loss else None),
-            "max_drawdown_pct": round(max_dd, 2),
-            "equity_history": history[-500:],
-        }
+        return self.services.portfolio.performance(
+            utcnow().astimezone(ET)).to_dict()
 
     # ── watchlist management ─────────────────────────────────────────────────
 
     def watchlist_add(self, text: str) -> dict:
-        """Parse free-form input (single ticker, comma/space/newline lists,
-        pasted from anywhere), validate each symbol, add the valid ones."""
-        requested = symdir.parse_symbols(text)
-        result = {"added": [], "invalid": [], "duplicates": [], "over_cap": [],
-                  "names": {}}
-        if not requested:
-            result["error"] = "no ticker symbols found in the input"
-            return result
-        with self.lock:
-            current = list(self.cfg.data.watchlist)
-            for symbol in requested:
-                if symbol in current:
-                    result["duplicates"].append(symbol)
-                elif len(current) >= MAX_WATCHLIST:
-                    result["over_cap"].append(symbol)
-                elif symdir.is_known(symbol) or self._live_symbol_check(symbol):
-                    current.append(symbol)
-                    result["added"].append(symbol)
-                    result["names"][symbol] = symdir.company_name(symbol)
-                else:
-                    result["invalid"].append(symbol)
-            if result["added"]:
-                self.runtime.set_watchlist(self.cfg, current)
-        if result["over_cap"]:
-            result["error"] = (f"watchlist is capped at {MAX_WATCHLIST} symbols "
-                               f"(scan time grows with each one)")
-        if result["added"]:
-            self._kick_meta_refresh(result["added"])
-            log.info("watchlist add: +%s (invalid: %s, dupes: %s)",
-                     result["added"], result["invalid"], result["duplicates"])
-        return result
+        return self.services.watchlist.add(text).to_dict()
 
     def watchlist_remove(self, symbol: str) -> dict:
-        symbol = symbol.upper()
-        with self.lock:
-            current = [s for s in self.cfg.data.watchlist if s != symbol]
-            if len(current) == len(self.cfg.data.watchlist):
-                return {"error": f"{symbol} is not on the watchlist"}
-            self.runtime.set_watchlist(self.cfg, current)   # raises if empty
-        log.info("watchlist remove: %s", symbol)
-        return {"removed": symbol, "watchlist": current}
+        return self.services.watchlist.remove(symbol)
 
     def watchlist_reorder(self, symbols: list[str]) -> dict:
-        symbols = [s.upper() for s in symbols]
-        with self.lock:
-            if sorted(symbols) != sorted(self.cfg.data.watchlist):
-                return {"error": "reorder must contain exactly the current symbols"}
-            self.runtime.set_watchlist(self.cfg, symbols)
-        return {"watchlist": symbols}
+        return self.services.watchlist.reorder(symbols)
 
     def watchlist_payload(self) -> dict:
         with self.lock:
-            return {
-                "watchlist": list(self.cfg.data.watchlist),
-                "pinned": self.runtime.pinned(),
-                "favorites": self.runtime.favorites(),
-                "max": MAX_WATCHLIST,
-                "meta": dict(self._symbol_meta),
-                "quotes": self.last_summary.get("quotes", {}),
-                "signals": self.last_summary.get("signals", {}),
-            }
+            return self.services.watchlist.view(
+                quotes=self.last_summary.get("quotes", {}),
+                signals=self.last_summary.get("signals", {}),
+                meta=self._symbol_meta,
+            ).to_dict()
+
+    # ── workspace (V0.7.0) ───────────────────────────────────────────────────
+
+    def workspace_payload(self) -> dict:
+        with self.lock:
+            return self.services.workspace.get().to_dict()
+
+    def update_workspace(self, patch: dict | None) -> dict:
+        with self.lock:
+            return self.services.workspace.update(patch).to_dict()
+
+    def reset_workspace(self) -> dict:
+        with self.lock:
+            return self.services.workspace.reset().to_dict()
 
     def _live_symbol_check(self, symbol: str) -> bool:
         """Fallback for tickers missing from the bundled directory: a real
@@ -658,24 +805,37 @@ class UIServer:
             pass
         return {}
 
-    def _kick_meta_refresh(self, symbols: list[str]) -> None:
-        missing = [s for s in symbols if s not in self._symbol_meta]
-        if not missing:
-            return
-        threading.Thread(target=self._refresh_meta, args=(missing,),
-                         daemon=True, name="symbol-meta").start()
+    def _queue_meta_refresh(self, symbols: list[str]) -> None:
+        """Queue unresolved metadata for the lifecycle-owned runtime."""
+        with self.lock:
+            self._meta_pending.update(
+                symbol for symbol in symbols if symbol not in self._symbol_meta)
+        self.background.trigger("symbol_metadata")
 
-    def _refresh_meta(self, symbols: list[str]) -> None:
+    def _refresh_pending_meta(self) -> None:
+        """Resolve one queued metadata batch under runtime ownership."""
+        with self.lock:
+            symbols = sorted(self._meta_pending)
+            self._meta_pending.clear()
+        if not symbols:
+            return
         get_cap = getattr(self.orch.provider, "get_market_cap", None)
+        resolved: dict[str, dict] = {}
         for symbol in symbols:
-            meta = {"name": symdir.company_name(symbol),
-                    "market_cap": get_cap(symbol) if get_cap else None}
-            with self.lock:
-                self._symbol_meta[symbol] = meta
+            try:
+                cap = get_cap(symbol) if get_cap else None
+            except Exception:  # provider metadata is optional enrichment
+                cap = None
+            resolved[symbol] = {
+                "name": symdir.company_name(symbol),
+                "market_cap": cap,
+            }
         with self.lock:
             self._meta_path.parent.mkdir(parents=True, exist_ok=True)
             self._meta_path.write_text(
-                json.dumps(self._symbol_meta, indent=1), encoding="utf-8")
+                json.dumps({**self._symbol_meta, **resolved}, indent=1),
+                encoding="utf-8")
+            self._symbol_meta.update(resolved)
 
     def _all_trades(self) -> list:
         """Journal rows cached by revision — the status payload is pushed every
@@ -688,32 +848,75 @@ class UIServer:
             self._journal_cache = cache
         return cache[1]
 
+    # ── guided onboarding (V0.6.1) ───────────────────────────────────────────
+
+    def _guide_facts(self) -> guide.GuideFacts:
+        """Measure how the app has been used. Call under self.lock.
+
+        Everything here is read from state that already exists — the journal,
+        the order book, the broker, the watchlist. Nothing is recorded specially
+        for the guide, and nothing here touches the network.
+        """
+        trades = self._all_trades()
+        orders = list(self.orch.orders.history(200)) + \
+            [o.to_dict() for o in self.orch.orders.working()]
+        kinds = {str(o.get("kind")) for o in orders if o.get("kind")}
+        try:
+            reviews = len(self.orch.coach.load_all())
+        except Exception:  # noqa: BLE001 — a missing/corrupt review dir must
+            reviews = 0    # not break onboarding; it is only a count here
+        return guide.GuideFacts(
+            closed_trades=len(trades),
+            manual_trades=sum(1 for t in trades if t.strategy == "manual"),
+            coach_reviews=reviews,
+            open_positions=len(self.orch.broker.get_positions()),
+            orders_placed=len(orders),
+            order_kinds_used=frozenset(kinds),
+            watchlist_size=len(self.cfg.data.watchlist),
+            single_data_source=self._single_data_source(),
+        )
+
+    def _single_data_source(self) -> bool | None:
+        """Is exactly one INDEPENDENT market-data source usable right now?
+
+        None when it cannot be determined — an injected provider double has no
+        chain to inspect, and answering False there would be a claim the data
+        does not support (and would silently suppress the recommendation that
+        matters most on a keyless install).
+        """
+        control = self.marketdata
+        if control is None:
+            return None
+        try:
+            failover = control.dashboard().get("failover") or {}
+        except Exception:  # noqa: BLE001 — diagnostics must never break a page
+            return None
+        spof = failover.get("single_point_of_failure")
+        return bool(spof) if isinstance(spof, bool) else None
+
+    def guide_payload(self) -> dict:
+        with self.lock:
+            state = self.runtime.guide_state()
+            facts = self._guide_facts()
+        return guide.payload(state, facts)
+
+    def update_guide(self, patch: dict | None) -> dict:
+        """Merge a client patch into the persisted guide state.
+
+        Returns the same shape as `guide_payload` so a client never has to make
+        a second request to find out what it should offer next.
+        """
+        with self.lock:
+            merged = guide.merge_state(self.runtime.guide_state(), patch or {})
+            self.runtime.set_guide_state(merged)
+            facts = self._guide_facts()
+        return guide.payload(merged, facts)
+
     def _setup_history(self) -> dict:
-        """Measured win rate per setup quality from the journal — the honest
-        'estimated probability of success' (n/a until enough history exists)."""
-        buckets: dict[str, list[bool]] = {}
-        for t in self._all_trades():
-            quality = t.market_conditions.get("setup_quality")
-            if quality:
-                buckets.setdefault(quality, []).append(t.is_win)
-        return {
-            q: {"trades": len(v), "win_rate": round(sum(v) / len(v), 3)}
-            for q, v in buckets.items()
-        }
+        return self.services.portfolio.setup_history()
 
     def _pnl_windows(self, now_et: datetime) -> dict:
-        day_start = datetime.combine(now_et.date(), time(0), tzinfo=ET)
-        week_start = day_start - timedelta(days=now_et.weekday())
-        month_start = day_start.replace(day=1)
-        with self.lock:
-            trades = self._all_trades()
-        def pnl_since(start):
-            return round(sum(t.pnl for t in trades if t.entry_ts >= start), 2)
-        return {
-            "today": pnl_since(day_start),
-            "week": pnl_since(week_start),
-            "month": pnl_since(month_start),
-        }
+        return self.services.portfolio.pnl_windows(now_et).to_dict()
 
     # ── backtest job ─────────────────────────────────────────────────────────
 
@@ -764,6 +967,9 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     server = UIServer(config, orchestrator, runtime, data_dir)
     app = FastAPI(title="OptionsPilot", version=__version__)
     app.state.server = server
+    @app.on_event("shutdown")
+    def _shutdown():
+        server.close()
     if run_loop:
         server.start_loop()
         # Quietly check for updates in the background on launch (respecting the
@@ -862,6 +1068,180 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
             return JSONResponse(result, status_code=404)
         return result
 
+    # ── market data control centre ───────────────────────────────────────────
+    #
+    # Read is a GET and free; everything that CHANGES something or spends an
+    # upstream request is a POST. That split is not ceremony here: the
+    # dashboard is polled every few seconds while the settings tab is open, and
+    # a GET that could spend a metered request would turn an idle settings page
+    # into the thing that exhausts a 25-per-day key.
+
+    def _md(result: dict, *, missing: int = 400):
+        """One place that turns a control-plane dict into an HTTP response.
+
+        The control plane reports failures as `{"error": ...}` rather than by
+        raising, because most of them are user-input problems ("no such
+        provider", "that mode does not exist") and an exception-driven API
+        would make the caller's happy path the exceptional one. This maps them
+        to status codes so the frontend can still tell success from failure
+        without parsing prose.
+        """
+        if isinstance(result, dict) and result.get("available") is False:
+            return JSONResponse(result, status_code=501)
+        if isinstance(result, dict) and "error" in result:
+            return JSONResponse(result, status_code=missing)
+        return result
+
+    @app.get("/api/marketdata")
+    def marketdata_dashboard():
+        """The whole control centre in one payload: every provider's health,
+        credentials (masked), quota, capabilities and position in the order,
+        plus the failover picture, live recommendations and maintenance state.
+
+        Safe to poll — every number is a counter that already exists, and
+        nothing here touches the network."""
+        return server.marketdata_dashboard()
+
+    @app.post("/api/marketdata/providers/{name}/key")
+    def marketdata_set_key(name: str, payload: dict | None = None):
+        """Store an API key and apply it to the live provider immediately.
+
+        The key is written to `credentials.json` (owner-only, never exported)
+        and never echoed back — the response carries a mask. An environment
+        variable still takes precedence, and the response says so explicitly
+        when one is shadowing what was just saved.
+        """
+        return _md(server.marketdata_set_key(
+            name, str((payload or {}).get("api_key", ""))))
+
+    @app.delete("/api/marketdata/providers/{name}/key")
+    def marketdata_remove_key(name: str):
+        return _md(server.marketdata_remove_key(name))
+
+    @app.post("/api/marketdata/providers/{name}/enabled")
+    def marketdata_set_enabled(name: str, payload: dict | None = None):
+        """Switch a provider on or off without a restart."""
+        return _md(server.marketdata_set_enabled(
+            name, bool((payload or {}).get("enabled", True))))
+
+    @app.post("/api/marketdata/providers/{name}/test")
+    def marketdata_test(name: str):
+        """Run a real request against one provider and report what happened.
+
+        POST because it spends an upstream request — including a metered one.
+        End to end on purpose: transport, authentication, parsing and semantic
+        validation, so a provider whose response format has changed fails the
+        test rather than passing it."""
+        return _md(server.marketdata_test(name))
+
+    @app.post("/api/marketdata/providers/{name}/move")
+    def marketdata_move(name: str, payload: dict | None = None):
+        direction = str((payload or {}).get("direction", "up")).lower()
+        if direction not in ("up", "down"):
+            return JSONResponse({"error": "direction must be 'up' or 'down'"},
+                                status_code=400)
+        return _md(server.marketdata_move(name, direction))
+
+    @app.post("/api/marketdata/order")
+    def marketdata_set_order(payload: dict | None = None):
+        order = (payload or {}).get("order")
+        if not isinstance(order, list):
+            return JSONResponse({"error": "order must be a list of provider "
+                                          "names, best first"}, status_code=400)
+        return _md(server.marketdata_set_order([str(n) for n in order]))
+
+    @app.post("/api/marketdata/order/reset")
+    def marketdata_reset_order():
+        return _md(server.marketdata_reset_order())
+
+    @app.post("/api/marketdata/ordering_mode")
+    def marketdata_ordering_mode(payload: dict | None = None):
+        return _md(server.marketdata_set_ordering_mode(
+            str((payload or {}).get("mode", ""))))
+
+    @app.post("/api/marketdata/maintenance")
+    def marketdata_maintenance(payload: dict | None = None):
+        """Start one maintenance action on a background thread.
+
+        Returns immediately with the job's initial state; progress is polled
+        from the GET below. Several of these take tens of seconds and one takes
+        minutes, so a synchronous endpoint would hold a request open past any
+        sensible client timeout with no way to distinguish slow from dead."""
+        return _md(server.marketdata_maintenance(
+            str((payload or {}).get("action", ""))), missing=400)
+
+    @app.get("/api/marketdata/maintenance")
+    def marketdata_maintenance_status():
+        return server.marketdata_maintenance_status()
+
+    @app.delete("/api/marketdata/maintenance")
+    def marketdata_maintenance_cancel():
+        """Ask the running action to stop at its next checkpoint.
+
+        Cooperative rather than forcible: the actions long enough to want
+        cancelling are the ones spending upstream requests, and abandoning one
+        mid-flight would leave a provider's counters inconsistent with what it
+        actually served."""
+        return _md(server.marketdata_maintenance_cancel())
+
+    # ── developer QA (gated) ─────────────────────────────────────────────────
+    #
+    # `market_data.qa_mode` is false in every shipped build, and these return
+    # 404 — not 403 — while it is. A 403 confirms the endpoint exists, which is
+    # a small thing to hand an unattended local HTTP server; 404 says only that
+    # this build has no such route, which is functionally true.
+
+    def _qa_gate():
+        control = server.marketdata
+        if control is None or not control.config.qa_mode:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return None
+
+    @app.get("/api/marketdata/qa")
+    def marketdata_qa_state():
+        return _qa_gate() or server.marketdata.qa_state()
+
+    @app.post("/api/marketdata/qa/fault")
+    def marketdata_qa_fault(payload: dict | None = None):
+        """Arm a simulated failure against one provider.
+
+        The fault fires inside `HistoryAdapter.fetch_history`, in the exact
+        place a real transport failure occurs, so the health monitor, the
+        breaker, the ranking, the tier ladder and the frontend state machine
+        all behave identically to the genuine article."""
+        blocked = _qa_gate()
+        if blocked:
+            return blocked
+        data = payload or {}
+        count = data.get("count")
+        return _md(server.marketdata.qa_arm(
+            str(data.get("provider", "")), str(data.get("kind", "")),
+            count=int(count) if count else None,
+            seconds=float(data.get("seconds", 2.0))))
+
+    @app.delete("/api/marketdata/qa/fault")
+    def marketdata_qa_clear(provider: str | None = None):
+        return _qa_gate() or _md(server.marketdata.qa_clear(provider))
+
+    @app.post("/api/marketdata/qa/breaker")
+    def marketdata_qa_breaker(payload: dict | None = None):
+        blocked = _qa_gate()
+        if blocked:
+            return blocked
+        data = payload or {}
+        return _md(server.marketdata.qa_trip_breaker(
+            str(data.get("provider", "")), float(data.get("seconds", 30.0))))
+
+    @app.post("/api/marketdata/qa/reset")
+    def marketdata_qa_reset():
+        return _qa_gate() or _md(server.marketdata.qa_reset_health())
+
+    @app.post("/api/marketdata/qa/corrupt_cache")
+    def marketdata_qa_corrupt_cache():
+        """Prove the cache-corruption recovery path on a COPY of the real
+        cache file. The user's own cache is never touched."""
+        return _qa_gate() or _md(server.marketdata.qa_corrupt_cache())
+
     @app.get("/api/status")
     def status():
         return server.status_payload()
@@ -880,8 +1260,15 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         with server.lock:
             trades = server._all_trades()[-last:]
             stats = server.orch.journal.stats()
+            # Which intelligence findings each row is evidence for. Built from
+            # the snapshot the rest of the app already has, so the journal list
+            # can flag "this trade contributed to 2 findings" without a second
+            # analysis or a per-row request.
+            findings = build_evidence_index(server.orch.intelligence_snapshot())
         return {
             "stats": stats,
+            "findings": {tid: labels for tid, labels in findings.items()
+                         if any(t.id == tid for t in trades)},
             "trades": [{
                 "id": t.id, "symbol": t.symbol, "contract": t.contract_symbol,
                 "direction": t.direction.value, "quantity": t.quantity,
@@ -899,7 +1286,14 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
         with server.lock:
             engine = LearningEngine(server.orch.journal)
-            store = WeightStore(Path("data") / "learning" / "weights.json")
+            # The SAME file the orchestrator loads its learned weights from.
+            # This read was `Path("data") / ...` — CWD-relative, one of the
+            # hardcodes V0.4.4's storage split was meant to eliminate. On any
+            # real install the CWD is not the storage root, so the file simply
+            # did not exist and the Learning tab reported "no learned weights"
+            # however much the engine had learned. `effective` was right (it is
+            # read from the live scorer), which is what made it look plausible.
+            store = WeightStore(server._data_dir / "learning" / "weights.json")
 
             def rows(slices):
                 return [{"label": s.label, "trades": s.trades,
@@ -1038,11 +1432,159 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         # sufficient cache key.
         dashboard = server._coach_dashboard(reviews)
         reviews.sort(key=lambda r: r.get("trade_id", ""), reverse=True)
+        # V0.6.0: the Coach also serves the intelligence layer's view of the
+        # same trader. The two are deliberately kept side by side rather than
+        # merged — `dashboard` is the per-review scorecard aggregation the coach
+        # has always produced, `intelligence` is the cross-trade analysis, and
+        # they answer different questions over different windows. The Coach tab
+        # renders both and labels which is which.
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
         return {
             "profile": CoachProfile(reviews).build(),
             "dashboard": dashboard,
             "reviews": reviews[:50],
+            "intelligence": _intelligence_payload(snapshot, full=False),
         }
+
+    # ── guided onboarding (V0.6.1) ───────────────────────────────────────
+    # The tutorials live in index.html; these two routes own the part the
+    # frontend cannot: durable progress, and which tutorial to offer next
+    # based on what the user has actually used.
+
+    @app.get("/api/guide")
+    def guide_view():
+        return server.guide_payload()
+
+    @app.post("/api/guide/state")
+    def guide_update(payload: dict | None = None):
+        """Merge a patch and return the full state plus fresh recommendations.
+
+        Deliberately forgiving: an unknown tutorial id, an unusable feature key
+        or a garbage body is ignored rather than rejected. This endpoint records
+        that someone finished a tour — failing it would be a 4xx in the middle
+        of a celebration, and nothing downstream depends on the write.
+        """
+        return server.update_guide(payload)
+
+    # ── workspace (V0.7.0) ───────────────────────────────────────────────
+    # Where the user was looking, owned by the server rather than by one
+    # browser's localStorage. See services/workspace.py for why.
+
+    @app.get("/api/workspace")
+    def workspace_view():
+        return server.workspace_payload()
+
+    @app.post("/api/workspace")
+    def workspace_update(payload: dict | None = None):
+        """Merge a PARTIAL patch. Deliberately forgiving, and deliberately
+        partial: a client that only knows about `symbol` must be able to say so
+        without overwriting panel layout it has never heard of. An unusable
+        value is replaced by its default rather than rejected — this records
+        where someone was looking, and 4xx-ing it would interrupt a chart."""
+        return server.update_workspace(payload)
+
+    @app.delete("/api/workspace")
+    def workspace_reset():
+        return server.reset_workspace()
+
+    # ── platform readiness (V0.7.0) ──────────────────────────────────────
+
+    @app.get("/api/host")
+    def host_view():
+        """What this build's host can do.
+
+        A client reads this to decide which surfaces to offer at all rather
+        than to guess from a user-agent string. Contains no user data and no
+        secret, so it is safe in a public bug report."""
+        return server.services.host_view().to_dict()
+
+    @app.get("/api/diagnostics/sync")
+    def sync_boundaries_view():
+        """The classified inventory of every durable object the app owns.
+
+        Nothing here syncs anything — V0.7.0 builds no cloud sync. This is the
+        classification that has to exist before one could, exposed because the
+        list is only useful if it is visible: `never_sync` in particular is the
+        answer to "what must not leave this machine", and it should be readable
+        without grepping the source."""
+        return sync_boundaries.report()
+
+    # ── Trading Intelligence Engine ──────────────────────────────────────
+    # Every route below projects the SAME snapshot. None of them analyses
+    # anything itself; the engine caches on a fingerprint the orchestrator
+    # owns, so a page that polls four of these costs one analysis at most.
+
+    @app.get("/api/intelligence")
+    def intelligence_view(full: bool = True):
+        """The complete analysis — metrics, behaviours, patterns, scores,
+        goals, recommendations, lessons, timeline, achievements, reports."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return {
+            **_intelligence_payload(snapshot, full=full),
+            "duration_ms": round(server.orch.intelligence.last_duration_ms, 1),
+        }
+
+    @app.get("/api/intelligence/summary")
+    def intelligence_summary():
+        """The dashboard projection: headline metrics, scores, top actions,
+        goals, achievements and the latest report summary."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return _intelligence_summary(snapshot)
+
+    @app.get("/api/intelligence/trade/{trade_id}")
+    def intelligence_trade(trade_id: str):
+        """Everything the analysis already knows about ONE trade — the patterns
+        it belongs to, the habits it is evidence for, where its result sits in
+        the trader's distribution, and how comparable trades performed."""
+        with server.lock:
+            return server.orch.intelligence.trade_insight(trade_id)
+
+    @app.get("/api/intelligence/reports")
+    def intelligence_reports():
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+        return {"reports": [r.to_dict() for r in snapshot.reports]}
+
+    @app.get("/api/intelligence/goals")
+    def intelligence_goals():
+        """Active goals with computed progress, plus the suggested templates and
+        the metric vocabulary a custom goal may target."""
+        with server.lock:
+            snapshot = server.orch.intelligence_snapshot()
+            active = {g.id for g in server.orch.intelligence.list_goals()}
+        return {
+            "goals": [g.to_dict() for g in snapshot.goals],
+            "templates": [{**t.to_dict(), "added": t.id in active}
+                          for t in GOAL_TEMPLATES],
+            "metrics": [{"key": key, "label": label, "unit": unit,
+                         "higher_is_better": higher}
+                        for key, (label, unit, higher, _) in METRIC_SPECS.items()],
+        }
+
+    @app.post("/api/intelligence/goals")
+    def intelligence_goal_add(payload: dict):
+        try:
+            goal = Goal.from_dict(payload)
+            if goal is None:
+                raise ValueError("a goal needs an id, a metric and a numeric target")
+            with server.lock:
+                server.orch.intelligence.add_goal(goal)
+                snapshot = server.orch.intelligence_snapshot(force=True)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=422)
+        return {"goals": [g.to_dict() for g in snapshot.goals]}
+
+    @app.delete("/api/intelligence/goals/{goal_id}")
+    def intelligence_goal_remove(goal_id: str):
+        with server.lock:
+            removed = server.orch.intelligence.remove_goal(goal_id)
+            snapshot = server.orch.intelligence_snapshot(force=True)
+        if not removed:
+            return JSONResponse({"error": f"no goal {goal_id!r}"}, status_code=404)
+        return {"goals": [g.to_dict() for g in snapshot.goals]}
 
     @app.get("/api/experience")
     def experience_view():
@@ -1183,6 +1725,8 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
                 await asyncio.sleep(1.0)
         except (WebSocketDisconnect, RuntimeError):
             return
+
+    register_v1_routes(app, server)
 
     return app
 

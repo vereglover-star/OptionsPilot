@@ -19,6 +19,7 @@ working directory so the app's default (packaged) config and a brand-new
 paper account are used, then deletes that directory afterward.
 """
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -63,10 +64,14 @@ def main() -> int:
 
     scratch = Path(tempfile.mkdtemp(prefix="optionspilot-smoke-"))
     base = f"http://127.0.0.1:{args.port}"
+    # OPTIONSPILOT_HOME, not just cwd: the storage root moved off the CWD in
+    # V0.4.4, so `cwd=scratch` alone has been letting this smoke test run
+    # against the user's real data root (see the same fix in chart_check.py).
     server = subprocess.Popen(
         [sys.executable, "-m", "optionspilot", "serve",
          "--port", str(args.port), "--no-loop"],
-        cwd=scratch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=scratch, env={**os.environ, "OPTIONSPILOT_HOME": str(scratch)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
         if not wait_for(base + "/api/status"):
@@ -83,6 +88,15 @@ def main() -> int:
 
             page.goto(base)
             page.wait_for_selector("#hero", timeout=20000)
+            # A scratch profile has never been onboarded, so this IS the real
+            # first-launch path (V0.6.1). Dismissing it here is coverage, not a
+            # workaround: if the welcome dialog ever failed to close, every
+            # click below would fail with "intercepts pointer events" — which
+            # is exactly how this check first caught it.
+            page.wait_for_selector("#gd-welcome.show", timeout=10000)
+            page.click("#gd-w-skip")
+            page.wait_for_selector("#gd-welcome.show", state="hidden",
+                                   timeout=5000)
             for tab in TABS:
                 page.click(f'nav button[data-tab="{tab}"]')
                 page.wait_for_selector(f"#tab-{tab}", state="visible", timeout=10000)

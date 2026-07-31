@@ -214,6 +214,15 @@ def bench_provider(adapter: HistoryAdapter, symbol: str,
         "rss_delta_bytes": (rss1 - rss0) if (rss0 is not None and rss1 is not None)
                            else None,
         "cpu_seconds": round(cpu1 - cpu0, 3),
+        # V0.5.4: a keyed provider that could not run at all must say WHY,
+        # rather than appearing as a mysteriously empty row.
+        "status": adapter.monitor.status()[0],
+        "status_detail": adapter.monitor.status()[1],
+        "requires_api_key": adapter.requires_api_key,
+        "quota": adapter.quota.state(),
+        "deepest_days": max(
+            (spec.max_lookback_days or 10_000)
+            for spec in adapter.capabilities.intervals.values()),
         # The rank the live registry would give this provider after this run —
         # the point of the exercise, since it is what actually orders the chain.
         "health_rank": round(adapter.monitor.rank(), 2),
@@ -246,15 +255,39 @@ def main() -> int:
     # Shared across providers so each one after the first is compared to the
     # first provider that answered the same case.
     reference: dict[str, pd.DataFrame] = {}
-    results = [bench_provider(adapter, args.symbol, DEFAULT_CASES, args.runs,
-                              reference, pause)
-               for adapter in registry.adapters]
+    results = []
+    for adapter in registry.adapters:
+        # A provider with no API key would otherwise contribute a row of
+        # dashes and look broken. Report it as unconfigured and skip it: a
+        # benchmark must not spend the reader's attention on an absence it
+        # already explains.
+        status, detail = adapter.monitor.status()
+        if status in ("missing_api_key", "disabled"):
+            print(f"  skipping {adapter.provider_name}: {detail}")
+            results.append({
+                "provider": adapter.provider_name,
+                "priority": adapter.provider_priority, "requests": 0,
+                "errors": 0, "avg_latency_ms": None, "median_latency_ms": None,
+                "p95_latency_ms": None, "bars_total": 0,
+                "bars_per_second": None, "avg_quality": None,
+                "max_disagreement": None, "rss_delta_bytes": None,
+                "cpu_seconds": 0.0, "health_rank": round(adapter.monitor.rank(), 2),
+                "cases": [], "status": status, "status_detail": detail,
+                "requires_api_key": adapter.requires_api_key,
+                "quota": adapter.quota.state(), "skipped": True,
+            })
+            continue
+        results.append(bench_provider(adapter, args.symbol, DEFAULT_CASES,
+                                      args.runs, reference, pause))
+    if any(r.get("skipped") for r in results):
+        print()
+    measured = [r for r in results if not r.get("skipped")]
 
     header = (f"{'provider':<12}{'avg ms':>9}{'p95 ms':>9}{'bars/s':>10}"
               f"{'quality':>9}{'errors':>8}{'cpu s':>8}{'rank':>8}")
     print(header)
     print("-" * len(header))
-    for r in sorted(results, key=lambda r: r["health_rank"]):
+    for r in sorted(measured, key=lambda r: r["health_rank"]):
         print(f"{r['provider']:<12}"
               f"{_fmt(r['avg_latency_ms']):>9}"
               f"{_fmt(r['p95_latency_ms']):>9}"
@@ -289,7 +322,7 @@ def main() -> int:
 
     # A benchmark reports; it does not judge. Only a provider that could not
     # answer at all is an actual failure worth a non-zero exit.
-    dead = [r["provider"] for r in results if r["avg_latency_ms"] is None]
+    dead = [r["provider"] for r in measured if r["avg_latency_ms"] is None]
     if dead:
         print(f"\nWARNING: no successful requests from {', '.join(dead)}")
         return 1

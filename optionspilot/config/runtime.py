@@ -8,6 +8,10 @@ the dashboard, persisted to data/settings.json after every change:
   - trading_mode (conservative | high_risk | custom)
   - custom-mode overrides (min_confidence, risk_per_trade_pct,
     daily_trade_limit, max_contracts, min_risk_reward, max_daily_loss_pct)
+  - guided-onboarding state (tutorials finished/skipped, features used,
+    motion and hint preferences) — see ui/guide.py
+  - workspace state (selected tab, symbol, timeframe, indicators, sidebar,
+    recent symbols, saved layouts) — see services/workspace.py
 
 Changes mutate the *live* AppConfig objects that every component reads at
 call time (the orchestrator re-reads the watchlist each cycle, the gate and
@@ -45,6 +49,27 @@ DEFAULT_UPDATE_PREFS: dict = {
     "last_seen_version": None,   # the latest version observed at last check
 }
 
+# Desktop/runtime preferences are persisted here rather than in the desktop
+# shell so a future host can read the same policy.  The shell is responsible
+# for applying platform-specific effects (tray, Windows startup), while this
+# store owns validation and persistence.
+DEFAULT_RUNTIME_PREFS: dict = {
+    "close_behavior": "tray",
+    "close_prompt_dismissed": False,
+    "hidden_profile": "essential_reduced",
+    "start_with_windows": False,
+    "start_minimized_to_tray": False,
+    "restore_previous_workspace": False,
+    "auto_resume_monitoring": True,
+    "notification_mode": "normal",
+}
+
+_RUNTIME_BOOL_KEYS = {
+    "close_prompt_dismissed", "start_with_windows",
+    "start_minimized_to_tray", "restore_previous_workspace",
+    "auto_resume_monitoring",
+}
+
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
     "min_confidence": ("engine", "min_confidence"),
@@ -60,7 +85,9 @@ class RuntimeSettings:
     def __init__(self, path: str | Path, baseline: AppConfig):
         self._path = Path(path)
         self._baseline = baseline.model_copy(deep=True)
-        self._lock = threading.Lock()
+        # Runtime preference reads are also used while applying a validated
+        # patch; reentrancy prevents a self-deadlock in that atomic path.
+        self._lock = threading.RLock()
         self._doc: dict = {"pinned": [], "favorites": [], "custom": {}}
         if self._path.exists():
             try:
@@ -208,6 +235,123 @@ class RuntimeSettings:
             self._doc["updates"] = current
             self._save()
             return dict(current)
+
+    # ── background/desktop runtime preferences ─────────────────────────────
+
+    def runtime_prefs(self) -> dict:
+        """Return validated runtime preferences with defaults filled in."""
+        with self._lock:
+            stored = self._doc.get("runtime") or {}
+            return {**DEFAULT_RUNTIME_PREFS, **self._valid_runtime_patch(stored)}
+
+    def set_runtime_prefs(self, **patch) -> dict:
+        """Merge and validate runtime preferences atomically."""
+        with self._lock:
+            current = self.runtime_prefs()
+            current.update(self._valid_runtime_patch(patch, reject=True))
+            self._doc["runtime"] = current
+            self._save()
+            return dict(current)
+
+    @staticmethod
+    def _valid_runtime_patch(patch: dict, *, reject: bool = False) -> dict:
+        if not isinstance(patch, dict):
+            if reject:
+                raise ValueError("runtime preferences must be an object")
+            return {}
+        allowed = set(DEFAULT_RUNTIME_PREFS)
+        unknown = set(patch) - allowed
+        if unknown and reject:
+            raise ValueError(f"unknown runtime preferences: {sorted(unknown)}")
+        out: dict = {}
+        for key, value in patch.items():
+            if key not in allowed:
+                continue
+            if key in _RUNTIME_BOOL_KEYS:
+                if not isinstance(value, bool):
+                    if reject:
+                        raise ValueError(f"{key} must be boolean")
+                    continue
+                out[key] = value
+            elif key == "close_behavior":
+                if value not in ("tray", "exit"):
+                    if reject:
+                        raise ValueError("close_behavior must be 'tray' or 'exit'")
+                    continue
+                out[key] = value
+            elif key == "hidden_profile":
+                if value not in ("essential_reduced", "normal", "monitoring_only"):
+                    if reject:
+                        raise ValueError("unknown hidden_profile")
+                    continue
+                out[key] = value
+            elif key == "notification_mode":
+                if value not in ("normal", "reduced", "critical"):
+                    if reject:
+                        raise ValueError("unknown notification_mode")
+                    continue
+                out[key] = value
+        return out
+
+    # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
+    #
+    # Deliberately dumb storage: this store validates nothing about the shape of
+    # the document, because the vocabulary (tutorial ids, feature keys, merge
+    # semantics) belongs to `ui/guide.py` and `config/` must not import upward
+    # to reach it. The caller normalizes on read and on write — see
+    # `UIServer.guide_payload` / `UIServer.update_guide`.
+    #
+    # It lives here rather than in the webview's localStorage because a user who
+    # reinstalls, restores a backup, or clears the WebView2 profile should not
+    # be shown the first-launch tour again as though they were new.
+
+    def guide_state(self) -> dict:
+        """The persisted guide document, exactly as stored (possibly empty)."""
+        with self._lock:
+            stored = self._doc.get("guide")
+            return dict(stored) if isinstance(stored, dict) else {}
+
+    def set_guide_state(self, state: dict) -> dict:
+        """Replace the guide document wholesale and persist.
+
+        Replacement, not merge: merging is `guide.merge_state`'s job and doing
+        it in two places would give the two of them a chance to disagree.
+        """
+        with self._lock:
+            self._doc["guide"] = dict(state)
+            self._save()
+            return dict(self._doc["guide"])
+
+    # ── workspace state (V0.7.0) ─────────────────────────────────────────────
+    #
+    # Same deliberately-dumb storage as the guide document above, for the same
+    # reason: the vocabulary (tab ids, indicator names, layout bodies) belongs
+    # to `services/workspace.py`, and `config/` must not import upward to reach
+    # it. The caller normalizes on read and on write.
+    #
+    # It lives here rather than in the WebView's localStorage because that is
+    # not durable storage — a cleared profile, a restored backup or a reinstall
+    # discards it silently — and because a second client cannot see localStorage
+    # at all. Both were true of onboarding progress in V0.6.1 and the answer is
+    # the same one.
+
+    def workspace_state(self) -> dict:
+        """The persisted workspace document, exactly as stored (possibly empty)."""
+        with self._lock:
+            stored = self._doc.get("workspace")
+            return dict(stored) if isinstance(stored, dict) else {}
+
+    def set_workspace_state(self, state: dict) -> dict:
+        """Replace the workspace document wholesale and persist.
+
+        Replacement, not merge — merging is `services/workspace.merge`'s job,
+        and doing it in two places would give the two of them a chance to
+        disagree about what a partial patch from a limited client means.
+        """
+        with self._lock:
+            self._doc["workspace"] = dict(state)
+            self._save()
+            return dict(self._doc["workspace"])
 
     # ── persistence ──────────────────────────────────────────────────────────
 

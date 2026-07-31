@@ -29,6 +29,7 @@ from optionspilot.data.capabilities import (
     IntervalSpec, ProviderCapabilities, YAHOO_CAPABILITIES,
 )
 from optionspilot.data.registry import ProviderRegistry
+from optionspilot.data.quality import validate_history
 from optionspilot.data.service import (
     CANDLE_TTL, EMPTY_CANDLE_TTL, MEM_CACHE_MAX, MarketDataService,
 )
@@ -664,5 +665,105 @@ class TestAnAuthoritativeEmptyStopsTheChain:
     def test_the_shipped_chain_marks_only_the_self_describing_adapters(self):
         from optionspilot.data.registry import default_registry
         flags = {a.provider_name: a.reports_empty_reliably
-                 for a in default_registry().adapters}
-        assert flags == {"yahoo": True, "yfinance": False, "stooq": True}
+                 for a in default_registry(environ={}).adapters}
+        # Only yfinance cannot tell "no bars here" from "the request failed";
+        # it returns an empty frame for both. Every other adapter raises on
+        # every failure path, so its empty answer is authoritative.
+        assert flags == {"yahoo": True, "yfinance": False, "stooq": True,
+                         "finnhub": True, "twelvedata": True,
+                         "alphavantage": True}
+
+
+class TestAnUnusableCacheHealsItself:
+    """A cached frame that fails validation must be a HICCUP, not a wall.
+
+    Validation used to run in `_settle` — after the ladder had already
+    committed to the disk tier — so an unusable cache became `outcome=failed`
+    with nothing left to fall through to, and the offending rows stayed on
+    disk to fail identically on the next request and on every press of Retry.
+    A real daily-bar defect (two providers stamping the same session at
+    different instants, so every trading day held two rows 9.5 hours apart)
+    turned that into "every symbol on 1D is stuck behind a validation screen",
+    unrecoverable without deleting cache.db by hand.
+    """
+
+    @staticmethod
+    def _poison(cache, tf=Timeframe.M5):
+        """Write bars whose spacing cannot be `tf` — the shape the real defect
+        produced: a shadow bar part-way through every interval."""
+        good = bars(40, tf)
+        shadow = good.copy()
+        shadow.index = shadow.index + timedelta(minutes=tf.minutes // 2)
+        both = pd.concat([good, shadow]).sort_index()
+        cache.store("SPY", tf, both, provider="yahoo")
+        return both
+
+    def test_it_falls_through_to_the_providers_instead_of_failing(
+            self, clock, tmp_path):
+        cache = CandleCache(tmp_path / "c.db")
+        self._poison(cache)
+        service = build(make("a", [bars(20)]), cache=cache)
+        result = get(service)
+        assert result.outcome == diag.OUTCOME_LIVE
+        assert result.provider == "a"
+        assert result.bars == 20
+
+    def test_the_bad_rows_are_quarantined_not_left_to_fail_again(
+            self, clock, tmp_path):
+        """The wall was that the SECOND request hit the same bars."""
+        cache = CandleCache(tmp_path / "c.db")
+        self._poison(cache)
+        service = build(make("a", [bars(20), bars(20)]), cache=cache)
+        get(service)
+        assert service._quarantines == 1
+        # nothing unusable survives on disk for the next request to inherit:
+        # whatever is there now must pass the same validation that rejected
+        # the poisoned frame
+        remaining = cache.load("SPY", Timeframe.M5, NOW - WINDOW, NOW)
+        if not remaining.empty:
+            _, report = validate_history(remaining, Timeframe.M5, now=NOW)
+            assert report.usable
+
+    def test_retry_is_never_required(self, clock, tmp_path):
+        """The user-visible contract: one request, one recovery."""
+        cache = CandleCache(tmp_path / "c.db")
+        self._poison(cache)
+        service = build(make("a", [bars(20)] * 3), cache=cache)
+        assert get(service).outcome == diag.OUTCOME_LIVE
+        clock["t"] += CANDLE_TTL[Timeframe.M5] + 1
+        assert get(service).outcome in (diag.OUTCOME_LIVE, diag.OUTCOME_CACHE)
+
+    def test_the_quarantine_is_recorded_where_an_operator_will_see_it(
+            self, clock, tmp_path):
+        cache = CandleCache(tmp_path / "c.db")
+        self._poison(cache)
+        service = build(make("a", [bars(20)]), cache=cache)
+        result = get(service)
+        trace = service.diagnostics.recent(1)[0]
+        assert any(a["outcome"] == "quarantined" for a in trace["attempts"])
+        assert service.health()["cache"]["quarantines"] == 1
+        assert result.outcome == diag.OUTCOME_LIVE
+
+    def test_a_healthy_cache_is_still_served_from_disk(self, clock, tmp_path):
+        """The guard must not cost the warm-start path its whole reason to
+        exist — an app restart mid-session should still not re-download."""
+        cache = CandleCache(tmp_path / "c.db")
+        cache.store("SPY", Timeframe.M5, bars(40), provider="yahoo")
+        service = build(make("a", [bars(20)]), cache=cache)
+        assert get(service).outcome == diag.OUTCOME_CACHE
+        assert service._quarantines == 0
+
+    def test_an_unusable_stale_frame_does_not_reach_the_chart(
+            self, clock, tmp_path):
+        """The last-resort tier must not hand over bars the renderer refuses."""
+        cache = CandleCache(tmp_path / "c.db")
+        good = bars(30, end=NOW - timedelta(days=4))
+        shadow = good.copy()
+        shadow.index = shadow.index + timedelta(minutes=2)
+        cache.store("SPY", Timeframe.M5,
+                    pd.concat([good, shadow]).sort_index(), provider="yahoo")
+        service = build(make("a", [ProviderUnavailable("dead")]), cache=cache)
+        result = get(service, allow_stale=True)
+        assert result.outcome == diag.OUTCOME_FAILED
+        assert result.bars == 0
+        assert service._quarantines == 1

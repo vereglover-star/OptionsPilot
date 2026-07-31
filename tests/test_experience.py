@@ -435,28 +435,56 @@ class TestExperienceApi:
 
 
 class TestPerformance:
-    def test_similarity_stays_responsive_at_scale(self, tmp_path):
-        """Bulk-load 20k experiences and confirm a similarity summarize stays
-        well under budget — the indexed direction prefilter + a bounded
-        Python distance pass is the design that holds at 100k+."""
+    @staticmethod
+    def _summarize_at(path, n):
+        """Bulk-load `n` experiences and time one summarize over them."""
         import time
 
-        eng = ExperienceEngine(tmp_path / "exp.db")
-        recs = [
+        eng = ExperienceEngine(path)
+        eng.store.record_many([
             build_experience(
                 make_trade(f"t{i}", 100.0 if i % 2 else -50.0, entry_ts=TS),
                 entry_context=SNAPSHOT)
-            for i in range(20_000)
-        ]
-        eng.store.record_many(recs)
-        assert eng.store.count() == 20_000
-
+            for i in range(n)
+        ])
+        assert eng.store.count() == n
         query = build_query_record(SNAPSHOT)
         start = time.perf_counter()
         result = eng.summarize_for(query, k=50, min_similarity=0.5)
         elapsed = time.perf_counter() - start
         assert result.n_similar > 0
-        assert elapsed < 3.0, f"similarity summarize took {elapsed:.2f}s at 20k rows"
+        return elapsed
+
+    def test_similarity_scales_sub_quadratically(self, tmp_path):
+        """The claim is that the indexed direction prefilter plus a bounded
+        Python distance pass holds at 100k+ — that is a statement about the
+        SHAPE of the curve, and a wall-clock constant cannot measure it.
+
+        This test used to assert `elapsed < 3.0`. On a throttled or busy machine
+        that fails while the algorithm is perfectly healthy (measured: 4.20s on
+        unmodified code with the CPU at 1400 MHz of a rated 3800), and it would
+        equally pass on a fast machine that had just acquired an O(n^2) bug.
+        A ratio across a 4x data increase is machine-independent: linear lands
+        near 4x, quadratic near 16x.
+
+        Both sample points sit above 10k deliberately. Measured across
+        2.5k/5k/10k/20k/40k the cost doubles with the rows (1.91x, 2.11x, 1.97x
+        per doubling) except for one step between 5k and 10k, where it jumps
+        ~5x — a cache-capacity threshold, not a change in the algorithm.
+        Straddling that step would make the ratio look super-linear and the
+        test flaky.
+        """
+        small = self._summarize_at(tmp_path / "small.db", 10_000)
+        large = self._summarize_at(tmp_path / "large.db", 40_000)
+
+        # Guard against dividing by a measurement that is mostly clock jitter.
+        ratio = large / max(small, 0.005)
+        assert ratio < 8.0, (
+            f"4x the rows cost {ratio:.1f}x the time ({small:.2f}s -> "
+            f"{large:.2f}s) — that is heading for quadratic")
+        # Backstop only: catches a hang or a pathological regression, and is
+        # deliberately loose enough that a slow machine is not a failure.
+        assert large < 30.0, f"summarize took {large:.2f}s at 40k rows"
 
     def test_aggregate_is_sql_fast_at_scale(self, tmp_path):
         """Aggregate stats must not deserialize payloads — SQL only."""

@@ -5,14 +5,20 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-26, V0.5.3 Market Data Production Readiness. Full
-**1052-test** `pytest` suite green (+172), HTML-id + doc checks green,
-`scripts/marketdata_stress.py` **65/65** offline, and `scripts/chart_check.py`
-**52/52** in a real headless browser (three new checks drive the Help ▸
-Diagnostics dashboard and a live replay). `browser_check.py` and `pip check`
-green. The 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not**
-been run. The ISCC compile + real install/upgrade runs and a live end-to-end
-update remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
+**Last verified:** 2026-07-28, **V0.7.0 — platform foundation &
+cross-platform architecture**. Full **2079-test** `pytest` suite green (+140),
+HTML-id + doc checks green, `scripts/marketdata_stress.py` **88/88** offline,
+`scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
+`scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
+and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
+`browser_check.py` green.
+
+**Still not verified by hand:** no market-data adapter has ever been exercised
+against its real API with a real key — all 2079 tests run against canned
+payloads, so the response shapes are as *documented*, not as *observed*. The
+84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
+The ISCC compile + real install/upgrade runs and a live end-to-end update
+remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
 ---
 
@@ -27,7 +33,94 @@ installed app now updates itself from GitHub Releases.
 
 ## Current phase
 
-**V0.5.3 Market Data Production Readiness, on branch `v3-ui` — awaiting user
+**V0.7.0 — platform foundation & cross-platform architecture, on branch
+`feature/v0.7` — awaiting user review.** The desktop UI stopped being the owner
+of application logic. `optionspilot/services/` is the platform-independent
+application layer (portfolio, watchlist, intelligence projections, notifications,
+workspace, and the persisted-object sync inventory), `optionspilot/host/` puts
+every OS question behind a capability interface, workspace state moved off
+`localStorage` onto the server, and seven new architecture guards enforce the
+result. No trading-behaviour change, no UI redesign, no test removed. Full
+design and the nine remaining platform blockers: `docs/ARCHITECTURE-PLATFORM.md`.
+
+**Previously — V0.6.0, the Trading Intelligence Engine — also awaiting review.** The analytical brain: one layer that turns everything
+already recorded about completed trades into structured, evidence-backed insight
+that every other part of the app consumes rather than recomputes. New subpackage
+`optionspilot/intelligence/` (17 modules), a `/api/intelligence/*` surface, and
+integration into the Dashboard, Coach, Journal and Learning tabs — all
+projecting from one `IntelligenceSnapshot`. Imports `core` only, so it sits
+*below* the coach. **No trading-behaviour change, no new dependency, no new tab;
+never consulted before a trade.** Four defects found by self-audit, each with a
+regression test. Design: `docs/TRADING_INTELLIGENCE.md`.
+
+**Before that: V0.5.7 — the Market Data Control Centre.** The entire user-facing management layer over a
+market-data subsystem that was already production-grade and completely
+unsteerable: every real question a user has ("why isn't Finnhub being used?",
+"is my key working?", "how many requests are left?", "what happens when Yahoo
+dies?", "my cache looks wrong, now what?") was answerable only from
+`logs/data.log`, and every setting needed a `config.yaml` edit and a restart.
+
+New modules `data/control.py` (the administration surface — dashboard,
+credentials, ordering, connection tests, eight maintenance jobs,
+recommendations — composed *over* the registry, which never learns about it),
+`data/credentials.py` (owner-only key storage; `environment → stored →
+config.yaml`; a plaintext key leaves only through `resolve()`) and
+`data/faults.py` (QA-mode fault injection firing inside `fetch_history`,
+404-gated and off in every shipped build). New `/api/marketdata/*` surface, and
+a Settings ▸ Market data panel with per-provider cards, a 21-column live
+dashboard, three ordering modes, connection tests, maintenance with progress
+and cancellation, automatic recommendations and a plain-English explainer.
+
+Behaviour changes worth knowing: `enabled: false` now *constructs* and benches
+a provider (one that is not constructed cannot be listed, explained or switched
+back on); `ordering_mode` (static/hybrid/dynamic) supersedes `dynamic_ranking`;
+`monitor.health_state()` is a derived human-facing state beside the `status()`
+gate; a reorder rewrites priorities 10/20/30 because 10 rank points equals one
+second of latency. **No trading-behaviour change, no new runtime dependency,
+identical shipped defaults.** Five defects found by self-audit, each with a
+regression test. Design: `docs/MARKET_DATA.md` §29–41.
+
+**Before that: V0.5.5 Chart Production Certification.** A failure-elimination
+pass over the whole chart
+pipeline, provider to pixel. **No new features, no version bump, no
+trading-behavior change.** Ten defects found by reproducing them, every one a
+way the chart could fail while the backend, the diagnostics dashboard and the
+entire test suite reported success. The headline: **the price axis had no
+owner** — lightweight-charts turns `autoScale` off permanently on the first
+price-axis drag and nothing ever turned it back on, so a pinned band outlived
+every symbol switch and rendered other symbols' candles off-screen while the
+volume histogram kept painting. That is the reported "IWM shows only volume"
+bug, and why a restart fixed it. Also fixed: one 30-minute closing stub bar
+condemning every Yahoo 1h frame as "wrong interval served"; a `NaT` timestamp
+500'ing `/api/candles`; null-OHLC bars rendering as invisible whitespace under
+`state="complete"`; an out-of-order payload collapsing to one candle; and a
+render failure reporting `complete`. Detail: `docs/CHART_CERTIFICATION.md`.
+
+**V0.5.6 (same branch)** then fixed the two bugs the user hit next: **every
+symbol on 1D stuck behind "the cached bars failed validation and were
+discarded"** (Yahoo and yfinance stamped the same trading day at different
+instants, so the cache held two rows per day and the frame's spacing read 0.40
+intervals — and because validation ran *after* the tier ladder had committed,
+there was nothing to fall through to and Retry repeated it forever), and
+**viewport/zoom corruption** (nothing defined a legal viewport, so a symbol
+switch under Auto Follow inherited the previous instrument's zoom). A
+1257-test suite at the time,
+**65 chart checks**, 88 stress scenarios, plus a 110-cell browser matrix.
+
+**Before that: V0.5.4 Enterprise Provider Expansion, on branch
+`feature/providers` — awaiting user review.** Three keyed providers (Finnhub 40, Twelve Data 50,
+Alpha Vantage 60) added behind the keyless chain, making a Yahoo-wide outage
+survivable at **intraday** resolution for the first time. New:
+`data/http_adapter.py` (shared keyed-HTTP base + the timezone contract) and
+`data/ratelimit.py` (request budgeting, persisted across restarts). **With no
+API keys configured the app behaves exactly as it did in V0.5.3** — keyed
+providers report `missing_api_key` with a signup link and are never selected.
+API keys are redacted by default everywhere they could be exported. Two
+pre-existing defects fixed (`deepest_earliest` counting unusable providers; the
+stale tier reporting zero bars). A then-1232-test suite, 88 stress scenarios. No version
+bump, no trading-behavior change. Design: `docs/MARKET_DATA.md` §23–27.
+
+**Before that: V0.5.3 Market Data Production Readiness, on branch `v3-ui` — awaiting user
 review.** V0.5.2 built the market-data subsystem; V0.5.3 makes it *operable*.
 Provider health has one owner (`data/health.py`), the provider chain is ordered
 by **measured health** rather than a hard-coded constant (a cold system keeps
@@ -212,6 +305,7 @@ V2-6 (journal/improvement dashboard) are not started.
 | V3-4 — Settings redesign | Grouped searchable config cards replace the JSON dump; live-trading flags visibly locked | Committed on `v3-ui`, browser-verified |
 | V3-5 — Analytics presentation | Coach first-run explainer, journal filters + cumulative P&L curve, backtest drawdown/exit-reason panels, learning weight-shift bars | Committed on `v3-ui`, real backtest run |
 | V3-6 — Accessibility | Skip link, toast live region, `scope="col"` on all 51 headers, `aria-current`, `?` shortcut overlay | Committed on `v3-ui`, browser-verified |
+| V0.7.0 — Platform foundation | `optionspilot/services/` (application layer + view models + sync inventory), `optionspilot/host/` (capability profiles + OS adapter), server-owned workspace, 7 architecture guards, `workspace_check.py` | Uncommitted, awaiting review |
 | V3-7 — Pre-merge audit fixes | `CandleCache` thread-safety (the disk cache silently never worked in the threaded live app), chart auto-retry for failed first loads, `?`-overlay order-key guard | Committed on `v3-ui`, each fix individually verified |
 | Packaging fix (2026-07-18) | Exe shipped without yfinance (lazy `importlib` import invisible to PyInstaller since `f1bae42`): `--collect-all yfinance`, new `selftest` CLI as a post-build bundle gate, `tests/test_packaging.py` dynamic-import guard | `61a2c60`, exe rebuilt + endpoints verified live |
 | V3.1-1 — Chart reliability | Per-ticker failures root-caused: drawings no longer drive the price scale (`autoscaleInfoProvider:null`), `validate_candles` drops NaN/inf/≤0 bars + zeroes bad volume + logs, indicator/serialization `isfinite` guards, renderer try/catch surfaces errors | `b93eac9`, reproduced + fixed in a headless browser |
@@ -271,7 +365,58 @@ V2-6 (journal/improvement dashboard) are not started.
 
 ## Known bugs
 
-None open. **Fixed in V0.5.2** (each reproduced from evidence before any code
+None open. **Fixed in V0.8.2** (independent audit of V0.8/V0.8.1; each found by
+reading the platform's own source, each covered by a regression test verified
+against the old code):
+
+1. **Clicking X froze the app.** pywebview binds `closing` as
+   `Event(should_lock=True)`, so the handler runs on the WinForms message pump.
+   `on_closing` called `evaluate_js`, whose WebView2 continuation is scheduled on
+   that same pump behind an untimed `semaphore.acquire()` — an unbreakable
+   deadlock on the branch a fresh install takes by default. It also ran the whole
+   shutdown (up to 7s of thread joins) and a re-entrant `window.destroy()` there.
+   The handler now decides and returns; the work runs on a worker.
+2. **`Restart` was broken**: the successor was spawned before the single-instance
+   port was released, so it lost the race to its own parent.
+3. **A frozen build relaunched itself with its own path as `argv[1]`.**
+4. **Two implementations of the single-instance mutex** (`ui/desktop.py` and
+   `host/adapter.py`), each with its own copy of port 8786.
+5. **The one maintenance slot admitted several workers** — a check-then-act,
+   measured admitting 8 of 8 concurrent requests. This also caused the
+   intermittent `test_progress_is_reported_and_ends_at_one` failure.
+6. **A WebSocket client stalled every HTTP request** in the process: the
+   `async def` v1 socket handler called the lock-taking `status_payload()`
+   directly on the event loop.
+7. `hello.accepted` sent `"timestamp": null`; the idempotency store held an open
+   SQLite write transaction across a network call; `tracemalloc` kept ten stack
+   frames per allocation to feed a field that never reads them.
+
+Defect 1 was **reproduced and then re-verified on the real stack** (real
+uvicorn + `UIServer` + pystray + pywebview/WebView2, a real `WM_CLOSE`, and
+`SendMessageTimeout(SMTO_ABORTIFHUNG)` as the responsiveness probe): on the
+default branch the old handler left the pump dead for the whole 40 s budget with
+the window never closing; the repaired handler stalls the pump **0.0 s** and
+closes in 1.14 s on the `exit` branch. **Outstanding:** nobody has clicked the
+button by hand, and the audit environment's windows are not on the interactive
+desktop, so the visual symptom itself was never on screen — only the pump
+condition that causes it.
+
+**Fixed in V0.7.0:** `/api/learning` read its `WeightStore` from a
+CWD-relative `Path("data")`, so the Learning tab reported the wrong learned
+weights on every real install (the `effective` column came from the live scorer
+and was right, which is what hid it). Regression test verified against the old
+code; `tests/test_architecture.py::test_no_cwd_relative_storage_paths` forbids
+the class. **Fixed in V0.6.1** (both found by the new `scripts/guide_check.py`,
+both with a check that fails without the fix): (1) the Coach's "learn the app"
+panel was hidden by `display:none` when there was nothing to suggest but kept
+its previous markup, leaving live clickable buttons for advice that had been
+withdrawn; (2) the guided tour's first step highlighted the PAPER TRADING badge,
+which is pinned to the foot of a full-height sidebar, so `scrollIntoView` threw
+the page to the bottom of the Dashboard before the user had read a word — fixed
+by retargeting the step and by scrolling only when a target is not visible *at
+all* rather than merely off-centre.
+
+**Fixed in V0.5.2** (each reproduced from evidence before any code
 changed, each now covered by a regression test that fails without its fix):
 (1) intraday history depth was measured from the *request's end* instead of from
 *now*, so every scroll-back into older intraday data 422'd upstream, returned an
@@ -308,9 +453,16 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
+1. **Review V0.6.0, V0.6.1 + V0.7.0 and decide on the commits.** None of the
+   three is committed. `docs/TRADING_INTELLIGENCE.md`, `docs/ONBOARDING.md` and
+   `docs/ARCHITECTURE-PLATFORM.md` are the review documents.
+2. **Contract hardening** (`ARCHITECTURE-MOBILE.md` §18 items 1-3, 6): `/api/v1`
+   aliases, a normalized error envelope, idempotency keys on mutating endpoints,
+   and the WebSocket envelope. Cheap now; expensive once any client exists that
+   cannot update in lockstep.
+2. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
    are committed there and verified; merging to `main` is the user's call.
-2. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
+3. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
    with persistence (H5), chart↔chain cross-links (N2), toast stacking
    (N4) — plus everything under "Long-term ideas."
 3. Then the standing scope decision: V2-5 (replay engine), V2-6
@@ -331,13 +483,25 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**1052 tests, 100% passing** (`.\scripts\test.ps1`, ~45s). Frontend coverage
+**2079 tests, 100% passing** (`.\scripts\test.ps1`, ~95s). Frontend coverage
 is real but shallow: `scripts/check_html_ids.py` (static id-reference
 check), `scripts/browser_check.py` (headless browser, every tab, zero
-console errors), and `scripts/chart_check.py` (chart alias, drawing, and
-history regressions) all run automatically via `scripts/verify.ps1` — the
-browser checks are still focused regressions, not exhaustive UI coverage
-(see `TODO.md`).
+console errors), `scripts/chart_check.py` (65 chart, drawing and history
+regressions), `scripts/marketdata_check.py` (46 checks over the Market
+Data Control Centre — key management, ordering, maintenance, quota display,
+accessibility and secret redaction, all offline) and
+`scripts/intelligence_check.py` (54 checks over the Trading Intelligence UI —
+score cards, evidence disclosures, unassessable-behaviour reasons, goals,
+per-trade journal analysis and lesson triggers, all offline) and
+`scripts/guide_check.py` (**135** checks over the guided onboarding, contextual
+help, glossary, help search, empty states, accessibility and the order-ticket
+guardrails — the spotlight assertions test that the highlight *intersects* the
+element it names, not that a step declared one) and `scripts/workspace_check.py`
+(**21** checks over the server-owned workspace — the canonical one wipes
+`localStorage` in a real browser, reloads, and asserts the symbol and timeframe
+that come back are the ones ON SCREEN) run automatically via
+`scripts/verify.ps1` — the browser checks are focused regressions, not
+exhaustive UI coverage (see `TODO.md`).
 
 ## Last verified date
 

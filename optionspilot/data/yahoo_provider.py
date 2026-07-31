@@ -91,8 +91,12 @@ class YahooChartAdapter(HistoryAdapter):
     default_timeout = REQUEST_TIMEOUT
 
     def __init__(self, config=None, *, timeout: float | None = None,
-                 opener=None, hosts: tuple[str, ...] = HOSTS):
-        super().__init__(config)
+                 opener=None, hosts: tuple[str, ...] = HOSTS,
+                 quota_store=None, environ: dict | None = None):
+        # `quota_store`/`environ` are accepted (and ignored beyond the base
+        # class) so every adapter has ONE construction signature and
+        # `default_registry` needs no per-provider special case.
+        super().__init__(config, quota_store=quota_store, environ=environ)
         # An explicit `timeout=` wins over configuration; configuration wins
         # over `default_timeout`. Tests use the first, users the second.
         if timeout is not None:

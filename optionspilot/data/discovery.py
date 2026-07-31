@@ -201,8 +201,21 @@ def discover(adapter: HistoryAdapter, symbol: str = "SPY", *,
              timeframes: list[Timeframe] | None = None,
              now: datetime | None = None,
              pause: float = 0.15) -> DiscoveryResult:
-    """Measure every interval the adapter claims to support."""
+    """Measure every interval the adapter claims to support.
+
+    Refuses outright for a provider that cannot be sent a request — no API
+    key, disabled, or out of budget. Probing one costs about a dozen doomed
+    requests *per interval* and then reports "served nothing at any depth" for
+    all of them, which reads as a provider outage rather than as the missing
+    credential it actually is.
+    """
     now = now or datetime.now(timezone.utc)
+    spendable, refusal = adapter.can_spend_request()
+    if not spendable:
+        log.info("skipping capability discovery for %s: %s",
+                 adapter.provider_name, refusal)
+        return DiscoveryResult(provider=adapter.provider_name, symbol=symbol,
+                               measured_at=now)
     targets = timeframes if timeframes is not None else [
         tf for tf in Timeframe if adapter.supports_interval(tf)]
     result = DiscoveryResult(provider=adapter.provider_name, symbol=symbol,

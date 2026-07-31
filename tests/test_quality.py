@@ -170,10 +170,10 @@ class TestIntervalConformance:
         assert out.empty and not report.usable
 
     def test_four_hour_bars_with_overnight_gaps_are_accepted(self):
-        """THE regression this check was rewritten for: a US equity 4h chart
-        has two bars per session and a ~20h overnight gap, so a 'share of bars
-        on the grid' test rejected perfectly good data. Conformance is judged
-        on the TIGHTEST spacing instead."""
+        """THE regression this check was first rewritten for: a US equity 4h
+        chart has two bars per session and a ~20h overnight gap, so a 'share of
+        bars on the grid' test rejected perfectly good data. Conformance is
+        judged on the TYPICAL within-session spacing instead."""
         stamps = []
         day = pd.Timestamp("2026-07-06 12:00", tz="UTC")
         for d in range(8):
@@ -206,6 +206,68 @@ class TestIntervalConformance:
         df = _at(n=2)
         out, report = validate_history(df, Timeframe.H4, now=NOW)
         assert len(out) == 2 and report.usable
+
+    @staticmethod
+    def _hourly_sessions(days: int = 5, stub: bool = True) -> pd.DataFrame:
+        """US equity 1h bars as Yahoo actually serves them: 09:30–15:30 ET on
+        the hour, then a THIRTY-MINUTE closing stub at 16:00 when `stub`."""
+        stamps = []
+        for d in range(days):
+            open_ = pd.Timestamp("2026-07-06 13:30", tz="UTC") + pd.Timedelta(days=d)
+            stamps += [open_ + pd.Timedelta(hours=h) for h in range(7)]
+            if stub:
+                stamps.append(open_ + pd.Timedelta(hours=6, minutes=30))
+        idx = pd.DatetimeIndex(sorted(stamps), name="ts")
+        return pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0,
+                             "close": 100.5, "volume": 10.0}, index=idx)
+
+    def test_hourly_closing_stub_bar_does_not_condemn_the_frame(self):
+        """THE 1h regression. Yahoo closes each US session with a 30-minute
+        stub bar (15:30 → 16:00 ET, the closing auction), so one gap in ~1,900
+        is 0.5 intervals. Judging conformance on the strict MINIMUM read that
+        single bar as 'wrong interval served', scored the frame 0, marked it
+        unusable and charged the provider a validation failure — on every 1h
+        request that included the last completed session. Measured against the
+        real cache: IWM 60m, 2,180 bars, exactly one sub-interval gap."""
+        df = self._hourly_sessions()
+        out, report = validate_history(df, Timeframe.H1, now=NOW)
+        assert report.usable and report.interval_ok
+        assert len(out) == len(df)
+        assert report.score == 100.0
+        # the tightest gap is still REPORTED — it is a statistic, not a veto
+        assert report.min_gap_intervals == pytest.approx(0.5)
+
+    def test_half_interval_bars_throughout_are_still_rejected(self):
+        """The defect the conformance test exists for: 30m bars served for a
+        1h request. Wrong in the BULK of its spacings, not in one bar."""
+        stamps = []
+        for d in range(3):
+            open_ = pd.Timestamp("2026-07-06 13:30", tz="UTC") + pd.Timedelta(days=d)
+            stamps += [open_ + pd.Timedelta(minutes=30 * i) for i in range(13)]
+        idx = pd.DatetimeIndex(sorted(stamps), name="ts")
+        df = pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0,
+                           "close": 100.5, "volume": 10.0}, index=idx)
+        out, report = validate_history(df, Timeframe.H1, now=NOW)
+        assert out.empty and not report.usable and not report.interval_ok
+
+    def test_ninety_minute_bars_served_for_an_hour_request_are_rejected(self):
+        """Yahoo's 90m interval is a real substitution hazard; a 1.5-interval
+        median must not slip through the widened tolerance."""
+        stamps = []
+        for d in range(4):
+            open_ = pd.Timestamp("2026-07-06 13:30", tz="UTC") + pd.Timedelta(days=d)
+            stamps += [open_ + pd.Timedelta(minutes=90 * i) for i in range(5)]
+        idx = pd.DatetimeIndex(sorted(stamps), name="ts")
+        df = pd.DataFrame({"open": 100.0, "high": 101.0, "low": 99.0,
+                           "close": 100.5, "volume": 10.0}, index=idx)
+        out, report = validate_history(df, Timeframe.H1, now=NOW)
+        assert out.empty and not report.usable and not report.interval_ok
+
+    def test_a_single_stub_bar_does_not_rescue_genuinely_wrong_data(self):
+        """Symmetry check: the median must not be gameable by one good gap."""
+        df = self._hourly_sessions(stub=False)
+        out, report = validate_history(df, Timeframe.M30, now=NOW)
+        assert out.empty and not report.usable and not report.interval_ok
 
 
 class TestDuplicatesAndOrder:

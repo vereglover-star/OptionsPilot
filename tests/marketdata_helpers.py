@@ -152,10 +152,91 @@ def stooq_csv(n: int = 5, start: str = "2026-07-20") -> str:
     return "\n".join(rows) + "\n"
 
 
+# ── keyed-provider payload builders (V0.5.4) ─────────────────────────────────
+#
+# Real response shapes, reduced to the parts the adapters read. Every keyed
+# provider test runs against these — no sockets, no API keys, no internet.
+
+def finnhub_payload(n: int = 5, *, interval_seconds: int = 300,
+                    start: datetime | None = None, status: str = "ok") -> dict:
+    """Finnhub's column-oriented candle body. Timestamps are unix seconds UTC."""
+    start = start or datetime(2026, 7, 24, 13, 30, tzinfo=timezone.utc)
+    stamps = [int((start + timedelta(seconds=interval_seconds * i)).timestamp())
+              for i in range(n)]
+    base = [100.0 + i for i in range(n)]
+    return {"s": status, "t": stamps,
+            "o": base, "h": [b + 1 for b in base], "l": [b - 1 for b in base],
+            "c": [b + 0.5 for b in base], "v": [1000.0 + i for i in range(n)]}
+
+
+def twelvedata_payload(n: int = 5, *, interval: str = "5min",
+                       start: str = "2026-07-24 09:30:00",
+                       timezone_name: str = "America/New_York",
+                       newest_first: bool = True) -> dict:
+    """Twelve Data's `values` body.
+
+    `datetime` strings are NAIVE LOCAL TIME in `meta.exchange_timezone` — the
+    property that makes `http_adapter.localize` necessary — and rows arrive
+    newest-first by default, as the real API returns them.
+    """
+    step = pd.Timedelta(_interval_seconds(interval), unit="s")
+    first = pd.Timestamp(start)
+    values = []
+    for i in range(n):
+        base = 100.0 + i
+        values.append({
+            "datetime": (first + step * i).strftime("%Y-%m-%d %H:%M:%S"),
+            "open": f"{base:.5f}", "high": f"{base + 1:.5f}",
+            "low": f"{base - 1:.5f}", "close": f"{base + 0.5:.5f}",
+            "volume": str(1000 + i),
+        })
+    if newest_first:
+        values.reverse()
+    return {"meta": {"symbol": "AAPL", "interval": interval,
+                     "exchange_timezone": timezone_name,
+                     "exchange": "NASDAQ", "type": "Common Stock"},
+            "values": values, "status": "ok"}
+
+
+def alphavantage_payload(n: int = 5, *, interval: str = "5min",
+                         start: str = "2026-07-24 09:30:00",
+                         timezone_name: str = "US/Eastern",
+                         key: str | None = None) -> dict:
+    """Alpha Vantage's nested body.
+
+    Intraday timestamps are naive US/Eastern; the series key is dynamic
+    (`Time Series (5min)`, `Time Series (Daily)`, ...), which is why the
+    adapter finds it structurally instead of guessing.
+    """
+    daily = not interval.endswith("min")
+    step = pd.Timedelta(days=1) if daily else pd.Timedelta(
+        _interval_seconds(interval), unit="s")
+    first = pd.Timestamp(start)
+    series = {}
+    for i in range(n):
+        stamp = first + step * i
+        base = 100.0 + i
+        label = (stamp.strftime("%Y-%m-%d") if daily
+                 else stamp.strftime("%Y-%m-%d %H:%M:%S"))
+        series[label] = {"1. open": f"{base:.4f}", "2. high": f"{base + 1:.4f}",
+                         "3. low": f"{base - 1:.4f}",
+                         "4. close": f"{base + 0.5:.4f}",
+                         "5. volume": str(1000 + i)}
+    name = key or ("Time Series (Daily)" if daily
+                   else f"Time Series ({interval})")
+    return {"Meta Data": {"1. Information": "test", "2. Symbol": "AAPL",
+                          "6. Time Zone": timezone_name},
+            name: series}
+
+
 def _interval_seconds(interval: str) -> int:
     table = {"1m": 60, "2m": 120, "5m": 300, "15m": 900, "30m": 1800,
              "1h": 3600, "60m": 3600, "90m": 5400, "1d": 86400,
-             "1wk": 604800, "1mo": 2592000, "d": 86400}
+             "1wk": 604800, "1mo": 2592000, "d": 86400,
+             # keyed-provider spellings
+             "1min": 60, "5min": 300, "15min": 900, "30min": 1800,
+             "45min": 2700, "60min": 3600, "2h": 7200, "4h": 14400,
+             "1day": 86400, "1week": 604800, "1month": 2592000}
     return table[interval]
 
 
@@ -223,5 +304,6 @@ YAHOO_LIKE = YAHOO_CAPABILITIES
 __all__ = [
     "FakeResponse", "fake_opener", "sequence_opener", "yahoo_payload",
     "yahoo_error", "stooq_csv", "frame", "ScriptedAdapter", "UNLIMITED",
-    "YAHOO_LIKE",
+    "YAHOO_LIKE", "finnhub_payload", "twelvedata_payload",
+    "alphavantage_payload",
 ]

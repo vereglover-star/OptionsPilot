@@ -121,3 +121,40 @@ def test_capabilities_are_immutable():
     let a single provider's quirk leak into every other."""
     with pytest.raises(Exception):
         YAHOO_CAPABILITIES.extended_hours = False
+
+
+class TestCapabilityTablesAreImmutable:
+    """These tables are module-level values SHARED BY REFERENCE between
+    adapters — `YAHOO_CAPABILITIES` backs both `YahooChartAdapter` and
+    `YFinanceAdapter`. A stray write to one adapter's `capabilities.intervals`
+    would silently corrupt the depth table of a provider that was never
+    touched, and would surface as unexplained range errors somewhere else
+    entirely. Nothing mutates them today; this makes a future mistake an
+    immediate error instead of a silent one.
+    """
+
+    def test_the_interval_table_refuses_mutation(self):
+        from optionspilot.core.models import Timeframe
+        from optionspilot.data.capabilities import YAHOO_CAPABILITIES
+
+        with pytest.raises(TypeError):
+            YAHOO_CAPABILITIES.intervals[Timeframe.M1] = None
+
+    def test_every_shipped_adapter_carries_an_immutable_table(self):
+        from optionspilot.core.models import Timeframe
+        from optionspilot.data.registry import default_registry
+
+        for adapter in default_registry(environ={}).adapters:
+            with pytest.raises(TypeError):
+                adapter.capabilities.intervals[Timeframe.M1] = None
+
+    def test_construction_from_a_plain_dict_still_works(self):
+        from optionspilot.core.models import Timeframe
+        from optionspilot.data.capabilities import (
+            IntervalSpec, ProviderCapabilities,
+        )
+
+        caps = ProviderCapabilities(
+            intervals={Timeframe.M5: IntervalSpec("5m", max_lookback_days=59)})
+        assert caps.max_lookback_days(Timeframe.M5) == 59
+        assert caps.supports_interval(Timeframe.M5)

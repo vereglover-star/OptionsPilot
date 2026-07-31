@@ -129,6 +129,9 @@ class AppPaths:
     def get_cache_db(self) -> Path:
         return self.get_data_dir() / "cache.db"
 
+    def get_notifications_db(self) -> Path:
+        return self.get_data_dir() / "notifications.db"
+
     def get_backtest_journal_db(self, symbol: str) -> Path:
         return self.get_data_dir() / f"backtest_{symbol.lower()}.db"
 

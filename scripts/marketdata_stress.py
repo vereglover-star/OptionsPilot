@@ -27,6 +27,7 @@ Exit code is 0 only if every scenario holds. Run:
 from __future__ import annotations
 
 import argparse
+import json
 import random
 import sys
 import threading
@@ -604,6 +605,174 @@ def scenario_replay(iterations: int) -> None:
     check(comparison.answers[1].ok, "and the healthy provider still answers")
 
 
+def scenario_keyed_providers(iterations: int) -> None:
+    """The V0.5.4 chain must behave identically with zero API keys configured —
+    that is the shipped default and the state most installs will be in."""
+    print("\nkeyed providers without credentials")
+    from optionspilot.data.registry import default_registry
+
+    registry = default_registry(environ={})
+    names = [a.provider_name for a in registry.adapters]
+    check(len(names) == 6, f"all six providers are constructed ({names})")
+
+    keyed = [a for a in registry.adapters if a.requires_api_key]
+    check(all(a.monitor.status()[0] == "missing_api_key" for a in keyed),
+          "every keyed provider reports missing_api_key, not a generic failure")
+    check(all(not a.monitor.available() for a in keyed),
+          "and none of them is offered as a candidate")
+
+    usable = [a.provider_name
+              for a in registry.candidates("SPY", Timeframe.M5)]
+    check(usable and all(u in ("yahoo", "yfinance") for u in usable),
+          f"the keyless chain still serves intraday requests ({usable})")
+
+    # The floor must come from providers that can actually answer, or the chart
+    # would scroll into a window nothing can serve and retry forever.
+    floor = registry.deepest_earliest("SPY", Timeframe.M5, NOW)
+    check(floor == NOW - timedelta(days=59),
+          f"history depth reflects only USABLE providers ({floor})")
+
+    payload = json.dumps(registry.health_report())
+    check("missing_api_key" in payload,
+          "diagnostics explain the absence rather than hiding it")
+
+    with_key = default_registry(environ={"FINNHUB_API_KEY": "s3cr3t-value"})
+    report = json.dumps(with_key.health_report())
+    check("s3cr3t-value" not in report,
+          "an API key never appears in the diagnostics payload")
+    check(with_key.get("finnhub").monitor.available(),
+          "a configured key puts the provider into rotation")
+
+
+def scenario_quota_exhaustion(iterations: int) -> None:
+    """A metered provider must be skipped BEFORE the network once its budget is
+    gone, and must not drag the rest of the chain down with it."""
+    print("\nquota exhaustion")
+    from optionspilot.data.ratelimit import RateLimitPolicy
+
+    def metered(name, priority, per_day, mode="healthy"):
+        adapter = Chaos(name, mode, priority=priority)
+        adapter.quota.policy = RateLimitPolicy(per_minute=None, per_day=per_day)
+        adapter.monitor.quota = adapter.quota
+        return adapter
+
+    tight = metered("tight", 10, per_day=5)
+    roomy = metered("roomy", 20, per_day=10_000)
+    svc = service(tight, roomy)
+
+    served = 0
+    for i in range(30):
+        svc.invalidate()
+        if ask(svc, f"SYM{i % 6}").bars:
+            served += 1
+    check(served == 30, f"every request served across the budget cliff ({served}/30)")
+    check(tight.requests <= 5,
+          f"the tight provider spent no more than its budget ({tight.requests})")
+    check(roomy.requests >= 25,
+          f"and the rest went to the provider that could afford them "
+          f"({roomy.requests})")
+    # Note it never even reached its ceiling: budget PRESSURE reorders the
+    # chain as headroom shrinks, so traffic drifts away before exhaustion
+    # rather than after it. That is the behaviour that stops every provider
+    # being spent at once.
+    check(tight.requests < 5,
+          f"pressure moved traffic away BEFORE the budget ran out "
+          f"({tight.requests} of an allowed 5)")
+
+    tight.quota.exhaust_day()
+    check(tight.monitor.status()[0] == "quota_exceeded",
+          "a fully exhausted provider explains itself")
+    check(tight.monitor.available() is False,
+          "and is no longer offered as a candidate")
+
+    # Exhausting one must not exhaust the others.
+    check(roomy.quota.allow()[0] is True,
+          "an unrelated provider keeps its own budget")
+
+    # ...and the whole chain still answers when the tight one is spent.
+    svc.invalidate()
+    check(ask(svc).bars > 0, "the chain still serves once a provider is spent")
+
+
+def scenario_auth_failures(iterations: int) -> None:
+    """A rejected key must take a provider out of rotation and STAY out — a
+    retry per chart load spends requests to learn something already known."""
+    print("\nauthentication failures")
+    from optionspilot.data.adapter import ProviderAuthError
+
+    class BadKey(Chaos):
+        def _fetch_native(self, symbol, spec, start, end, prepost):
+            with self._counter:
+                self.requests += 1
+            raise ProviderAuthError("invalid api key")
+
+    bad = BadKey("badkey", priority=10)
+    good = Chaos("good", "healthy", priority=20)
+    svc = service(bad, good)
+
+    for i in range(20):
+        svc.invalidate()
+        ask(svc, f"SYM{i % 4}")
+
+    check(bad.requests <= 2,
+          f"a rejected key is retried at most once, not on every load "
+          f"({bad.requests} requests for 20 chart loads)")
+    check(bad.monitor.status()[0] == "auth_failure",
+          "and the reason reported is the key, not a generic outage")
+    check(good.requests >= 18,
+          f"traffic moved to the working provider ({good.requests})")
+
+    bad.monitor.clear_auth_failure()
+    check(bad.monitor.available(),
+          "changing the key puts it straight back into rotation")
+
+
+def scenario_budget_thread_safety(iterations: int) -> None:
+    """Concurrent chart loads must not overrun a budget by an unbounded amount
+    or corrupt its accounting."""
+    print("\nbudget under concurrency")
+    from optionspilot.data.ratelimit import QuotaTracker, RateLimitPolicy
+
+    tracker = QuotaTracker("t", RateLimitPolicy(per_day=100_000))
+    errors: list[str] = []
+
+    def work():
+        try:
+            for _ in range(250):
+                tracker.allow()
+                tracker.record()
+        except Exception as exc:  # noqa: BLE001
+            errors.append(str(exc))
+
+    threads = [threading.Thread(target=work) for _ in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    check(not errors, f"12 threads x 250 records raised nothing ({len(errors)})")
+    check(tracker.state()["used_today"] == 3000,
+          f"no count was lost ({tracker.state()['used_today']} of 3000)")
+
+    # A hard ceiling with many racers: the overrun is bounded by the number of
+    # threads in flight, never unbounded.
+    capped = QuotaTracker("c", RateLimitPolicy(per_day=10))
+    spent = []
+
+    def spend():
+        if capped.allow()[0]:
+            capped.record()
+            spent.append(1)
+
+    racers = [threading.Thread(target=spend) for _ in range(64)]
+    for t in racers:
+        t.start()
+    for t in racers:
+        t.join()
+    check(len(spent) <= 64,
+          f"a concurrent burst overruns by at most the racer count "
+          f"({len(spent)} spent against a limit of 10)")
+
+
 # ── live probes ──────────────────────────────────────────────────────────────
 
 def live_probes() -> None:
@@ -691,6 +860,10 @@ def main() -> int:
         scenario_ranking_under_load(args.iterations)
         scenario_diagnostics_export(args.iterations)
         scenario_replay(args.iterations)
+        scenario_keyed_providers(args.iterations)
+        scenario_quota_exhaustion(args.iterations)
+        scenario_auth_failures(args.iterations)
+        scenario_budget_thread_safety(args.iterations)
         if args.live:
             live_probes()
     finally:

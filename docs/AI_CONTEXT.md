@@ -127,9 +127,12 @@ drift the way a `docs/` file might.
   rejection tests, `test_coach.py`'s `TestMissingContext`, `test_risk.py`'s
   `TestManualEntry`).
 - **Frontend test coverage is real but shallow.** `scripts/check_html_ids.py`
-  (static — every `$("id")` resolves) and `scripts/browser_check.py` (a
-  real headless browser visits every tab, fails on any console error) both
-  run as part of `scripts/verify.ps1`. Neither is deep per-flow regression
+  (static — every `$("id")` resolves), `scripts/browser_check.py` (a
+  real headless browser visits every tab, fails on any console error), and the
+  four focused browser suites — `chart_check.py`, `marketdata_check.py`,
+  `intelligence_check.py` and `guide_check.py` (129 checks over the guided
+  onboarding, help, glossary, empty states, accessibility and the order-ticket
+  guardrails) — all run as part of `scripts/verify.ps1`. Neither is deep per-flow regression
   coverage — any change to a specific flow (mode toggle, manual order
   placement, coach review rendering) still needs manual verification in a
   real browser (`scripts/dev.ps1`) before it's considered done.
@@ -157,17 +160,31 @@ current priority. No multi-window or multi-monitor workspace exists; if
 that becomes a real requirement, `ARCHITECTURE.md` already flags Tauri as
 the preferred alternative to revisit the Electron/Tauri decision with.
 
-## Future mobile plans
+## Future mobile / web / cloud plans
 
-None exist, and none are anticipated in the current roadmap. The analysis
-engine is pandas/numpy-heavy (not resource-light), the UI assumes a
-desktop-sized viewport with dense tables and multi-pane layouts, and the
-whole point of the architecture (one local process, an embedded broker
-simulator, local SQLite) doesn't map cleanly onto a mobile app's
-sandboxing and connectivity model. A hypothetical mobile client would more
-realistically be a thin remote view onto a server-hosted OptionsPilot
-instance than a port of the desktop app — that would be a different
-project, not a phase of this one.
+**Read `docs/ARCHITECTURE-PLATFORM.md` first** — it supersedes what this
+section used to say, which was that no mobile plans existed. Two things have
+changed since.
+
+`docs/ARCHITECTURE-MOBILE.md` (2026-07-18) is a *proposal*, still unapproved,
+for an iOS companion under a desktop-as-host model. And V0.7.0 built the
+architecture that makes it cheap: `optionspilot/services/` is the
+platform-independent application layer, `optionspilot/host/` puts every OS
+question behind a capability interface, workspace state is server-owned, and
+every durable object has a declared synchronization policy.
+
+What has NOT changed, and should not be quietly revised:
+
+- **The desktop is the flagship and the host.** Neither mobile profile has
+  `Capability.BIND_LISTENER`, and that single fact is where the single-writer
+  paper account and the companion charter come from. A phone is a client of the
+  user's own machine, never a peer that owns the data.
+- **A mobile client would be a companion, not a port.** The analysis engine is
+  pandas/numpy-heavy and the backtest and market-data-control surfaces genuinely
+  assume `Capability.WIDE_VIEWPORT`.
+- **No cloud sync exists and none is being built.** `services/sync.py`
+  classifies what would have to happen; it does not do any of it. In particular
+  `data/credentials.json` is policy `NEVER` — a prohibition, not a strategy.
 
 ## Current limitations
 
@@ -232,30 +249,61 @@ into long-term memory:
    and never add a code path that could place a real order without both
    flags AND a real adapter existing (which currently doesn't exist at
    all — `broker/registry.py`'s non-paper entries are stubs that raise).
-3. **Never introduce an LLM call into the trading or coaching path**
+3. **Never let the Trading Intelligence Engine state something it cannot
+   evidence.** The whole layer is built on one rule: *insufficient evidence
+   is a first-class answer*. A metric is `None`, not `0`. A score is `None`,
+   not `50`. A behaviour is `assessable=False` **with the reason stated**,
+   not `detected=False`, because "not detected" is a claim and it would be
+   unearned. Every conclusion carries the measured `Evidence` — including
+   the exact trade IDs — behind it. A coaching system that is confidently
+   wrong is worse than one that says "I don't know", because the user acts
+   on it. See `docs/TRADING_INTELLIGENCE.md` §4.
+4. **Never let `services/` import a transport.** Not `ui/`, and — the stronger
+   half — not FastAPI, Starlette, uvicorn, pywebview or any other web or GUI
+   package. A service free of `optionspilot.ui` but importing `fastapi` for a
+   response model still means a CLI, a test or a future mobile backend must pull
+   a web server in to compute a win rate, which is precisely the coupling V0.7.0
+   removed. Two guards in `tests/test_architecture.py` assert it.
+5. **Never ask `sys.platform` outside `core/paths.py`, `host/` and
+   `update/installer.py`.** Ask the host adapter a *capability* question
+   instead. `if not host.supports(Capability.TOAST)` survives a port;
+   `if sys.platform == "win32"` is a bug on every platform that is not Windows,
+   and a silent one on most. Guarded.
+6. **Never build a storage path from the current working directory.** V0.4.4
+   moved storage to a stable per-user root for exactly this reason, and a
+   surviving `Path("data")` in `/api/learning` still made the Learning tab read
+   the wrong file for three milestones — while looking right, because the
+   `effective` column came from the live scorer. Use `AppPaths` or the injected
+   `data_dir`. Guarded.
+7. **Never let `intelligence/` import upward.** It imports `core` only, and
+   reads journal/experience/coach records *structurally* rather than by
+   import, which keeps it BELOW the coach. That direction is what allows the
+   AI Coach to become a presentation layer over the engine; reverse it and
+   that becomes impossible forever. `tests/test_architecture.py` enforces it.
+8. **Never introduce an LLM call into the trading or coaching path**
    (`engine/scorer.py`, `engine/gate.py`, `coach/coach.py`) without the
    user explicitly asking for that specific change. Determinism and
    auditability here are a stated design decision, not an accident of
    what was easy to build first.
-4. **Never edit `optionspilot/core/models.py` casually.** It's the shared
+9. **Never edit `optionspilot/core/models.py` casually.** It's the shared
    domain vocabulary; a field change touches persistence (SQLite schemas),
    the engine, the broker, and the UI simultaneously. Grep for every usage
    before changing anything here.
-5. **Never hand-edit generated/binary assets**: `assets/optionspilot.ico`
+10. **Never hand-edit generated/binary assets**: `assets/optionspilot.ico`
    (regenerate via `scripts/make_icon.py`), `optionspilot/data_assets/symbols.csv`
    (regenerate via `scripts/fetch_symbols.py`), `OptionsPilot.spec`
    (PyInstaller-generated, gitignored).
-6. **Never treat `data/` or `logs/` in a working checkout as fixtures.**
+11. **Never treat `data/` or `logs/` in a working checkout as fixtures.**
    They're gitignored runtime state — the user's actual paper account,
    journal, and logs. Tests use `tmp_path`; verification uses scratch data
    directories, never the real one.
-7. **Never rewrite `docs/CHANGELOG.md`'s existing entries.** Append new
+12. **Never rewrite `docs/CHANGELOG.md`'s existing entries.** Append new
    ones; history is append-only.
-8. **Never build a second code path that duplicates
+13. **Never build a second code path that duplicates
    `Orchestrator.run_cycle()`'s logic** for a UI action. Either call into
    the orchestrator or add a narrowly-scoped public method to it (the
    `register_manual_entry`/`approve_manual_entry` pattern).
-9. **Never let a market-data adapter return an empty frame to signal
+14. **Never let a market-data adapter return an empty frame to signal
    failure** (V0.5.2). Adapters raise typed `ProviderError`s; the empty
    frame is reserved for "this window genuinely holds no bars." Collapsing
    those two back together is the ancestor of every chart-history bug this
@@ -264,7 +312,7 @@ into long-term memory:
    `MarketDataService.get_history(allow_stale=False)` to serve stale data.
    The engine's empty-means-skip behavior is load-bearing for trading
    safety, and stale bars belong only on display surfaces.
-10. **Never re-derive a provider's history depth inside an adapter.** It
+15. **Never re-derive a provider's history depth inside an adapter.** It
    lives in `data/capabilities.py`, is *measured* (rerun
    `scripts/marketdata_probe.py`), is asserted by `test_capabilities.py`,
    and is measured **from now** — not from the request's end. That
@@ -273,7 +321,7 @@ into long-term memory:
    **advisory and off by default**: it reports drift, it does not rewrite
    the table, because the shipped numbers sit one day *inside* each
    measured cliff on purpose and a probe can be wrong.
-11. **Never split a provider's operational state across two objects again**
+16. **Never split a provider's operational state across two objects again**
    (V0.5.3). `data/health.py::ProviderHealthMonitor` is the single owner
    of counters, latency, rate-limit window, circuit breaker and ranking
    score. It used to be `adapter.ProviderHealth` plus
@@ -285,7 +333,18 @@ into long-term memory:
    that decides whether a failure counts. Do not re-derive that policy at
    a call site — range and symbol errors are correct answers to
    impossible questions and must never trip a breaker.
-12. **Never make provider ranking dominate the static priority anchor.**
+17. **Never let a missing API key become a failure** (V0.5.4). The app ships
+   with zero keys and must start, chart and trade normally in that state. A
+   keyed provider with no key is *constructed*, reports `missing_api_key`
+   with a signup link in diagnostics, and is never selected — that is
+   deliberately different from `enabled: false`, which removes it entirely.
+   Never add a code path where an absent credential raises, retries, or
+   degrades a keyless provider.
+18. **Never serialise a provider config without redaction** (V0.5.4).
+   `ProviderConfig.as_dict()` redacts `api_key` by default because that dict
+   reaches `/api/diagnostics/marketdata`, the JSON export and the text
+   report. Adding a path that dumps config another way reintroduces the leak.
+19. **Never make provider ranking dominate the static priority anchor.**
    `rank()` is anchored on `provider_priority` so that a cold system
    reproduces the documented chain order exactly; that property is what
    makes dynamic ranking safe to ship, and `dynamic_ranking: false` must
@@ -296,10 +355,66 @@ into long-term memory:
    rate never decays, so a provider would stay demoted long after it
    recovered.
 
+20. **Never leave a chart axis without an owner** (V0.5.5). The time axis has
+   had exactly one (`chMoveViewport`) since V3.2.2. The price axis had none,
+   and that was the last way the canvas could go silently blank:
+   lightweight-charts disables `autoScale` **permanently** on the first
+   price-axis drag, so one gesture pinned the band for the rest of the session
+   and every later symbol outside it rendered off-screen — with a healthy
+   backend, a perfect `CH.data`, a clean console and `data-ch-state="complete"`.
+   Keep `chAutoScalePrice` wired to *genuine switches, Reset and Latest only*
+   (a same-key refresh must preserve a deliberate manual scale — otherwise the
+   app fights the user), and keep `chEnsurePriceVisible` as the zero-overlap
+   net. `chart_check` 43–48 exist to fail if any of that is undone.
+
+21. **Never assert only that the data arrived.** That single blind spot cost
+   this project nine defects in one pass. 1,232 tests, 42 browser checks and a
+   whole diagnostics subsystem all verified payload correctness; not one asked
+   whether the candles were on screen, so three separate defects rendered a
+   correct payload as a blank canvas reporting success. Any new chart check
+   must assert a user-visible property. The canonical one:
+   **the candles in the visible time window must intersect the visible PRICE
+   window.**
+
+22. **Never judge a data frame by a single extreme value** (V0.5.5). Interval
+   conformance tested the tightest gap, and Yahoo's 30-minute session-closing
+   stub bar (15:30 → 16:00 ET) made one gap in ~1,900 fail the whole 1h frame
+   as "wrong interval served". Judge distributions on their **median**; keep
+   the extreme as a reported statistic. The same reasoning applies to any
+   future "is this data what I asked for" test.
+
+23. **Never let the guided-onboarding layer make a claim about the trader**
+   (V0.6.1). `ui/guide.py` recommends **tutorials** from **feature usage** and
+   nothing else; behavioural claims belong to `intelligence/`, which measures
+   them from the trade record with a false-discovery correction underneath.
+   *"You have never placed a limit order"* is a fact about the software;
+   *"you should place more limit orders"* is a claim about the trader.
+   `test_no_rule_gives_trading_advice` sweeps every rule and asserts the line
+   holds. By the same rule, keep the two catalogues sharing **ids only** — a
+   `Recommendation` must never carry a tutorial's title, because that is a
+   second place tracking one fact and this project has paid for that twice.
+
+24. **Never let a UI guardrail become a reason to relax a real one** (V0.6.1).
+   `tkSyncTicket` stops a user assembling the three order combinations
+   `OrderManager.place` refuses, and `place` still refuses all three. The
+   long-standing lesson here is that adding a gate function is not the same as
+   the gate being active; the inverse is equally true, and cheaper to get wrong.
+
 ## Common mistakes to avoid
 
 Lessons the project has actually hit, not hypothetical ones:
 
+- **A green test suite is evidence about the doubles, not about the platform.**
+  On 2026-07-30 an audit found that clicking the window's X button deadlocked the
+  process outright — pywebview runs `closing` handlers on the WinForms message
+  pump, and the handler called `evaluate_js`, which waits on a semaphore that only
+  that pump can release. The whole suite passed over it, because the window double was
+  a recorder that knew nothing about threads, and one test had actively enshrined
+  the blocking behaviour as its contract. **When a defect is reported from real
+  use and the tests disagree, the tests are describing a different system. Go and
+  read the platform's source — the answer was in `webview/event.py` and
+  `webview/platforms/edgechromium.py`, forty lines apart.** Full mechanism:
+  `CLAUDE.md` "Known traps", and `_DesktopController`'s class docstring.
 - **A halted account bypassing risk gates via a code path that "looks"
   gated but isn't wired up.** Concretely: on 2026-07-16 a session added
   `RiskManager.approve_manual_entry` and `OrderManager.evaluate`'s
@@ -352,7 +467,15 @@ Lessons the project has actually hit, not hypothetical ones:
 
 ## Current UI philosophy
 
-Dark, dense, brokerage-style — closer to a real trading terminal than a
+**Since V0.6.1 the first commitment is that the software teaches itself.** Every
+screen has a walkthrough behind a Learn button, every jargon term explains itself
+on hover, every empty state says what will fill it and offers the first step, and
+an action that cannot possibly succeed is not assemblable — when the UI removes
+an option it says what changed, why, and what to do instead. When a user becomes
+confused the question is never "where should we document this" but "why was the
+software able to let them." See `docs/ONBOARDING.md`.
+
+Otherwise: dark, dense, brokerage-style — closer to a real trading terminal than a
 typical SaaS dashboard. Tabular numerals everywhere numbers appear side by
 side. Skeleton loaders over blank states during fetches. DOM writes are
 diffed so unchanged sections never re-render (`setHTML` helper) — this

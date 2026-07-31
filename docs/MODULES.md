@@ -26,10 +26,14 @@ realism + live gate), `notify`, `logging`, `integrations`.
 yaml config, persisted to `data/settings.json`: `set_watchlist`,
 `set_pinned`, `save_favorites`, `set_mode` (trading_mode + custom tunables,
 validated through `EngineConfig`/`RiskConfig`), `set_operating_mode`
-(ai/human, independent of trading_mode). `apply(cfg)` overlays persisted
-choices onto a freshly loaded config at bootstrap; `_apply_mode` always
-preserves the caller's current `operating_mode` when restoring the baseline
-for a trading-mode switch. `MAX_WATCHLIST = 30`.
+(ai/human, independent of trading_mode), `guide_state`/`set_guide_state`
+(V0.6.1 — the guided-onboarding document, stored under the `guide` key).
+`apply(cfg)` overlays persisted choices onto a freshly loaded config at
+bootstrap; `_apply_mode` always preserves the caller's current `operating_mode`
+when restoring the baseline for a trading-mode switch. `MAX_WATCHLIST = 30`.
+The guide accessors are deliberately dumb storage: the vocabulary and the merge
+semantics belong to `ui/guide.py`, and `config/` must not import upward to reach
+them.
 
 ## Data (`optionspilot/data/`) — full design in `docs/MARKET_DATA.md`
 - `MarketDataProvider` ABC — `get_candles/get_quote/get_expirations/get_option_chain`.
@@ -57,6 +61,33 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   daily/weekly/monthly only, decades deep.
 - `legacy.LegacyProviderAdapter` — wraps any plain `MarketDataProvider` (test
   fakes, backtest fixtures) into the same ladder.
+- `http_adapter.KeyedHTTPAdapter` (V0.5.4) — the shared base for keyed JSON
+  providers: transport, HTTP-status → typed-failure mapping, JSON decoding, and
+  `localize()`, which owns **the timezone contract** (intraday converts from the
+  exchange-local time the payload names; daily and coarser stamp at 00:00 UTC
+  to match Yahoo and Stooq, because the cache is keyed on the timestamp). A
+  concrete keyed adapter implements only `_build_url` / `_translate` / `_parse`
+  / `_probe`.
+- `finnhub_provider.FinnhubAdapter` (40) — 60 req/min, unix-second timestamps
+  (so no timezone conversion). **Its free tier no longer serves historical
+  candles** — `/stock/candle` moved to the paid tiers and answers a valid free
+  key with HTTP 403 (measured 2026-07-27). It therefore sets
+  `free_tier_serves_history = False`, raises `ProviderEntitlementError` rather
+  than `ProviderAuthError` on a 403, and implements `verify_credentials()`
+  against the free `/quote` endpoint so the app can say *"your key is valid, the
+  plan is not"* instead of sending the user to regenerate a good key. A paid key
+  works normally. Full account: `docs/MARKET_DATA.md` §41.
+- `twelvedata_provider.TwelveDataAdapter` (50) — 800/day, 8/min. Native 2h/4h
+  intervals; reports errors inside HTTP 200 bodies; newest-first rows.
+- `alphavantage_provider.AlphaVantageAdapter` (60) — **25 requests/day**, the
+  tightest budget in the app and the reason `ratelimit.py` exists. Errors arrive
+  under four different 200-status keys; the series key is dynamic.
+- `ratelimit.py` (V0.5.4) — `RateLimitPolicy` / `QuotaTracker` / `QuotaStore`:
+  per-provider request budgets enforced BEFORE the network, a real sliding
+  minute window, and a daily count persisted to `<data>/quota.json` so a restart
+  cannot mint an allowance the plan never granted. `pressure()` feeds the health
+  ranking, which is how load moves off a nearly-spent provider without a
+  separate scheduler.
 - `health.ProviderHealthMonitor` — **the single owner of a provider's
   operational state**: counters (requests/successes/failures/empties/today),
   latency (EWMA + p95 over a rolling window), the per-kind failure breakdown,
@@ -64,20 +95,75 @@ for a trading-mode switch. `MAX_WATCHLIST = 30`.
   `rank()`. `COUNTS_AGAINST_HEALTH` is the one definition of which failures say
   anything about a provider's health (range and symbol errors do not).
   `snapshot()` is what the dashboard, the export and the benchmark all read.
+  **V0.5.7** adds `health_state()` — the one-word answer for a *human*
+  (`healthy` / `degraded` / `offline` / `disabled` / `missing_key` /
+  `rate_limited` / `circuit_open` / `unavailable` / `unknown`) paired with a
+  mandatory plain-English sentence. It is DERIVED on every read and stored
+  nowhere: `status()` remains the *gate* the registry reads, and a second
+  stored copy of one fact is precisely how the adapter's counters and the
+  registry's breaker came to disagree before V0.5.3. `rank(include_latency=)`
+  supports hybrid ordering.
+- `credentials.CredentialStore` (V0.5.7) — API keys pasted into Settings, in
+  their own owner-only `<data>/credentials.json` rather than in
+  `settings.json` (which is treated as ordinary, backed-up, shareable user
+  data). Resolution is `environment → stored → config.yaml → missing`,
+  implemented by `overlay()` filling in the field `ProviderConfig.
+  resolve_api_key` already consults *after* the environment — so there is one
+  implementation of the precedence, not two. **A plaintext key leaves this
+  module only through `resolve()`**; `mask()` (`••••••••abcd`) is what every
+  other accessor returns, and `describe()` deliberately has no `redact=False`
+  escape hatch.
+- `control.MarketDataControl` (V0.5.7) — the administration surface, composed
+  *over* the registry and the service. `dashboard()` (one payload: health +
+  credentials + quota + capability + order + failover + advice),
+  `set_api_key` / `remove_api_key`, `set_enabled`, `move` / `set_order` /
+  `reset_order`, `set_ordering_mode`, `test_connection()` (a real request end
+  to end, with a closed vocabulary of outcomes each carrying a remedy),
+  `start_maintenance()` / `cancel_maintenance()` (eight actions on one
+  background job slot with polled progress), `recommendations()`, and the gated
+  `qa_*` hooks. It never computes a ranking (it reports `registry.ranking()`
+  verbatim) and never returns a plaintext key. `apply_control_state()` folds
+  persisted choices into the startup config, type-checking every field — a
+  hand-edited preferences file must cost a user their preferences, never their
+  app.
+- `faults.py` (V0.5.7) — QA-mode fault injection: `outage`, `timeout`,
+  `rate_limit`, `quota`, `auth`, `latency` (a real sleep), `empty`, `unusable`.
+  Consulted once inside `HistoryAdapter.fetch_history`, raising the genuine
+  `ProviderError` subclass, so a simulated failure is handled by exactly the
+  machinery a real one would be. Off in every shipped build
+  (`market_data.qa_mode` defaults False; the endpoints 404 without it) and one
+  boolean read per request when idle.
 - `config.py` — `MarketDataConfig` / `ProviderConfig` / `CacheConfig`: every
   operational knob (enabled, priority, timeout, retries, backoff, throttle,
   breaker thresholds, quality floor, ranking, memo cap, cache retention).
   Plain dataclasses because `data/` may not import `config/`; the pydantic
   mirror is `config.settings.MarketDataConfigSection` and the translation
   happens in `orchestrator.py`. Unknown keys raise; unknown providers do not.
+  **V0.5.7** adds `ordering_mode` (`static` / `hybrid` / `dynamic`, resolved by
+  `ordering()` — `dynamic_ranking: false` still wins and pins to `static`),
+  `provider_order`, `credentials_path`, `control_state_path` and `qa_mode`.
 - `registry.ProviderRegistry` — ordering, eligibility (interval/symbol/depth
   checks *before* the network), and per-provider circuit breakers with
   half-open recovery. Ordering is by `monitor.rank()` (health-aware; a cold
   system reproduces the static priority order exactly), and `ranking()` /
   `healthiest()` expose it. `dynamic_ranking: false` pins the static order.
+  **V0.5.7** adds the live-control mechanism the settings page drives:
+  `order()` / `reorder()` / `set_enabled()` / `apply_config()`. `reorder()`
+  rewrites priorities **10, 20, 30…** rather than 1, 2, 3, because 10 rank
+  points equals one second of latency — consecutive numbers would make dynamic
+  ordering almost-static the first time a user pressed Move Up. It also
+  collapses repeated names, so a hand-edited order cannot list one provider
+  twice. `default_registry` now **constructs disabled providers** and benches
+  them, so a switched-off provider can still be listed, explained and switched
+  back on; it contributes no `deepest_earliest` floor.
 - `quality.py` — semantic validation returning a `HistoryReport`: OHLC
   consistency, ordering, duplicates, future timestamps, non-finite values, bad
-  prints, interval conformance. Gaps are recorded, never penalised.
+  prints, interval conformance. Gaps are recorded, never penalised. Interval
+  conformance is judged on the **median within-session gap**, not the tightest
+  one: Yahoo closes every US session with a 30-minute stub bar, so one
+  0.5-interval gap in ~1,900 used to condemn a whole 1h frame as "wrong
+  interval served" (V0.5.5 — `docs/MARKET_DATA.md` §28). `min_gap_intervals` is
+  still reported; it is a statistic, not a veto.
 - `service.MarketDataService` — the tier ladder (memo → disk → providers →
   half-open probes → stale cache → explained failure) and the one place the
   four distinct "no data" conditions (`exhausted`/`empty`/`stale`/`failed`) are
@@ -267,6 +353,31 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
   `recent`, `statistics` / `strategy_statistics` / `regime_statistics` /
   `failure_modes` / `success_patterns`.
 
+## Trading Intelligence (`intelligence/`, V0.6.0) — full design in `docs/TRADING_INTELLIGENCE.md`
+
+Imports `core` only. Reads journal/experience/coach records structurally, never
+by import, so it sits **below** the coach in the layering.
+
+| Module | Exports | Responsibility |
+|---|---|---|
+| `models.py` | `Evidence`, `Metric`, `BehaviorFinding`, `Pattern`, `ScoreCard`, `Goal`, `GoalProgress`, `Recommendation`, `LessonRecommendation`, `TimelineEntry`, `Achievement`, `Report`, `IntelligenceSnapshot`, `Confidence`, `Severity`, `Trend` | The shared vocabulary. Every type serialises via `to_dict()`; `_finite()` keeps `inf`/`NaN` out of every payload. |
+| `stats.py` | `expectancy`, `profit_factor`, `max_drawdown`, `recovery_factor`, `sharpe_like`, `consistency`, `wilson_interval`, `two_proportion_p`, `trend_of`, `sample_confidence`, `comparable` | Every formula in the layer. The only module allowed to contain arithmetic. Nothing is annualised. |
+| `facts.py` | `TradeFact`, `FactSet`, `build_facts` | The one join across the three stores. Never invents, never raises, tri-state process fields. |
+| `windows.py` | `period_key`, `bucket`, `WINDOWS`, `resolve`, `previous_and_latest` | Period bucketing and named analysis windows. All calendar decisions in America/New_York. |
+| `performance.py` | `METRIC_SPECS`, `compute`, `PerformanceEngine` | The 38-metric registry — the addressable vocabulary of the whole layer. |
+| `behavior.py` | `BEHAVIORS`, `DETECTORS`, `BehaviorEngine` | 22 detectors, each with its corrective action and its "what this requires" declaration. |
+| `patterns.py` | `DIMENSIONS`, `PatternEngine` | Automatic edge discovery over 19 dimensions, with Benjamini–Hochberg false-discovery control. |
+| `risk.py` | `RiskIntelligence` | Backward-looking risk: drawdown, tails, worst days, sizing dispersion, concentration. Never gates. |
+| `confidence.py` | `ConfidenceEngine`, `ScoreInput`, `MIN_COVERAGE` | The eight composite scores, each explaining itself through its components. |
+| `goals.py` | `TEMPLATES`, `validate`, `GoalEngine` | Measurable commitments against metric keys, with computed progress. |
+| `curriculum.py` | `CURRICULUM`, `CurriculumEngine` | 16 lessons, each summoned only by a measured weakness. |
+| `recommend.py` | `RecommendationEngine` | Derives, prices and ranks the action list. Contains no generic advice. |
+| `timeline.py` | `TimelineEngine` | The dated improvement narrative — month-over-month, streaks, milestones. |
+| `achievements.py` | `SPECS`, `AchievementEngine` | 10 achievements, none earnable by one trade or by luck. Derived on read, stored nowhere. |
+| `reports.py` | `ReportEngine` | Weekly and monthly coaching reports, in prose. |
+| `engine.py` | `TradingIntelligence`, `empty_snapshot`, `build_evidence_index`, `confidence_of` | The façade: pipeline, fingerprint cache, per-trade projection, goal CRUD. |
+| `store.py` | `IntelligenceStore` | Goal persistence. The only thing this layer stores. |
+
 ## Orchestrator (`orchestrator.py`) & Notify (`notify/`)
 - `Orchestrator.fetch_watchlist_candles(symbols, on_symbol=None)` — parallel
   (symbol × timeframe) candle fetch (8 workers), provider-only (safe to call
@@ -325,6 +436,81 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
 - `ui.py` — pure formatting: `format_bytes/speed/eta`, safe
   `render_release_notes_html` (escape-first markdown subset), dialog payloads.
 
+## Guided onboarding (`ui/guide.py`, V0.6.1) — full design in `docs/ONBOARDING.md`
+Pure and deterministic (no I/O, no clock, no network). Owns three things the
+frontend cannot: durable progress, shape-validation of a user-editable
+preferences document, and which walkthrough to offer next.
+- `TUTORIALS` — the tutorial **ids** (11). The titles and steps live in
+  `index.html`; duplicating them here would be a second place tracking one fact.
+  `tests/test_guide.py::TestCatalogueContract` asserts the two id sets match in
+  both directions.
+- `KNOWN_FEATURES` — the feature keys the recommender reads. Others may be
+  recorded and are stored uninterpreted, so new instrumentation needs no backend
+  change.
+- `normalize_state` / `merge_state` — never raise. Unknown tutorial ids are
+  dropped, feature keys are shape-checked and capped (`MAX_FEATURE_KEYS`), and
+  merge semantics differ per field on purpose: completions **union** (a short
+  client list must not un-finish anything), features **increment**, settings
+  **replace**. A hand-edited `settings.json` costs a user their guide progress at
+  worst, never their app.
+- `GuideFacts` — measured by the caller from state that already exists (journal,
+  order book, broker, watchlist). `single_data_source` is `bool | None` because
+  "could not determine" and "no" are different answers and only `True` may fire a
+  rule.
+- `recommendations(state, facts)` → ranked `Recommendation`s, each carrying the
+  evidence that produced it. **Recommends tutorials from feature usage; never
+  trading behaviour** — that is `intelligence/`'s job, and a second, cruder path
+  to the same kind of claim is exactly the drift this codebase has paid for
+  twice.
+
+## Host platform (`host/`, V0.7.0) — full design in `docs/ARCHITECTURE-PLATFORM.md` §3
+Core-only. Everything OptionsPilot needs from the machine underneath it.
+- `capabilities.py` is **data**: `Capability` (13 values), `HostProfile` per
+  target — `desktop`, `headless`, `web`, `ios`, `android` — and `HOST_PROFILES`.
+  The three that do not exist carry `implemented=False`; every notable missing
+  capability carries a `notes` entry saying *why*, so a blocker travels with its
+  reason instead of living in a commit message. The load-bearing entry: neither
+  mobile target has `BIND_LISTENER`, which is where the desktop-as-host model and
+  the single-writer paper account both come from.
+- `adapter.py` is **behaviour**: `HostAdapter` (abstract), `DesktopHost`,
+  `HeadlessHost`, and process-wide `current_host()` / `set_host()`. Owns the
+  storage root, temp space, opening an external URL, and the single-instance
+  socket mutex moved here from `ui/desktop.py` (same socket, same port 8786).
+  No host call raises — every one sits where an OS refusal is a normal state.
+
+## Services (`services/`, V0.7.0) — full design in `docs/ARCHITECTURE-PLATFORM.md` §2
+The platform-independent application layer: between the orchestrator and any
+transport. Every service takes **injected, duck-typed** collaborators and returns
+**frozen view models of primitives**. Never imports `ui/` or any web framework.
+- `viewmodels.py` — `PositionView`, `AccountView`, `PerformanceView`,
+  `PnLWindowsView`, `WatchlistView`, `WatchlistEditView`, `WorkspaceView`,
+  `HostView`. Frozen, because a view model two renderers can both mutate is the
+  same "two objects tracking one fact" drift paid for in V0.5.3, V0.5.7 and
+  V0.6.1. `finite()` is the `Infinity`/`NaN` boundary.
+- `portfolio.py` — positions, account, `performance()` (win rate, profit factor,
+  max drawdown), `pnl_windows()`, `setup_history()`. Reproduces exactly which
+  reads happen under the orchestrator lock and which do not.
+- `watchlist.py` — parse, validate, add/remove/reorder. The four disjoint outcome
+  buckets (`added` / `invalid` / `duplicates` / `over_cap`) exist because a user
+  who pastes twelve tickers and gets eight must be able to see which four went
+  missing and why.
+- `intelligence.py` — `payload()` and `summary()`, the projections of one
+  snapshot. `PERIOD_LIMITS` and `SUMMARY_METRICS` live here.
+- `notifications.py` — `CATALOGUE` (13 kinds; severity + a `pushable` flag
+  deliberately orthogonal to it), `NotificationService.recent()` (newest first,
+  a service decision so two clients cannot disagree about it). Not a store.
+- `workspace.py` — pure `normalize` / `merge` plus `WorkspaceService`. Holds no
+  second catalogue: `tab` and indicator names are frontend vocabulary and are
+  checked for type and length only; `timeframe` IS validated against
+  `core.models.Timeframe` because it is handed back to `/api/candles`.
+- `sync.py` — `INVENTORY` (20 durable objects) + `CLIENT_TRAPPED` (2), each with
+  a `SyncDomain` and a `SyncPolicy`. **Syncs nothing**; it is the classification
+  that must exist before anything could. `data/credentials.json` is the only
+  `NEVER`.
+- `registry.py` — `ServiceRegistry`, the one place they are wired. Its
+  constructor signature is the honest statement of what a second client's
+  backend must supply.
+
 ## UI (`ui/`) & CLI (`__main__.py`)
 - `create_app(config, orchestrator, run_loop, runtime)` — FastAPI app.
   `/api/scan` is non-blocking by default (background cycle; progress in the
@@ -343,7 +529,8 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
   (add/remove/reorder/pin/favorites/presets), `/api/symbols/search`,
   `/api/mode` (trading_mode switch), `/api/operating_mode` (ai/human
   switch), `/api/coach` (reviews + profile), `/api/risk/reset_halt`,
-  `/api/backtest` (job slot, GET/POST),
+  `/api/backtest` (job slot, GET/POST), `/api/guide` + `/api/guide/state`
+  (V0.6.1 — guided-onboarding progress and tutorial suggestions),
   `/api/update/{status,check,download,progress,cancel,apply,skip,settings}`
   (the self-updater, V0.5.0 — see `update/` above), `/ws` (2s status push),
   `/webhook/tradingview`. All orchestrator access serialized through
@@ -353,9 +540,15 @@ instead of it. Deterministic, auditable, best-effort, advisory, paper-only. See
   Charts (interactive candles/volume, EMA/VWAP/BB overlays, RSI/MACD
   subpanes, drawings persisted in localStorage, fullscreen), Trade (manual
   paper trading), Coach, Watchlist, Journal, Backtest, Learning, Settings.
-  Keyboard 1–9 switches tabs; F toggles chart fullscreen. Header has both
-  mode controls: the AI/Human segmented toggle and the trading-mode
-  segmented toggle.
+  Keyboard 1–9 switches tabs; F toggles chart fullscreen; `?`/`Ctrl+K` opens
+  the searchable help centre. Header has both mode controls (the AI/Human
+  segmented toggle and the trading-mode segmented toggle) plus a
+  **Learn: \<screen>** button that relabels on every tab switch.
+  **Guided onboarding (V0.6.1)** lives here too: `GUIDE_TUTORIALS` (11
+  walkthroughs, 52 steps), `GUIDE_TERMS` (37 glossary entries),
+  `GUIDE_FEATURES` (the instrumentation vocabulary) and the `Guide` module —
+  spotlight, floating card, help centre, adaptive tooltips, tutorial catalogue
+  and the order-ticket guardrails (`tkSyncTicket`). See `docs/ONBOARDING.md`.
 - `ui/desktop.py` — uvicorn thread + pywebview native window; single-
   instance guard (localhost port mutex); `--windowed` PyInstaller build has
   no console (see `core/logging_setup.py`'s `sys.stderr is None` check).

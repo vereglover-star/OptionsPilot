@@ -30,6 +30,7 @@ from datetime import datetime
 import pandas as pd
 
 from optionspilot.core.logging_setup import get_logger
+from optionspilot.data.base import SESSION_TZ
 from optionspilot.data.adapter import (
     HistoryAdapter, ProviderRateLimited, ProviderSymbolError,
     ProviderUnavailable, timeout_or_unavailable,
@@ -64,8 +65,9 @@ class StooqAdapter(HistoryAdapter):
     reports_empty_reliably = True
     default_timeout = REQUEST_TIMEOUT
 
-    def __init__(self, config=None, *, timeout: float | None = None, opener=None):
-        super().__init__(config)
+    def __init__(self, config=None, *, timeout: float | None = None,
+                 opener=None, quota_store=None, environ: dict | None = None):
+        super().__init__(config, quota_store=quota_store, environ=environ)
         if timeout is not None:
             self.timeout = timeout
         self._opener = opener or urllib.request.urlopen
@@ -150,10 +152,18 @@ def _parse_csv(body: str, symbol: str) -> pd.DataFrame:
 
     frame = pd.DataFrame(rows, columns=["ts", "open", "high", "low",
                                         "close", "volume"])
-    # Stooq stamps daily bars with a bare date. Every other source in this app
-    # stamps the daily bar at 00:00 UTC, and the cache is keyed on that, so
-    # localizing to UTC (not to exchange time) keeps the two interchangeable.
-    frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+    # Stooq stamps daily bars with a bare date, and a date only becomes an
+    # instant relative to a timezone. The claim this comment used to make —
+    # "every other source stamps the daily bar at 00:00 UTC" — was simply
+    # false: Yahoo stamps the session open (13:30 UTC) and yfinance exchange
+    # midnight (04:00 UTC), which is how one trading day came to occupy several
+    # cache rows. Localize the DATE into the exchange's zone, matching
+    # `base.session_index`, so this adapter lands on the same instant as the
+    # others for the same session.
+    frame["ts"] = (pd.to_datetime(frame["ts"], errors="coerce")
+                   .dt.tz_localize(SESSION_TZ, ambiguous="NaT",
+                                   nonexistent="shift_forward")
+                   .dt.tz_convert("UTC"))
     frame = frame.dropna(subset=["ts"])
     return frame.set_index("ts")
 

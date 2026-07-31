@@ -16,7 +16,11 @@ error) fails the run. Covers, per the V3.1 chart-stabilization sprint:
   x-axis and crosshair (V3.3 Issue 2) · candle countdown timer (V3.3 Issue 3) ·
   drawing creation preview / rubber-band (V3.3 Issue 5) · drawing overlay
   tracking a vertical price-axis drag (V3.3 Issue 4) · a refresh preserving
-  paged-in history and holding the viewport (V3.3 Issue 7/8).
+  paged-in history and holding the viewport (V3.3 Issue 7/8) · PRICE-AXIS
+  OWNERSHIP (V0.5.5): the candles in the visible time window must intersect the
+  visible PRICE window. Every other check in this file asks whether the data
+  arrived; none of them asked whether the user can see it, which is exactly how
+  a pinned price scale produced volume-only charts on a healthy backend.
 
 Uses Playwright driving the system's installed Edge (channel="msedge" - no
 browser download, offline-capable), matching scripts/browser_check.py.
@@ -26,6 +30,8 @@ missing install a hard failure. Never touches the real data/ directory.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -53,6 +59,29 @@ def wait_for(url: str, timeout: float = 25.0) -> bool:
     return False
 
 
+
+def skip_onboarding(root) -> None:
+    """Mark the first-launch tour as already seen in a scratch profile.
+
+    V0.6.1 shows a welcome dialog on a profile that has never been onboarded,
+    and every check script here starts from exactly that state — so without
+    this they would each spend their run fighting a modal that is not their
+    subject. `scripts/guide_check.py` is where the welcome flow is tested.
+    """
+    data = root / "data"
+    data.mkdir(parents=True, exist_ok=True)
+    settings = data / "settings.json"
+    doc = {}
+    if settings.exists():
+        try:
+            doc = json.loads(settings.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+    doc["guide"] = {"onboarded": True, "completed": [], "dismissed": [],
+                    "features": {}, "reduce_motion": False, "tips": True,
+                    "version": 1}
+    settings.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
 def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads clearest
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--port", type=int, default=8800)
@@ -72,16 +101,31 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
         return 0
 
     scratch = Path(tempfile.mkdtemp(prefix="optionspilot-chart-"))
+    skip_onboarding(scratch)
     base = f"http://127.0.0.1:{args.port}"
+    # `cwd=scratch` alone STOPPED isolating anything in V0.4.4, when the storage
+    # root moved off the CWD to %LOCALAPPDATA%\OptionsPilot — so every run since
+    # has been reading and WRITING the user's real cache.db, journal and logs,
+    # against this file's own docstring. Two consequences, both real: the suite
+    # contended for SQLite locks with a running copy of the app (observed as a
+    # 30s timeout on the very first chart load, intermittently), and its outcome
+    # depended on what an earlier run happened to leave cached, which is the
+    # opposite of a regression suite. OPTIONSPILOT_HOME is the documented
+    # override and is what actually isolates it.
     server = subprocess.Popen(
         [sys.executable, "-m", "optionspilot", "--config", str(ROOT / "config.yaml"),
          "serve", "--port", str(args.port), "--no-loop"],
-        cwd=scratch, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        cwd=scratch, env={**os.environ, "OPTIONSPILOT_HOME": str(scratch)},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     failures: list[str] = []
 
     def check(cond: bool, label: str) -> None:
-        print(("  ok   " if cond else "  FAIL ") + label)
+        # A live UI string can contain Unicode while Windows stdout is still
+        # cp1252.  Preserve the failed assertion rather than crashing while
+        # formatting its diagnostic.
+        message = ("  ok   " if cond else "  FAIL ") + label
+        print(message.encode("ascii", "backslashreplace").decode("ascii"))
         if not cond:
             failures.append(label)
 
@@ -686,7 +730,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             del_ok = page.evaluate("() => DRAW.items.length") == n_before_del - 1
             check(drawn and selected and recolor_ok and width_ok and dup_ok and
                   lock_ok and hide_ok and del_ok,
-                  "toolbar actions via REAL MOUSE (draw→select→recolour/width/dup/lock/hide/delete)")
+                  "toolbar actions via REAL MOUSE (draw->select->recolour/width/dup/lock/hide/delete)")
             page.evaluate("() => { DRAW.items = []; DRAW.sel = null; chDrawSave(); chDrawRender(); }")
             page.click('#ch-tools button[data-tool="trend"]')  # disarm the tool if still armed
             page.evaluate("() => chSetTool(null)")
@@ -1083,7 +1127,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.unroute("**/api/candles*", hang_route)
             page.evaluate("() => { window.__chFetchTimeoutMs = 0; }")
             check(timed_out_to_error and recovered,
-                  "hung backend → bounded-timeout error overlay (not a permanent spinner), then auto-recovers")
+                  "hung backend -> bounded-timeout error overlay (not a permanent spinner), then auto-recovers")
             page.evaluate("() => loadChart('SPY')"); wait_loaded("SPY", "1d")
 
             # 33. Rapid symbol switching ABORTS superseded fetches instead of
@@ -1271,6 +1315,239 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             check(closed and chart_alive,
                   "Escape closes diagnostics and leaves the chart untouched")
 
+            # ── 43–48. THE PRICE AXIS (V0.5.5) ───────────────────────────────
+            # Every check above this point asks whether the DATA arrived. None
+            # of them asked whether the user can SEE it, and that was the last
+            # way the canvas could go silently blank: lightweight-charts turns
+            # `autoScale` off permanently the first time the price axis is
+            # dragged, and nothing ever turned it back on — so a chart of a
+            # $290 ETF drawn on a band left over from a $750 one rendered its
+            # candles entirely off-screen while the volume histogram (own price
+            # scale) kept painting. Backend healthy, CH.data perfect, console
+            # clean, `data-ch-state` = "complete", canvas empty.
+            #
+            # `chart_visible()` is therefore the invariant this whole file was
+            # missing: candles in the visible time window must intersect the
+            # visible PRICE window.
+            def chart_visible() -> dict:
+                return page.evaluate("""() => {
+                  const host = $('ch-main'), h = host.clientHeight;
+                  let top = null, bot = null;
+                  try { top = CH.candle.coordinateToPrice(0);
+                        bot = CH.candle.coordinateToPrice(h); } catch (e) {}
+                  const lr = CH.main.timeScale().getVisibleLogicalRange();
+                  const c = (CH.data && CH.data.candles) || [];
+                  const from = Math.max(0, Math.floor(lr ? lr.from : 0));
+                  const to = Math.min(c.length - 1, Math.ceil(lr ? lr.to : c.length - 1));
+                  let lo = Infinity, hi = -Infinity;
+                  for (let i = from; i <= to; i++) {
+                    if (!c[i]) continue;
+                    if (c[i].low < lo) lo = c[i].low;
+                    if (c[i].high > hi) hi = c[i].high;
+                  }
+                  if (lo === Infinity || top == null || bot == null)
+                    return {visible: false, reason: 'nothing measurable'};
+                  const band = Math.max(top, bot) - Math.min(top, bot);
+                  const inter = Math.min(hi, Math.max(top, bot))
+                              - Math.max(lo, Math.min(top, bot));
+                  return {visible: inter > 0,
+                          covered: band > 0 ? inter / Math.max(hi - lo, 1e-9) : 0,
+                          lo, hi, top, bot,
+                          auto: CH.main.priceScale('right').options().autoScale};
+                }""")
+
+            def drag_price_axis(dy: int = -140) -> None:
+                box = page.evaluate(
+                    "() => { const r = $('ch-main').getBoundingClientRect();"
+                    " return {x: r.x, y: r.y, w: r.width, h: r.height}; }")
+                x, y = box["x"] + box["w"] - 25, box["y"] + box["h"] / 2
+                page.mouse.move(x, y)
+                page.mouse.down()
+                page.mouse.move(x, y + dy, steps=12)
+                page.mouse.up()
+                page.wait_for_timeout(350)
+
+            page.evaluate("() => loadChart('SPY')")
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
+            base_vis = chart_visible()
+            check(base_vis["visible"],
+                  f"a freshly loaded chart's candles are inside the visible "
+                  f"price band (covered={base_vis.get('covered', 0):.0%})")
+
+            # 44. A manual price scale must not follow the user to a symbol at
+            #     a completely different price level. This is the reproduction
+            #     of the reported bug, in the form a user hits it.
+            drag_price_axis()
+            pinned = page.evaluate(
+                "() => CH.main.priceScale('right').options().autoScale")
+            page.evaluate("() => loadChart('IWM')"); wait_loaded("IWM", "1d")
+            page.wait_for_timeout(400)
+            vis = chart_visible()
+            check(not pinned and vis["visible"],
+                  f"a symbol switch recovers from a manually pinned price scale "
+                  f"(data {vis.get('lo')}..{vis.get('hi')} in band "
+                  f"{vis.get('bot')}..{vis.get('top')})")
+
+            # 45. Same for a timeframe switch.
+            drag_price_axis()
+            page.click('#ch-tfs button[data-tf="1h"]'); wait_loaded("IWM", "1h")
+            page.wait_for_timeout(400)
+            vis = chart_visible()
+            check(vis["visible"], "a timeframe switch recovers the price scale")
+
+            # 46. Reset view is the "get me back" control and must reset BOTH
+            #     axes — it only ever reset the time axis, so a user who had
+            #     pinned the price scale had no way back short of a restart.
+            drag_price_axis()
+            page.click("#ch-reset")
+            page.wait_for_timeout(400)
+            vis = chart_visible()
+            check(vis["visible"] and vis["auto"],
+                  "Reset view restores price autoscale, not just the time axis")
+
+            # 47. …and so does Latest.
+            drag_price_axis()
+            page.click("#ch-latest")
+            page.wait_for_timeout(400)
+            vis = chart_visible()
+            check(vis["visible"] and vis["auto"], "Latest restores price autoscale")
+
+            # 48. A deliberate price-axis drag on the chart the user is looking
+            #     at must SURVIVE a same-key refresh — the recovery above must
+            #     not turn into "the app fights me". Dragging scales around the
+            #     centre, so the data stays visible; only the band widens.
+            drag_price_axis(dy=-90)
+            before = page.evaluate(
+                "() => CH.main.priceScale('right').options().autoScale")
+            page.evaluate("() => loadChart()")
+            page.wait_for_timeout(1200)
+            after = page.evaluate(
+                "() => CH.main.priceScale('right').options().autoScale")
+            check(before is False and after is False,
+                  "a same-key refresh preserves a deliberate manual price scale")
+
+            # ── 49–54. VIEWPORT INVARIANTS (V0.5.6) ──────────────────────────
+            # "Owned by one function" (V3.2.2) said where a viewport move comes
+            # from, not what a LEGAL viewport is — so every programmatic move
+            # was free to leave two candles on screen, and several did:
+            # chScrollToLatest carried the previous view's width onto a new
+            # symbol, chApplyFocal ratchets narrower every step up the timeframe
+            # ladder (a 2-hour window is 24 bars at 5m and 2 at 1h), and a
+            # resize re-derives bar spacing with no floor at all (measured: 4
+            # bars of 281 visible, width 2.3). lightweight-charts accepts all of
+            # it. The invariants are now enforced in chMoveViewport.
+            def visible_bars() -> dict:
+                return page.evaluate("""() => {
+                  const ts = CH.main.timeScale();
+                  const lr = ts.getVisibleLogicalRange();
+                  const c = (CH.data && CH.data.candles) || [];
+                  if (!lr || !c.length) return {n: 0, bars: c.length, w: null};
+                  const from = Math.max(0, Math.floor(lr.from));
+                  const to = Math.min(c.length - 1, Math.ceil(lr.to));
+                  return {n: Math.max(0, to - from + 1), bars: c.length,
+                          w: lr.to - lr.from, from: lr.from, to: lr.to};
+                }""")
+
+            def deep_zoom(clicks: int = 26) -> None:
+                box = page.evaluate(
+                    "() => { const r = $('ch-main').getBoundingClientRect();"
+                    " return {x: r.x, y: r.y, w: r.width, h: r.height}; }")
+                page.mouse.move(box["x"] + box["w"] / 2, box["y"] + box["h"] / 2)
+                for _ in range(clicks):
+                    page.mouse.wheel(0, -120)
+                    page.wait_for_timeout(30)
+                page.wait_for_timeout(400)
+
+            MIN_BARS = 8      # mirrors CH_MIN_VISIBLE_BARS in index.html
+
+            page.evaluate("() => chResetView()")
+            page.evaluate("() => loadChart('SPY')")
+            page.click('#ch-tfs button[data-tf="1h"]'); wait_loaded("SPY", "1h")
+
+            # 49. A resize must not shrink the view below the floor.
+            deep_zoom()
+            page.set_viewport_size({"width": 760, "height": 520})
+            page.wait_for_timeout(700)
+            v = visible_bars()
+            check(v["n"] >= min(v["bars"], MIN_BARS),
+                  f"a resize while zoomed in keeps >= {MIN_BARS} bars on screen "
+                  f"({v['n']} of {v['bars']}, width {v['w'] and round(v['w'], 1)})")
+            page.set_viewport_size({"width": 1500, "height": 950})
+            page.wait_for_timeout(600)
+
+            # 50. A timeframe switch out of a deep zoom stays usable.
+            deep_zoom()
+            page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
+            page.wait_for_timeout(400)
+            v = visible_bars()
+            check(v["n"] >= min(v["bars"], MIN_BARS),
+                  f"a timeframe switch out of a deep zoom stays usable "
+                  f"({v['n']} bars)")
+
+            # 51. A SYMBOL switch starts from a sane viewport rather than
+            #     inheriting the previous instrument's zoom.
+            deep_zoom()
+            page.evaluate("() => loadChart('IWM')"); wait_loaded("IWM", "1d")
+            page.wait_for_timeout(400)
+            v = visible_bars()
+            check(v["n"] >= min(v["bars"], MIN_BARS),
+                  f"a symbol switch out of a deep zoom starts sane ({v['n']} bars)")
+
+            # 52. Auto Follow means "keep the newest bar in view", NOT "carry my
+            #     zoom onto every other instrument" — the reported "switching
+            #     symbols keeps a strange zoom level".
+            page.evaluate("() => chSetAutoFollow(true)")
+            deep_zoom()
+            narrow = visible_bars()["n"]
+            page.evaluate("() => loadChart('QQQ')"); wait_loaded("QQQ", "1d")
+            page.wait_for_timeout(500)
+            wide = visible_bars()
+            check(wide["n"] > narrow and wide["n"] >= min(wide["bars"], MIN_BARS),
+                  f"Auto Follow does not carry a deep zoom across a symbol switch "
+                  f"({narrow} -> {wide['n']} bars)")
+            page.evaluate("() => chSetAutoFollow(false)")
+
+            # 53. …but it DOES preserve the user's zoom on the same symbol,
+            #     which is the entire point of the feature.
+            page.evaluate("() => chSetAutoFollow(true)")
+            deep_zoom(18)
+            before_n = visible_bars()["n"]
+            page.evaluate("() => loadChart()")
+            page.wait_for_timeout(1400)
+            after_n = visible_bars()["n"]
+            check(abs(after_n - before_n) <= 3,
+                  f"Auto Follow preserves the zoom across a same-symbol refresh "
+                  f"({before_n} -> {after_n} bars)")
+            page.evaluate("() => chSetAutoFollow(false)")
+
+            # 54. A daily chart must never sit behind a validation screen. Two
+            #     providers stamped the same session at different instants
+            #     (Yahoo 13:30 UTC, yfinance 04:00 UTC), so every trading day
+            #     held two cache rows 9.5h apart, the frame's spacing read 0.40
+            #     intervals, and validate_history correctly refused it — with no
+            #     way back, because the tier ladder had already committed.
+            page.evaluate("() => chResetView()")
+            daily_states = {}
+            for sym in ("SPY", "QQQ", "IWM", "JPM"):
+                page.evaluate("(s) => { CH.sym = s; CH.tf = '1d'; loadChart(); }", sym)
+                try:
+                    page.wait_for_function(
+                        "() => !['loading','receiving','rendering'].includes("
+                        "$('ch-main').dataset.chState)", timeout=25000)
+                except Exception:
+                    pass
+                page.wait_for_timeout(300)
+                daily_states[sym] = page.evaluate("""() => ({
+                    state: $('ch-main').dataset.chState,
+                    bars: (CH.data && CH.data.candles || []).length,
+                    msg: ($('ch-overlay-msg') || {}).textContent || ''})""")
+            stuck = {s: v for s, v in daily_states.items()
+                     if v["bars"] < 5 or "validation" in v["msg"].lower()}
+            check(not stuck,
+                  f"every symbol renders on 1D with no validation screen "
+                  f"({ {s: v['bars'] for s, v in daily_states.items()} })")
+
+            page.evaluate("() => chResetView()")
             page.evaluate("() => loadChart('SPY')")
             page.click('#ch-tfs button[data-tf="1d"]'); wait_loaded("SPY", "1d")
 

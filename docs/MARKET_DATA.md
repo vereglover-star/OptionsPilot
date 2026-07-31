@@ -1,4 +1,4 @@
-# MARKET_DATA.md — the market-data subsystem (V0.5.2 · V0.5.3)
+# MARKET_DATA.md — the market-data subsystem (V0.5.2 · V0.5.3 · V0.5.4)
 
 The design, the measurements behind it, and the root causes it eliminates.
 Read this before changing anything under `optionspilot/data/`.
@@ -13,6 +13,11 @@ export (§15), configuration without code changes (§16), replay and benchmark
 tools (§17), cache metrics (§18), structured logs (§19), and capability
 discovery (§20). No behavioural change to what is traded, and the shipped
 chain answers exactly as it did before (§21).
+
+**V0.5.4** used that extensibility: three keyed providers — Finnhub, Twelve
+Data, Alpha Vantage (§23) — plus the credential handling (§24) and request
+budgeting (§25) they need. **With no API keys configured the app behaves
+exactly as it did in V0.5.3**, which is the shipped default.
 
 ---
 
@@ -804,3 +809,761 @@ Stated explicitly because the whole milestone is infrastructure:
   same order from cold, same capability table, same validation verdicts.
 - **No new runtime dependency.** `psutil` is used by the benchmark *if present*
   and reported as "n/a" if not.
+
+---
+---
+
+# V0.5.4 — provider expansion
+
+V0.5.3 claimed adding a provider was one file and one registry entry. This
+milestone spent that claim three times and reports what it actually cost.
+
+---
+
+## 23. The six-provider chain
+
+```
+  keyless (free, unmetered, no onboarding)     keyed (API key required)
+  ┌───────────┬────────────┬─────────┐    ┌──────────┬────────────┬──────────────┐
+  │ yahoo  10 │ yfinance 20│ stooq 30│ →  │finnhub 40│twelvedata50│alphavantage60│
+  └───────────┴────────────┴─────────┘    └──────────┴────────────┴──────────────┘
+```
+
+**Why keyed providers sit behind the keyless ones.** A keyless request costs
+nothing; a keyed one spends a metered allowance that cannot be bought back
+until tomorrow. Spending scarce budget while a free source is healthy would be
+strictly worse. Their value is what they do when the free sources fail: they
+are *genuinely independent of Yahoo*, which is what makes a Yahoo-wide outage
+survivable **at intraday resolution** for the first time (Stooq is daily-only).
+
+**Why they are ordered among themselves by budget.** Finnhub (60/min, no
+published daily cap) can absorb a session; Twelve Data (800/day, 8/min) can
+absorb a day; Alpha Vantage (25/day) can absorb about one chart. Ordering by
+how much a provider can afford to give is the same reasoning as ordering by
+latency — cheapest capable source first.
+
+| | Finnhub | Twelve Data | Alpha Vantage |
+|---|---|---|---|
+| Free limit | 60/min | 800/day · 8/min | **25/day** · 5/min |
+| Intraday | 1/5/15/30/60m | 1/5/15/30/45m, 1/2/4h | 1/5/15/30/60m |
+| Feed | real-time | delayed | delayed |
+| Timestamps | unix UTC | naive exchange-local | naive US/Eastern |
+| Errors in HTTP 200 | sometimes | **always** | **always** |
+| Date range honoured | yes | yes | **no** (`full` returns everything) |
+
+### What adding a provider actually cost
+
+Each adapter is ~150 lines and implements exactly four things: `_build_url`,
+`_translate`, `_parse`, `_probe`. Everything else — health monitoring, circuit
+breaker, ranking, configuration, replay, benchmark, diagnostics row, capability
+discovery, cache, validation — was inherited with no per-provider code. The
+registry entry is one class in a list.
+
+The honest exception is `data/http_adapter.py`, a **new shared base** for keyed
+JSON providers (transport, HTTP-status mapping, JSON decoding, timezone
+normalisation). Writing the same 80 lines of `urllib` plumbing three times
+would have been the duplication the brief forbids. Yahoo and Stooq were
+deliberately **not** retrofitted onto it: their transports do multi-host
+failover and HTML-challenge detection respectively, which are the reason those
+adapters are reliable rather than boilerplate.
+
+### The timezone contract — the highest-consequence detail
+
+Two of the three send **naive local time in the exchange's timezone**. Reading
+those as UTC shifts every intraday bar by 4–5 hours and — because the offset
+changes across a DST boundary — by a *different* amount either side of March
+and November. The result is not a visibly broken chart. It is a subtly wrong
+one that also **poisons the shared cache**, because bars are keyed
+`(symbol, timeframe, ts)`.
+
+`http_adapter.localize` is the one place this is handled:
+
+- **intraday** → localise to the timezone the payload names, convert to UTC;
+- **daily and coarser** → stamp at **00:00 UTC**, matching Yahoo and Stooq. A
+  provider stamping daily bars at 05:00 UTC would write a second row for every
+  day already cached, and charts would render doubled candles.
+
+Unknown timezone names fall back to UTC with a warning; a nonexistent DST hour
+shifts forward rather than discarding the response.
+
+---
+
+## 24. Credentials
+
+**A missing key is a quiet, explained absence — never a crash.** The app ships
+with zero keys and must start, chart and trade exactly as before. A keyed
+provider with no key is still *constructed* and still appears in diagnostics
+reporting `missing_api_key` and a signup link; it is simply never selected.
+That is deliberately different from `enabled: false`, which removes the
+provider entirely — "Finnhub needs a key" is information; "Finnhub is absent"
+is not.
+
+Resolution order, environment first:
+
+```
+market_data.providers.<name>.api_key_env   → an explicitly named variable
+<PROVIDER>_API_KEY                         → the conventional one (no config needed)
+market_data.providers.<name>.api_key       → the config file (supported, discouraged)
+```
+
+Environment first because it is the safer place for a secret and the one an
+operator reaches for to override a shipped config. A whitespace-only value
+counts as **absent**: a stray `FINNHUB_API_KEY=` in a shell profile is a
+missing key, and treating it as present produces a confusing auth failure
+instead of the accurate "no API key configured".
+
+### Keys are redacted by default
+
+`ProviderConfig.as_dict()` redacts `api_key` **unless asked not to**. That
+payload reaches the diagnostics endpoint, the JSON export and the text report —
+all of which users are explicitly invited to attach to public bug reports.
+Defaulting to redaction means a leak requires someone to opt in, rather than
+requiring every future caller to remember. Three tests assert no key appears in
+the health report, the config dump, or a rendered report.
+
+### The status vocabulary
+
+One set of codes (`health.STATUS_*`), shared by the monitor, the API, the text
+export and the dashboard, so "why can't I use Finnhub?" has one answer
+everywhere:
+
+| Status | Meaning | Remedy |
+|---|---|---|
+| `ok` | in rotation | — |
+| `disabled` | switched off in config | enable it |
+| `missing_api_key` | needs a key, none configured | the signup link shown |
+| `auth_failure` | key present and rejected | replace the key |
+| `quota_exceeded` | plan allowance spent | wait, or upgrade |
+| `rate_limited` | told to back off | seconds |
+| `temporarily_unavailable` | breaker open after failures | self-heals |
+
+They are checked in order of permanence, so the reported reason is the one the
+user would actually act on.
+
+---
+
+## 25. Request budgeting
+
+`data/ratelimit.py`. The keyless chain never needed this — soft limits and a
+"back off when told to" window were enough. **Alpha Vantage's 25 requests per
+day are not survivable that way**: a session switching symbols spends the whole
+allowance in under a minute, and reacting to the error afterwards is too late.
+
+- **Two windows.** A real *sliding* 60-second window (a fixed bucket lets 2×
+  through across a boundary — the exact burst that gets a key throttled) plus a
+  daily counter. `state()` reports which one is binding.
+- **Checked before the network**, in the registry (so an exhausted provider is
+  not a candidate) and again in the adapter (closing the race, and covering
+  replay/benchmark which reach adapters directly).
+- **Counted before the call**, not after: an upstream request consumes quota
+  whether or not it succeeds.
+- **Persisted** to `<data>/quota.json`. A desktop app restarts; an in-memory
+  counter would appear to grant a fresh 25 requests every launch.
+- **A live quota error is authoritative** over the local count, which can drift
+  low when the same key is used by another install.
+
+### Budgeting distributes load without a scheduler
+
+`QuotaTracker.pressure()` (share of the daily budget spent) feeds the existing
+health ranking at `QUOTA_PRESSURE_WEIGHT = 25`. A provider approaching its
+ceiling drifts down the ranking and traffic moves to a fresher key **before**
+the budget is gone rather than after. That is a four-line change to a formula
+rather than a new scheduling subsystem, and the stress harness shows it
+working: a provider allowed 5 requests/day served only 3 of 30 requests before
+pressure moved the rest elsewhere.
+
+**Known limitation, accepted:** providers reset quotas in their own timezone
+(Alpha Vantage at US/Eastern midnight); this tracks UTC days. The local budget
+is only ever *more* conservative than the provider's, and a real quota error
+still surfaces, so the mismatch costs a few unspent requests rather than
+correctness.
+
+---
+
+## 26. Defects V0.5.4 found, and how
+
+Six issues, all pre-existing or introduced-and-caught during the milestone.
+Two came from the existing test suite, two from the self-audit, two from tests
+written for the new code.
+
+### Found by the existing suite
+
+1. **`deepest_earliest` counted providers that could never answer.** It
+   returned the deepest floor across every provider *supporting* an interval,
+   regardless of availability. A keyless Finnhub declares 180 days of 5-minute
+   history, so the chart would have been told history reached back 180 days
+   when only Yahoo's 59 were reachable — and would then have scrolled into a
+   window nothing could serve and retried it forever, reviving the exact bug
+   class V0.5.2 was built to eliminate. Now *permanently* unusable providers
+   (no key, disabled) contribute no floor, while *temporarily* unavailable ones
+   (breaker open, rate limited) still do — the reported start of history must
+   not lurch about as breakers open and close.
+
+2. **The stale tier could report `stale` with zero bars.** `_settle` trimmed
+   every frame to the requested window, including the last-resort stale one
+   whose bars are *by definition* older than the request. When the cached bars
+   fell entirely outside the window the frame emptied, and the UI showed a
+   banner promising the last saved bars with nothing behind it. The stale tier
+   now skips the trim; the viewport-stability reason for trimming does not
+   apply there, because a stale answer is never memoized.
+
+### Found by the self-audit
+
+3. **Replay and discovery fired real requests at unconfigured providers.**
+   Both checked only the circuit breaker, so a replay polled all three keyed
+   providers with an empty token — collecting 401s, marking each
+   **auth-failed (sticky)**, and poisoning the health of providers the user had
+   never configured. Discovery was worse: ~13 doomed requests *per interval*,
+   then "served nothing at any depth" warnings that read as an outage rather
+   than a missing credential. Fixed by giving the adapter one gate,
+   `can_spend_request()`, that **every** request-spending path now consults —
+   the service, `fetch_history`, replay and discovery. Centralising the
+   question is what stops a fifth path repeating it.
+
+4. **The capability tables were mutable through any adapter.**
+   `ProviderCapabilities` is a frozen dataclass, but freezing does not make a
+   contained `dict` immutable — and these tables are module-level values
+   **shared by reference** (`YAHOO_CAPABILITIES` backs both `YahooChartAdapter`
+   and `YFinanceAdapter`). A stray write to one adapter's
+   `capabilities.intervals` would have silently corrupted the other's depth
+   table, surfacing as unexplained range errors somewhere else entirely.
+   Nothing mutated them; `__post_init__` now wraps the mapping in a
+   `MappingProxyType` so a future mistake is an immediate `TypeError`.
+
+### Found by the new code's own tests
+
+5. **`spec.resample` is a pandas offset alias, not a timeframe.** All three
+   adapters initially passed it to `Timeframe.from_string`, which raises on
+   `"10min"` — breaking every resampled timeframe. The raw frame is always at
+   the *native* resolution (the base class aggregates afterwards), so the
+   native interval is both the correct and the simpler answer.
+
+6. **Alpha Vantage's daily-cap message contains the words "API key".** The
+   real text is *"We have detected your API key ... our standard API rate limit
+   is 25 requests per day"*. Testing for the credential first therefore
+   reported a spent quota as a rejected key — sending the user off to
+   regenerate a key that was never the problem, and marking the provider
+   auth-failed (sticky) instead of quota-exceeded (clears tomorrow). Quota
+   markers are now checked first, and the ordering is commented so it is not
+   "tidied" back.
+
+### Audit probes that found nothing
+
+Run against the six-provider chain: deadlock (7 threads contending on the
+monitor/quota lock pair for 2s — 0 stalls, 0 exceptions), ranking oscillation
+(0 order changes over 200 identical cycles), provider starvation, infinite
+retry (1 upstream call across 25 chart loads after an auth failure),
+request de-duplication (48 concurrent callers → 1 upstream call), unbounded
+memory in the health windows, cross-provider cache collision (the same 10 bars
+written by two providers → 10 rows, not 20), and env-var config override.
+
+---
+
+## 27. Adding a fourth keyed provider
+
+Inherit `KeyedHTTPAdapter` and implement four methods:
+
+```python
+class TiingoAdapter(KeyedHTTPAdapter):
+    provider_name = "tiingo"
+    provider_priority = 45
+    capabilities = TIINGO_CAPABILITIES
+    rate_limit = RateLimitPolicy(per_minute=50, per_day=1000)
+    api_key_env_vars = ("TIINGO_API_KEY",)
+    signup_url = "https://www.tiingo.com/"
+
+    def _build_url(self, symbol, spec, start, end): ...
+    def _translate(self, payload): ...      # their wording -> typed failures
+    def _parse(self, payload, spec): ...    # their shape -> canonical frame
+    def _probe(self): ...
+```
+
+Then add it to `default_registry`. Credentials, budgeting, health, ranking,
+breaker, diagnostics, replay, benchmark and configuration all follow with no
+further work.
+
+**The three things worth getting right**, because they are where the real risk
+is: map their error dialect completely (`_translate`), pass the correct
+timezone to `to_frame` (see §23), and declare depth conservatively — an
+over-promising capability table produces guaranteed-error requests on every
+scroll.
+
+---
+
+## 28. V0.5.5 — what the certification pass changed here
+
+Two data-layer changes came out of `docs/CHART_CERTIFICATION.md`. Both are
+policy corrections, not new machinery.
+
+**Interval conformance is judged on the median, not the minimum**
+(`quality._interval_stats`). §11 described the test as "the TIGHTEST spacing,
+not how many bars sit on a grid" — a deliberate choice that fixed the 4-hour
+chart, and that turned out to be one step too strict. **Yahoo closes every US
+equity session with a 30-minute stub bar** (15:30 → 16:00 ET, the closing
+auction), so a perfectly good 1h frame contains exactly one 0.5-interval gap.
+Measured in a real `cache.db`: IWM 60m, 2,180 bars, 1,862 gaps of exactly 1.0
+and **one** of 0.5 — and that single bar set `usable = False`, scored the frame
+0 and charged the provider a validation failure, on every 1h request including
+the last completed session. It failed identically on `yfinance`, which serves
+the same upstream.
+
+Conformance is now the **median of the within-session gaps** (those under two
+intervals; anything wider is an overnight or weekend break and says nothing
+about the interval). When every gap is a session break — a coarse interval with
+one bar per session — there is no within-session evidence and the tightest gap
+is used as before, which is what still rejects daily bars served for a 1m
+request. The rule catches everything the strict test caught, because a
+genuinely wrong interval is wrong in the *bulk* of its spacings:
+
+| Served for a 1h request | Median within-session gap | Verdict |
+|---|---|---|
+| 1h with the closing stub | 1.0 | accepted (was rejected) |
+| 30m | 0.5 | rejected |
+| 90m — a real Yahoo substitution | 1.5 | rejected |
+| 1d — no within-session gaps | 24.0 (fallback) | rejected |
+
+`min_gap_intervals` is still reported on every `HistoryReport`. It is a useful
+statistic about the frame; it is no longer a veto.
+
+**`validate_candles` drops `NaT` index entries** (`data/base.py`). Two real
+sources put them there: `pd.to_datetime(..., errors="coerce")` in the HTTP
+adapters turns any timestamp a provider malforms into `NaT`, and
+`http_adapter.localize` maps a DST fall-back ambiguity to `NaT` **by design**
+(§23 — better than throwing away a whole response). Nothing dropped them, so
+one such bar survived every later stage and detonated at the very end of
+`/api/candles`, where `int(ts.timestamp())` raises and 500s the entire
+response. One malformed bar, no chart. The single shape-validation choke point
+is the right place for it.
+
+**And one finding that is not a code change:** **Stooq no longer works at all.**
+Every request now returns a JavaScript proof-of-work challenge page (verified
+live against both `stooq.com` and `stooq.pl`), which a `urllib` client cannot
+satisfy and which this project will not circumvent. The adapter's HTML-challenge
+detection (§4) does exactly the right thing — it refuses rather than parsing
+the page as prices — but the practical consequence changes how the whole chain
+should be reasoned about: **with no API keys configured there is exactly one
+real source.** `yahoo` and `yfinance` are two independent code paths over one
+upstream, so they share a failure domain, and Yahoo rate-limits by IP. The
+intraday independence §23 claims is real *only* once a key is configured.
+
+---
+
+# V0.5.7 — the Market Data Control Centre
+
+V0.5.2 built the subsystem. V0.5.3 made it *operable*. V0.5.4 gave it real
+provider diversity. **V0.5.7 makes it usable by the person who owns it.**
+
+Nothing about how data is fetched changed. What changed is that every decision
+the subsystem makes is now visible, every setting it obeys is now editable
+without a text editor and a restart, and every failure it can suffer is now
+explained in words a user can act on.
+
+## 29. The problem this milestone solves
+
+Before it, the honest answer to each of these was "read `logs/data.log`" or
+"edit `config.yaml` and restart":
+
+| The user's question | The old answer |
+|---|---|
+| Where is my data coming from? | Help ▸ Diagnostics, if you find it |
+| Why isn't Finnhub being used? | It needs a key; nothing said so on screen |
+| How do I give it one? | Set an environment variable and restart |
+| Is my key actually working? | Load a chart and hope |
+| How many requests do I have left? | A number buried in a JSON export |
+| What happens when Yahoo dies? | Read `docs/MARKET_DATA.md` §5 |
+| My cache looks wrong — now what? | Delete `cache.db` by hand |
+| Why is this provider first? | Read `data/health.py`'s rank formula |
+
+Every one of those is now answered on screen, by the running system rather than
+by documentation that can disagree with it.
+
+## 30. `data/control.py` — administration, not selection
+
+The new module is composed **over** the registry and the service, never inside
+them. The direction of dependency is strictly one way: control knows about the
+registry; the registry has never heard of control. That separation is why the
+hot path did not slow down and why `MarketDataService` did not grow a settings
+API.
+
+    MarketDataControl
+      dashboard()            one payload: health + credentials + quota +
+                             capability + order + failover + advice
+      set_api_key/remove     credentials, applied live
+      set_enabled            bench a provider without a restart
+      move/set_order/reset   the configured order
+      set_ordering_mode      static | hybrid | dynamic
+      test_connection()      a real request, end to end, with a verdict
+      start_maintenance()    eight actions on a background thread, with progress
+      cancel_maintenance()   cooperative stop
+      recommendations()      specific advice about THIS install
+      qa_*                   the developer panel, gated
+
+Three things it deliberately does not do:
+
+1. **It never computes a ranking.** `dashboard()` reports `registry.ranking()`
+   verbatim, so the settings page and the chart cannot disagree about which
+   provider goes first.
+2. **It never returns a plaintext key.** The only `CredentialStore.resolve()`
+   call hands the key straight to the adapter that must transmit it.
+3. **Nothing a timer can reach spends a request.** The dashboard poll reads
+   counters that already exist; every action that costs an upstream request is
+   a POST behind an explicit click.
+
+## 31. Credentials — `data/credentials.py`
+
+### Resolution order, with one implementation
+
+    environment variable  ->  credentials.json  ->  config.yaml  ->  missing
+
+Environment wins because that is what an operator reaches for and what a
+machine-specific deployment sets. A stored key beats `config.yaml` because
+pasting a key into the app is a *later, more deliberate* act than a file that
+may have been checked in months ago.
+
+The mechanism is deliberately thin: `CredentialStore.overlay()` writes the
+stored key into `ProviderConfig.api_key`, and `resolve_api_key` already
+consults the environment *before* that field. So the documented order falls out
+of code that already existed, with no second implementation to drift.
+
+The consequence users must be told about: **while an environment variable is
+set, a key pasted into the UI has no effect.** Hiding that would produce the
+worst possible bug report ("I typed my key in and it still says no key"), so
+`key_source` is reported per provider and the save response says so in words.
+
+### Why not `settings.json`
+
+`RuntimeSettings` already owns live-editable preferences and would have been
+one fewer file. It is not used, for one reason: everything in `settings.json`
+is treated as **ordinary user data** — `core/migration.create_backup()` copies
+it, it is small enough that a user will open it in Notepad, and nothing about
+it says "this is dangerous to share". A secret needs the opposite defaults.
+`credentials.json` is written owner-only, is excluded from every export path by
+construction (no export module imports `credentials.py`), and its name tells a
+user what it is.
+
+### The masking rule
+
+> **A plaintext key leaves `credentials.py` only through `resolve()`.**
+> Every other accessor returns the mask.
+
+There is no `redact=False` on `CredentialStore.describe()`, unlike
+`ProviderConfig.as_dict()`. That one needs a round-trip for its own tests; this
+one has no legitimate caller wanting plaintext, and the parameter would only
+ever be an invitation to leak. `tests/test_credentials.py::TestNoLeak`
+enumerates every payload this repo invites users to attach to a bug report and
+asserts the key is absent from all of them. **A new export belongs in that test
+before it ships.**
+
+## 32. Three ordering modes
+
+`dynamic_ranking: true|false` answered "may health reorder the chain?" and
+nothing else — which turned out to be two questions wearing one coat. A user
+who sets their own order wants it respected, but not so rigidly that a dead
+provider stays at the head of the chain.
+
+| Mode | Meaning | Mechanism |
+|---|---|---|
+| `static` | Ask in exactly the configured order. Unavailable providers are still skipped — that is not an ordering decision. | `rank = priority` |
+| `hybrid` | Your order stands; a provider loses its place only when it is genuinely **failing**, not when it is merely slower. | full rank **minus the latency term** |
+| `dynamic` | Fastest healthy provider per request. The shipped default, and what V0.5.3 introduced. | full rank |
+
+Hybrid drops exactly one term, and that is the whole design: **latency is the
+only term that reorders two healthy providers.** Failure rate, consecutive
+failures, breaker history, quality and budget pressure all still apply.
+
+`dynamic_ranking: false` is honoured as `static` regardless of `ordering_mode`,
+because it is the older and more explicit statement — someone who turned
+ranking off in `config.yaml` must not be quietly overruled by a newer field
+that defaults to `dynamic`.
+
+### Priorities are rewritten 10, 20, 30 — not 1, 2, 3
+
+`registry.reorder()` spaces them ten apart because the rank formula is
+calibrated so **10 rank points equals one second of latency**
+(`health.LATENCY_MS_PER_RANK_POINT`). Consecutive priorities would mean a
+provider 100 ms slower than its neighbour outranked it — dynamic ordering would
+silently become almost-static the first time a user pressed Move Up.
+
+## 33. A disabled provider is now CONSTRUCTED
+
+`enabled: false` used to skip construction entirely. It no longer does, and the
+change is load-bearing: a provider that is not constructed cannot be listed in
+Settings, cannot explain its own absence, and cannot be switched back on
+without editing a file and restarting. The control centre would have had a
+permanent blind spot exactly where a user needs to act.
+
+A disabled provider is now treated like one with a missing API key — present,
+self-explaining, and never selected. `monitor.available()` is False, so
+`registry.candidates` skips it and, critically, `deepest_earliest` counts **no
+history floor** for it. That last point is not incidental: a benched provider
+contributing its declared depth would tell the chart that history reaches
+further back than anything reachable, which is precisely the retry-forever bug
+class V0.5.2 was built to eliminate.
+
+## 34. The displayed state is DERIVED, never stored
+
+`monitor.status()` answers "may this provider be used, and if not, why". It is
+a *gate*, and the registry reads it as one. It is not quite what a person needs
+to see, because it has no way to say "in rotation, but struggling": a provider
+failing one request in three is `ok` to the gate and alarming to a human.
+
+`health_state()` is the one-word answer for a human — `healthy`, `degraded`,
+`offline`, `disabled`, `missing_key`, `rate_limited`, `circuit_open`,
+`unavailable`, `unknown` (plus `testing` / `connecting`, which only the UI ever
+emits). It is derived from the same counters on every read and **stored
+nowhere**: a second stored copy of one fact is exactly how the adapter's
+counters and the registry's breaker came to disagree before V0.5.3.
+
+Every state is paired with a sentence (`HEALTH_TEXT`), and every place a state
+is displayed must display the sentence. A coloured badge reading "degraded" and
+nothing else tells a user they have a problem without telling them what it is,
+which is the failure this entire panel exists to prevent.
+
+## 35. Test Connection is end to end, on purpose
+
+`test_connection()` runs a real SPY daily request over the last 21 days through
+the **same** `fetch_history` a chart uses: transport, authentication, parsing,
+canonical normalization, and semantic validation. A test that stopped at "the
+socket opened" would pass for a provider whose response format had changed —
+which is the failure most worth catching, because it is the one the chart
+cannot route around. `tests/test_marketdata_control.py` drives exactly that
+case: a provider answering a daily probe with *weekly* bars fails the test.
+
+Daily, because it is the one interval every provider serves (Stooq has no
+intraday at all). 21 days, because a probe that could legitimately return zero
+bars cannot tell "working" from "broken".
+
+The result is recorded on the health monitor like any other request. That is
+intentional: a successful test genuinely *is* evidence the provider works, and
+pretending otherwise would show a green test beside a red provider. A provider
+that is out of budget is answered **without** a request — spending an allowance
+to learn something already known is exactly the mistake `can_spend_request()`
+exists to prevent.
+
+## 36. Maintenance actions, and why they are a job
+
+Eight actions: clear cache, rebuild cache, verify cache integrity, run
+validation, run provider replay, run provider benchmark, run diagnostics,
+re-measure capabilities.
+
+They run on a background thread with a single slot and polled progress,
+mirroring `UIServer.backtest_job`. Background because a capability
+re-measurement takes **minutes** — a synchronous endpoint would hold a request
+open past any client timeout, leaving the user unable to tell a slow job from a
+dead one.
+
+Two properties the V0.5.7 self-audit added:
+
+- **The busy-slot refusal names what is in the way.** "'Re-measure
+  capabilities' is still running" is actionable; "another action is running" is
+  not.
+- **A long action can be stopped.** Cancellation is *cooperative* and checked
+  between units of work — `discovery.discover()` is not interruptible
+  mid-provider, and killing the thread would leave that provider's counters
+  half-written. A stopped job keeps what it measured and reports state
+  `cancelled`, not `error`: nothing went wrong.
+
+`CandleCache.verify()` is deliberately more than SQLite's `integrity_check`. A
+cache can be structurally perfect and still unusable — that is exactly what the
+V0.5.6 daily-bar defect was (two valid rows per trading day, nine and a half
+hours apart, which `integrity_check` is delighted with and `validate_history`
+correctly refuses). It also counts rows that would fail a read, because "your
+cache is fine" and "your cache has 14 bad bars in 400,000" are different
+answers.
+
+## 37. Recommendations: advice, not observations
+
+`recommendations()` returns severity-ordered entries that each name a **next
+action**. The conditions, and why each is worth surfacing:
+
+- **No usable provider** (critical) — charts cannot load; gives ordered
+  recovery steps rather than a status.
+- **One independent source** (warning) — and the count is honest: `_family()`
+  collapses `yahoo` and `yfinance` into one, because they are two code paths
+  over one upstream and one IP rate limiter. Anything treating them as two
+  overstates a keyless install's redundancy by exactly one, which would be the
+  single most misleading number on the page.
+- **Quota nearly spent / spent** (info / warning) — names the alternative
+  provider if one is configured, and says when it returns.
+- **A provider that keeps failing** (info) — three or more breaker trips;
+  suggests switching it off, noting the app already routes around it.
+- **A rejected API key** (warning) — explains the stickiness and what fixes it.
+
+A healthy multi-source install gets **nothing**. Advice that fires when nothing
+is wrong is advice nobody reads.
+
+## 38. QA mode — `data/faults.py`
+
+Every failure mode this subsystem handles is documented, tested against canned
+payloads, and impossible to *see*. "The chart falls back to yfinance when Yahoo
+times out" was a sentence and a green test; nobody had ever watched it happen,
+because making Yahoo time out on demand meant unplugging a cable.
+
+A fault is armed against a provider name, consulted once inside
+`HistoryAdapter.fetch_history`, and raises exactly the `ProviderError` subclass
+the real condition would raise — so the health monitor, the breaker, the
+ranking, the tier ladder, the diagnostics trace and the frontend state machine
+all behave identically to the genuine article. A simulation that took a
+shortcut past the error types would prove nothing about the paths it skipped.
+
+Eight faults: `outage`, `timeout`, `rate_limit`, `quota`, `auth`, `latency`
+(a real `sleep`, so the measured latency that demotes it is real), `empty`
+(a weekend is not an outage), and `unusable` (bars that parse and that
+validation must refuse — the V0.5.3 defect, made reproducible on demand).
+
+Safe to ship because: `market_data.qa_mode` defaults False and the endpoints
+**404** without it (404 rather than 403 — a 403 confirms the endpoint exists);
+the hot path costs one boolean read; and nothing persists, so a simulated
+outage cannot outlive the session that asked for it and be mistaken for a real
+one later.
+
+The cache-corruption drill deliberately operates on a **copy**. The recovery
+path being demonstrated is identical whichever file it runs on, and running it
+on a scratch copy lets a maintainer watch it work without gambling the history
+they actually have. That is not a weaker test; it is the same test with the
+blast radius removed.
+
+## 39. What V0.5.7 found by attacking itself
+
+Five defects, each found by a deliberate attempt to break a surface rather than
+by a test written to confirm it worked:
+
+1. **`mask("   ")` returned eight dots** — a whitespace-only value is an absent
+   key everywhere else in the module, so the UI would have shown a key that did
+   not exist.
+2. **A repeated name in a provider order duplicated the provider** — three
+   `"yahoo"` entries assigned it three priorities (last winning) and made
+   `order()` report a chain longer than the registry.
+3. **A hand-edited `marketdata.json` with `providers` as a LIST crashed
+   startup** — `[].items()` raised out of the composition root. The app
+   refusing to start because a *preferences* file was edited badly is precisely
+   what `apply_control_state` promises not to be. Every field is now
+   type-checked on the way in, with a parametrised regression test.
+4. **The busy-slot refusal did not say what was busy** (see §36).
+5. **A multi-minute action could not be stopped** (see §36).
+
+Each has a regression test in `tests/test_marketdata_control.py` or
+`tests/test_marketdata_endpoints.py`.
+
+## 40. What V0.5.7 does NOT change
+
+- **No change to how data is fetched.** The tier ladder, the adapters, the
+  cache, validation and the capability table are untouched.
+- **No change to trading behaviour.** Not one line of `engine/`, `risk/`,
+  `broker/` or `coach/` moved.
+- **No new runtime dependency.**
+- **The shipped defaults are identical.** With no keys, no stored state and no
+  `config.yaml` changes, the chain, the order and the behaviour are exactly
+  V0.5.6's. Everything here is opt-in by clicking.
+
+## 41. Finnhub requires a PAID plan for candles (live certification, 2026-07-27)
+
+Found by running the first real live-provider certification of the keyed chain.
+Twelve Data and Alpha Vantage authenticated and served. **Finnhub returned HTTP
+403 to every request, with a brand-new, email-verified key copied straight from
+its dashboard.** The app reported *"the API key was rejected"*, so the key was
+regenerated — repeatedly, and it could never have helped.
+
+### The measurement
+
+Probed directly against the live API rather than inferred from documentation
+(the docs site is a JavaScript app and cannot be read by a fetcher; the
+behaviour can be measured in three requests):
+
+| request | status | body |
+|---|---|---|
+| `/stock/candle` + invalid key | **401** | `{"error":"Invalid API key."}` |
+| `/stock/candle` + no key | **401** | `{"error":"Please use an API key."}` |
+| `/stock/candle` + valid free key | **403** | `{"error":"You don't have access to this resource."}` |
+| `/quote` + invalid key | **401** | `{"error":"Invalid API key."}` |
+
+**401 is the only status Finnhub uses for a key problem.** A 403 from
+`/stock/candle` is therefore *positive evidence the key is good*: the server
+authenticated it and then declined to serve the data. Finnhub moved historical
+OHLC (and intraday resolutions) to its paid tiers; the free tier still covers
+`/quote`, `/stock/profile2`, company news and symbol search.
+
+### Why the app got it wrong
+
+One line. `http_adapter._from_status` mapped **401 and 403 to the same failure**:
+
+```python
+if code in (401, 403):
+    return ProviderAuthError(f"{self.provider_name} rejected the API key")
+```
+
+A second contributor was in `finnhub_provider._AUTH_MARKERS`, which contained
+the substring `"api key"` *and* `"don't have access"` — so even the 200-body
+path classified an entitlement message as a credential failure.
+
+The result is the worst class of diagnostic error: **confidently naming the
+wrong cause**, and naming one the user can act on. "Your key was rejected" has
+an obvious remedy, the remedy is free to attempt, and it does nothing.
+
+### What changed
+
+- **`ProviderEntitlementError`** (`data/adapter.py`) — deliberately *not* a
+  subclass of `ProviderAuthError`, so `except` clauses cannot silently conflate
+  them again.
+- **`_from_status` splits 401 from 403** for every keyed provider. This is just
+  the standard meaning of the two codes — 401 "I don't know who you are", 403
+  "I know exactly who you are and you may not have this" — so Twelve Data and
+  Alpha Vantage get the correct diagnosis for free.
+- **`_AUTH_MARKERS` narrowed** to wordings that mean the key itself is wrong,
+  with `_ENTITLEMENT_MARKERS` checked *first*.
+- **`FinnhubAdapter.verify_credentials()`** proves the key on `/quote`, which
+  the free tier includes. That isolates the variable and turns a strong
+  inference into a demonstrated fact:
+
+      /quote 200  +  /stock/candle 403   ->  key good, plan too small
+      /quote 401                         ->  key genuinely bad
+
+  Generalised as `HistoryAdapter.can_verify_credentials` /
+  `verify_credentials()`; the default is honest about having no cheaper
+  endpoint rather than guessing.
+- **`STATUS_PREMIUM_REQUIRED` / `HEALTH_PREMIUM_REQUIRED` / `KIND_ENTITLEMENT`**
+  — its own status, its own displayed state, its own counter, and a
+  recommendation that explicitly says *do not regenerate the key*.
+- **`monitor.permanently_unusable`** — and `registry.deepest_earliest` now uses
+  it instead of `disabled_reason` alone. This is the load-bearing part: Finnhub
+  declares **180 days of 5-minute history** and on a free plan can serve none of
+  it. Counting that floor tells the chart history reaches three times further
+  than anything reachable, which is exactly the retry-forever bug class V0.5.2
+  was built to eliminate. A *rejected key* was being counted the same way and is
+  fixed by the same change.
+
+### What did NOT change
+
+**Authentication is not weakened.** A 401, an `"Invalid API key."` body and a
+`"Please use an API key."` body all still produce `ProviderAuthError`, still set
+`auth_failed`, and still bench the provider stickily — verified against the live
+API, not only against canned payloads. The entitlement path is an *additional*
+classification, never a fallback for a failed auth check: if the credential
+check also fails, `_entitlement_result` reports the auth failure it can prove.
+
+### Operationally
+
+A premium-gated Finnhub is benched exactly like one with no key: never selected,
+never retried, contributing no history floor, still listed and self-explaining,
+and cleared automatically the moment a different key is pasted (a different key
+may be on a different plan). **Charts are unaffected** — the keyless chain sits
+in front of it.
+
+Regression coverage: `tests/test_providers.py::TestFinnhubEntitlement` (19
+tests), plus the 401/403 split across all three keyed adapters and four
+control-centre tests for what the user is told.
+
+## 42. Still true after V0.5.7, and still the biggest limitation
+
+**With no API key configured there is exactly one real source.** Stooq is dead
+(§28), and `yahoo` / `yfinance` share an upstream and an IP rate limiter. The
+control centre makes this *visible* — the failover summary reports independent
+sources, and a single-source install gets a warning naming a free provider to
+add — but visibility is not redundancy.
+
+**§41 makes this worse than it was.** Finnhub was the recommended free route to
+an independent source, and on a free plan it can no longer serve history at all.
+**Twelve Data (800 requests/day) is now the only free keyed provider that
+delivers a genuinely independent intraday source**, with Alpha Vantage's 25/day
+a distant second. The single-source recommendation now prefers whichever keyed
+provider is actually usable rather than naming Finnhub by habit.
