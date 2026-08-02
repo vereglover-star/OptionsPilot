@@ -47,6 +47,45 @@ class UpdatePhase(str, Enum):
     ERROR = "error"
 
 
+class Assurance(str, Enum):
+    """How strongly a downloaded installer was verified before it is run.
+
+    This exists because "validated" was a single boolean, and a boolean cannot
+    distinguish *we confirmed this is the exact file the release publishes*
+    from *it is the right size and has a plausible name*. Both used to render
+    as "Update verified." — a claim the second one had not earned.
+
+    The level is carried out of :func:`validation.validate` and surfaced to the
+    user, so the update dialog can say what was actually checked rather than
+    implying a guarantee that was never made.
+    """
+
+    #: SHA-256 matched the digest published alongside the release.
+    HASH_VERIFIED = "hash_verified"
+    #: Name and size matched, but the release published no checksums to compare
+    #: against. Correct for every release made before V0.9.0 and the reason
+    #: hash verification is not yet mandatory (see docs/AUTO_UPDATER.md).
+    SIZE_ONLY = "size_only"
+    #: A check failed; the install must not proceed.
+    FAILED = "failed"
+
+    @property
+    def is_verified(self) -> bool:
+        """True only when verification actually happened. Deliberately narrow —
+        callers that want to say "verified" must be able to mean it."""
+        return self is Assurance.HASH_VERIFIED
+
+    @property
+    def summary(self) -> str:
+        return {
+            Assurance.HASH_VERIFIED: "Verified against the published checksum.",
+            Assurance.SIZE_ONLY: (
+                "Integrity data unavailable — this release publishes no "
+                "checksum, so only the file name and size were checked."),
+            Assurance.FAILED: "This update could not be verified.",
+        }[self]
+
+
 class UpdateError(Exception):
     """A user-presentable updater failure.
 
@@ -92,10 +131,18 @@ class ReleaseInfo:
     draft: bool
     html_url: str
     installer: ReleaseAsset | None  # the OptionsPilot-Setup-v*.exe asset, if any
+    #: The SHA256SUMS manifest published beside the installer, when there is
+    #: one. Defaults to None so every release made before V0.9.0 — none of
+    #: which carry it — still parses.
+    checksums: ReleaseAsset | None = None
 
     @property
     def has_installer(self) -> bool:
         return self.installer is not None
+
+    @property
+    def has_checksums(self) -> bool:
+        return self.checksums is not None
 
 
 @dataclass(frozen=True)

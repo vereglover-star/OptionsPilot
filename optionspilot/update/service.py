@@ -41,7 +41,7 @@ from optionspilot.update.models import (
     UpdateError,
     UpdatePhase,
 )
-from optionspilot.update.validation import validate
+from optionspilot.update.validation import digest_for, validate
 from optionspilot.update.version import Version
 
 log = get_logger("update")
@@ -102,6 +102,14 @@ class UpdateService:
         self._release: ReleaseInfo | None = None
         self._progress = DownloadProgress()
         self._download_path: str | None = None
+        # Integrity metadata for the current download, resolved once at
+        # download time so apply_update() — and validate() with it — stay
+        # offline. `_checksums_published` records that a manifest EXISTED,
+        # which is what lets validation distinguish "this release has no
+        # checksums" from "this release has checksums and this file is not in
+        # them". Those mean very different things; see validation.validate.
+        self._expected_sha256: str | None = None
+        self._checksums_published: bool = False
         self._error: str | None = None
         self._check_thread: threading.Thread | None = None
         self._download_thread: threading.Thread | None = None
@@ -245,6 +253,31 @@ class UpdateService:
                 return
             self._download_path = result.path
             self._phase = UpdatePhase.DOWNLOADED
+        self._resolve_expected_digest(release, result.path)
+
+    def _resolve_expected_digest(self, release: ReleaseInfo,
+                                 path: str | None) -> None:
+        """Fetch and parse the release's SHA256SUMS, if it publishes one.
+
+        Deliberately runs HERE rather than in apply_update: validation is
+        documented as pure and offline, and keeping the one network read on the
+        download path preserves that. Never raises — a manifest that cannot be
+        fetched leaves the update at reduced assurance rather than failing it.
+        """
+        expected: str | None = None
+        published = False
+        if release is not None and release.checksums is not None and path:
+            published = True
+            text = self._downloader.fetch_text(release.checksums)
+            if text:
+                expected = digest_for(text, Path(path).name)
+            if expected is None:
+                log.warning(
+                    "release %s publishes %s but it yields no digest for %s",
+                    release.tag, release.checksums.name, Path(path).name)
+        with self._lock:
+            self._expected_sha256 = expected
+            self._checksums_published = published
 
     def cancel_download(self) -> None:
         """Request cancellation of an in-flight download (safe to call anytime)."""
@@ -266,6 +299,8 @@ class UpdateService:
         with self._lock:
             path = self._download_path
             release = self._release
+            expected_sha256 = self._expected_sha256
+            checksums_published = self._checksums_published
         if not path or not Path(path).is_file():
             return {"ok": False, "error": "No downloaded update is ready to install."}
 
@@ -273,12 +308,15 @@ class UpdateService:
         with self._lock:
             self._phase = UpdatePhase.VERIFYING
         expected_size = release.installer.size if release and release.installer else None
-        verdict = validate(path, expected_size=expected_size)
+        verdict = validate(path, expected_size=expected_size,
+                           expected_sha256=expected_sha256,
+                           checksums_published=checksums_published)
         if not verdict.ok:
             with self._lock:
                 self._phase = UpdatePhase.ERROR
                 self._error = verdict.message
             return {"ok": False, "error": verdict.message}
+        log.info("update validated: %s", verdict.assurance.value)
 
         # 2. Mandatory pre-update backup — abort if it fails.
         try:
@@ -307,7 +345,7 @@ class UpdateService:
             except Exception:  # noqa: BLE001
                 log.debug("on_install_launched hook raised", exc_info=True)
         return {"ok": True, "backup": str(backup_dir) if backup_dir else None,
-                "command": cmd}
+                "command": cmd, "assurance": verdict.assurance.value}
 
     # ── snapshots for the UI ─────────────────────────────────────────────────
     def snapshot(self) -> dict:

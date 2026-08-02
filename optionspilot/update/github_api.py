@@ -48,6 +48,12 @@ DEFAULT_API_BASE = "https://api.github.com"
 # documented installer naming (scripts/build_installer.ps1 / OptionsPilot.iss).
 INSTALLER_RE = re.compile(r"OptionsPilot-Setup-v[0-9][0-9A-Za-z.\-]*\.exe$", re.IGNORECASE)
 
+# The checksum manifest published beside the installer (V0.9.0-C8). Matched by
+# name only, and it is never executed — it is read as text and parsed for one
+# digest, so the strictness that guards INSTALLER_RE is not needed here. The
+# name is fixed by scripts/release workflow convention.
+CHECKSUMS_RE = re.compile(r"^SHA256SUMS(\.txt)?$", re.IGNORECASE)
+
 
 def _parse_dt(text: str | None) -> datetime | None:
     if not text:
@@ -68,6 +74,29 @@ def _select_installer(assets: list[dict]) -> ReleaseAsset | None:
     for a in assets:
         name = str(a.get("name", ""))
         if not INSTALLER_RE.search(name):
+            continue
+        url = str(a.get("browser_download_url", ""))
+        if not url:
+            continue
+        return ReleaseAsset(
+            name=name,
+            size=int(a.get("size", 0) or 0),
+            download_url=url,
+            content_type=str(a.get("content_type", "")),
+        )
+    return None
+
+
+def _select_checksums(assets: list[dict]) -> ReleaseAsset | None:
+    """Return the SHA256SUMS manifest from a release's asset list, or None.
+
+    ``None`` is the normal, expected answer for every release published before
+    V0.9.0 — the updater must keep working against those, so a missing manifest
+    is a reduced assurance level rather than an error (see validation.validate).
+    """
+    for a in assets:
+        name = str(a.get("name", ""))
+        if not CHECKSUMS_RE.match(name):
             continue
         url = str(a.get("browser_download_url", ""))
         if not url:
@@ -102,6 +131,7 @@ def parse_release(doc: dict) -> ReleaseInfo | None:
         draft=bool(doc.get("draft", False)),
         html_url=str(doc.get("html_url", "")),
         installer=_select_installer(doc.get("assets") or []),
+        checksums=_select_checksums(doc.get("assets") or []),
     )
 
 

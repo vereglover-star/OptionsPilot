@@ -183,3 +183,139 @@ class TestPreferencesAndSkip:
             prefs=InMemoryPrefs(channel="beta"))
         svc.check_now()
         assert svc.snapshot()["latest_version"] == "0.6.0-beta.1"
+
+
+# ── V0.9.0-C8: published checksums, end to end ──────────────────────────────
+
+_SUMS_URL = "https://example.test/download/SHA256SUMS"
+
+
+def _sums_asset(text: bytes) -> dict:
+    return {"name": "SHA256SUMS", "size": len(text),
+            "browser_download_url": _SUMS_URL, "content_type": "text/plain"}
+
+
+def _service_with_manifest(tmp_path, *, body=b"x" * 1000, sums_text=None,
+                           publish_manifest=True):
+    """A service whose release optionally publishes a SHA256SUMS manifest.
+
+    The downloader's opener routes the manifest URL separately from the
+    installer URL, so the fetch of one is exercised independently of the other
+    exactly as it is in production.
+    """
+    from optionspilot.update.validation import sha256_file  # noqa: F401  (doc)
+
+    installer_name = "OptionsPilot-Setup-v0.5.0.exe"
+    if sums_text is None:
+        import hashlib
+        digest = hashlib.sha256(body).hexdigest()
+        sums_text = f"{digest}  {installer_name}\n"
+    encoded = sums_text.encode()
+
+    extra = [_sums_asset(encoded)] if publish_manifest else []
+    docs = [release_json("v0.5.0", installer_size=len(body), extra_assets=extra)]
+
+    downloader = Downloader(
+        opener=FakeOpener(
+            {"SHA256SUMS": FakeResponse(encoded)},
+            default=FakeResponse(body, headers={"Content-Length": str(len(body))}),
+        ),
+        chunk_size=128,
+    )
+    launcher = InstallerLauncher(spawn=lambda cmd: cmd,
+                                 backup=lambda paths, label: tmp_path / "backup")
+    return UpdateService("0.4.6", InMemoryPrefs(), client=_client(*docs),
+                         downloader=downloader, launcher=launcher,
+                         download_dir=tmp_path)
+
+
+class TestPublishedChecksums:
+    """The integrity half of C-1: verify what the release says it published."""
+
+    def test_manifest_asset_is_discovered_on_the_release(self, tmp_path):
+        svc = _service_with_manifest(tmp_path)
+        result = svc.check_now()
+        assert result.release.has_checksums
+        assert result.release.checksums.name == "SHA256SUMS"
+
+    def test_matching_digest_installs_at_hash_verified(self, tmp_path):
+        svc = _service_with_manifest(tmp_path)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert out["ok"], out
+        assert out["assurance"] == "hash_verified"
+
+    def test_corrupted_download_is_refused(self, tmp_path):
+        """The manifest describes one file; a different file arrives.
+
+        This is the whole point of the commit: before it, a download that did
+        not match what the release published was indistinguishable from one
+        that did, provided it was the right length.
+        """
+        import hashlib
+        body = b"y" * 1000
+        wrong = hashlib.sha256(b"the file we EXPECTED").hexdigest()
+        svc = _service_with_manifest(
+            tmp_path, body=body,
+            sums_text=f"{wrong}  OptionsPilot-Setup-v0.5.0.exe\n")
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert not out["ok"]
+        assert "integrity" in out["error"].lower()
+        assert svc.snapshot()["phase"] == "error"
+
+    def test_release_without_manifest_still_installs_at_size_only(self, tmp_path):
+        """Backward compatibility, and the reason hashes are not yet mandatory.
+
+        Every release published before V0.9.0 carries no manifest. The client
+        performing the check is the OLD one, so failing here would strand
+        every existing installation on its current version.
+        """
+        svc = _service_with_manifest(tmp_path, publish_manifest=False)
+        result = svc.check_now()
+        assert not result.release.has_checksums
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert out["ok"], out
+        assert out["assurance"] == "size_only"
+
+    def test_manifest_that_omits_the_installer_is_refused(self, tmp_path):
+        svc = _service_with_manifest(
+            tmp_path, sums_text=f"{'a' * 64}  SomethingElse.zip\n")
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert not out["ok"]
+        assert "checksum" in out["error"].lower()
+
+    def test_unfetchable_manifest_does_not_break_the_update(self, tmp_path):
+        """A manifest that 404s must not be silently ignored NOR crash.
+
+        `fetch_text` returns None, no digest is resolved, and because the
+        release did advertise a manifest the update is refused rather than
+        quietly downgraded — advertised-then-missing is a discrepancy.
+        """
+        body = b"z" * 1000
+        docs = [release_json("v0.5.0", installer_size=len(body),
+                             extra_assets=[_sums_asset(b"unused")])]
+        downloader = Downloader(
+            opener=FakeOpener({"SHA256SUMS": NetworkError("gone", retryable=False)},
+                              default=FakeResponse(
+                                  body, headers={"Content-Length": str(len(body))})),
+            chunk_size=128)
+        launcher = InstallerLauncher(spawn=lambda cmd: cmd,
+                                     backup=lambda paths, label: tmp_path / "backup")
+        svc = UpdateService("0.4.6", InMemoryPrefs(), client=_client(*docs),
+                            downloader=downloader, launcher=launcher,
+                            download_dir=tmp_path)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert not out["ok"]

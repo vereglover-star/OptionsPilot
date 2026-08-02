@@ -76,7 +76,32 @@ jobs:
           $ver = "${{ github.ref_name }}".TrimStart('v')
           python scripts/release_notes.py $ver | Out-File -Encoding utf8 release_notes.md
 
-      # Publish BOTH artifacts: the portable zip and the installer.
+      # V0.9.0-C8. Until now a release published a zip and an installer and
+      # nothing that said what they were supposed to contain, so the updater's
+      # strongest available check was "the size GitHub reported". SHA256SUMS
+      # gives the client something to verify against.
+      #
+      # Standard `sha256sum` format (`<digest>  <name>`) so it is verifiable
+      # with ordinary tools rather than only by this application, and generated
+      # from the exact files being uploaded in the step below.
+      - name: Generate SHA256SUMS
+        shell: pwsh
+        run: |
+          $files = @()
+          $files += Get-ChildItem dist\OptionsPilot-v*.zip
+          $files += Get-ChildItem installer\Output\OptionsPilot-Setup-v*.exe
+          if ($files.Count -eq 0) { throw "nothing to checksum" }
+          $lines = foreach ($f in $files) {
+            $h = (Get-FileHash -Algorithm SHA256 -LiteralPath $f.FullName).Hash.ToLower()
+            "$h  $($f.Name)"
+          }
+          # ASCII, LF, no BOM: a UTF-8 BOM would corrupt the first digest for
+          # any parser that does not strip it, including `sha256sum -c`.
+          [IO.File]::WriteAllText("$PWD\SHA256SUMS", ($lines -join "`n") + "`n", [Text.Encoding]::ASCII)
+          Get-Content SHA256SUMS
+
+      # Publish all THREE artifacts: portable zip, installer, and the manifest
+      # that lets a client prove it got the right one.
       - name: Create GitHub Release
         shell: pwsh
         env:
@@ -84,8 +109,10 @@ jobs:
         run: |
           $zip = Get-ChildItem dist\OptionsPilot-v*.zip | Select-Object -First 1
           $setup = Get-ChildItem installer\Output\OptionsPilot-Setup-v*.exe | Select-Object -First 1
+          $sums = Get-ChildItem SHA256SUMS | Select-Object -First 1
           if (-not $zip) { throw "no release zip produced" }
           if (-not $setup) { throw "no installer produced" }
-          gh release create "${{ github.ref_name }}" $zip.FullName $setup.FullName `
+          if (-not $sums) { throw "no SHA256SUMS produced" }
+          gh release create "${{ github.ref_name }}" $zip.FullName $setup.FullName $sums.FullName `
             --title "OptionsPilot ${{ github.ref_name }}" `
             --notes-file release_notes.md

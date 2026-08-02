@@ -152,6 +152,43 @@ class TestCheckScriptsAreWired:
         assert not broken, "callers reference missing scripts: " + ", ".join(broken)
 
 
+class TestReleasePublishesChecksums:
+    """A verifier with nothing to verify against is decoration.
+
+    `validation.validate()` has accepted an `expected_sha256` since V0.5.0 and
+    no caller ever passed one, because no release published a digest. V0.9.0-C8
+    closes that loop; this test keeps it closed. If the SHA256SUMS step is ever
+    dropped from the workflow, every future update silently falls back to
+    size-only assurance — which is exactly the state this commit ended, and it
+    would end quietly.
+    """
+
+    @staticmethod
+    def _release_yaml() -> str:
+        return (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+
+    def test_workflow_generates_a_checksum_manifest(self):
+        text = self._release_yaml()
+        assert "SHA256SUMS" in text, "release.yml no longer produces SHA256SUMS"
+        assert "Get-FileHash" in text and "SHA256" in text
+
+    def test_manifest_is_uploaded_with_the_release(self):
+        """Generating it is not publishing it — the client fetches the ASSET."""
+        text = self._release_yaml()
+        create = [line for line in text.splitlines() if "gh release create" in line]
+        assert create, "no `gh release create` step found"
+        tail = text.split("gh release create", 1)[1][:400]
+        assert "sums" in tail.lower(), (
+            "SHA256SUMS is generated but not attached to the release — the "
+            "updater fetches it as a release asset, so an unpublished manifest "
+            "leaves every client at size-only assurance")
+
+    def test_asset_name_matches_what_the_client_looks_for(self):
+        """The workflow and the client must agree on one name."""
+        from optionspilot.update.github_api import CHECKSUMS_RE
+        assert CHECKSUMS_RE.match("SHA256SUMS")
+
+
 class TestNoTrackedBuildArtifacts:
     """Build output must never be committed.
 

@@ -59,6 +59,42 @@ class Downloader:
         self._timeout = timeout
         self._clock = clock
 
+    #: Ceiling on a text asset read into memory. A SHA256SUMS manifest for this
+    #: project is a few hundred bytes; 256 KB is generous and still bounds a
+    #: hostile or corrupt response, which is the point — this content is read
+    #: straight into memory rather than streamed to disk.
+    MAX_TEXT_BYTES = 256 * 1024
+
+    def fetch_text(self, asset: ReleaseAsset,
+                   max_bytes: int | None = None) -> str | None:
+        """Read a small text asset into memory, or ``None`` if unavailable.
+
+        Used for the SHA256SUMS manifest. Returns ``None`` rather than raising
+        on any failure — a checksum manifest that cannot be fetched must not
+        break the update flow; it degrades the assurance level instead, and
+        :func:`validation.validate` decides what that means.
+
+        Note the asymmetry with :meth:`download`: that method is deliberately
+        restricted to a recognised installer, because its output is EXECUTED.
+        This one is only ever parsed for a hex digest.
+        """
+        limit = self.MAX_TEXT_BYTES if max_bytes is None else int(max_bytes)
+        try:
+            with self._opener(asset.download_url, {}, self._timeout) as resp:
+                raw = resp.read(limit + 1)
+        except Exception:  # noqa: BLE001 - any failure is "no manifest"
+            log.debug("could not fetch %s", asset.name, exc_info=True)
+            return None
+        if raw is None:
+            return None
+        if len(raw) > limit:
+            log.warning("%s exceeds %d bytes — refusing to parse it",
+                        asset.name, limit)
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", "replace")
+        return str(raw)
+
     def download(self, asset: ReleaseAsset, *,
                  dest_dir: Path | str | None = None,
                  progress_cb: ProgressCallback | None = None,
