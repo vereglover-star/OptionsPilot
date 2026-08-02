@@ -5,6 +5,18 @@ __pycache__/
 build/
 dist/
 OptionsPilot.spec
+
+# PyInstaller output that was committed by mistake and untracked in V0.9.0-C7
+# (3,238 files, ~97 MB of history). Two complete distributions plus a loose
+# exe, all built against Python 3.14 while this project requires 3.12 — so
+# every clone carried a stale binary beside source it no longer matched.
+# Untracking does not shrink .git; the blobs stay in history until a
+# deliberate rewrite (Decision D-4), which is out of scope here because it
+# invalidates every existing clone, fork and open PR.
+/_internal/
+/dist_old/
+/OptionsPilot.exe
+/temp_inspect_history.py
 /data/
 /logs/
 config.local.yaml

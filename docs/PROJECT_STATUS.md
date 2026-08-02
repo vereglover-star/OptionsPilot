@@ -5,16 +5,17 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-28, **V0.7.0 — platform foundation &
-cross-platform architecture**. Full **2079-test** `pytest` suite green (+140),
-HTML-id + doc checks green, `scripts/marketdata_stress.py` **88/88** offline,
+**Last verified:** 2026-07-31, **V0.9.0 — verification floor (C1–C7 of 9)**.
+Full `pytest` suite green, ruff green, coverage **91.49%** over the 91 ratchet,
+HTML-id + doc checks green, API contract check green,
+`scripts/marketdata_stress.py` **88/88** offline,
 `scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
 `scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
 and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2093 tests run against canned
+against its real API with a real key — all 2094 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -24,24 +25,52 @@ remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
 ## Current version
 
-`0.5.0` — single source of truth: `optionspilot/__init__.py::__version__`
-(pyproject derives it dynamically). Pre-1.0, actively developed; bumped from
-`0.4.6` at the V0.5.0 Auto-Updater milestone (the footer reads it from
-`/api/status`). A `v*` tag publishes both `OptionsPilot-Setup-vX.Y.Z.exe`
-(installer) and `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions, and the
-installed app now updates itself from GitHub Releases.
+`0.8.2` — single source of truth: `optionspilot/__init__.py::__version__`
+(pyproject derives it dynamically). Pre-1.0, actively developed. A `v*` tag
+publishes both `OptionsPilot-Setup-vX.Y.Z.exe` (installer) and
+`OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions, and the installed app
+updates itself from GitHub Releases.
+
+`scripts/check_docs.py` compares the version stated in this section against
+`__version__` and fails the build if they disagree. That check was added in
+V0.9.0-C7 because this file claimed `0.5.0` for four consecutive releases:
+the release workflow's tag gate only ever compared the *constant* against the
+tag, and nothing looked at the prose, so a document nobody could trust passed
+every automated check in the project.
 
 ## Current phase
 
-**V0.7.0 — platform foundation & cross-platform architecture, on branch
-`feature/v0.7` — awaiting user review.** The desktop UI stopped being the owner
-of application logic. `optionspilot/services/` is the platform-independent
-application layer (portfolio, watchlist, intelligence projections, notifications,
-workspace, and the persisted-object sync inventory), `optionspilot/host/` puts
-every OS question behind a capability interface, workspace state moved off
-`localStorage` onto the server, and seven new architecture guards enforce the
-result. No trading-behaviour change, no UI redesign, no test removed. Full
-design and the nine remaining platform blockers: `docs/ARCHITECTURE-PLATFORM.md`.
+**V0.9.0 — verification floor.** Seven of nine commits delivered. The
+milestone adds no features and changes no trading behaviour; it makes the
+build reproducible, the update path verifiable and the CI gate meaningful, so
+that the refactoring milestones after it (V0.9.1 – V0.9.5) can be trusted.
+
+Delivered: the version constant reconciled with the released code (C1); a
+dependency lockfile applied to CI *and* the release path (C2); ruff with a
+narrow rule set and a documented 573-item backlog (C3); coverage measured at
+**91.49%** and ratcheted (C4); the API contract check wired after three
+milestones of never running, plus a test banning orphaned gate scripts (C5); a
+two-platform CI matrix with Windows canonical (C6); and build artifacts
+untracked with the documentation reconciled (C7).
+
+Remaining: SHA-256 checksum publication and verification (C8), and Authenticode
+signing (C9), which is blocked on certificate procurement rather than on
+engineering.
+
+Plan of record: the V0.9 Engineering Specification, Revision 2.
+
+**Before that — V0.8.2, production tray lifecycle and platform stability**, and
+**V0.8.1, production hardening**. See `CHANGELOG.md`.
+
+**Before that — V0.7.0, platform foundation & cross-platform architecture.** The
+desktop UI stopped being the owner of application logic. `optionspilot/services/`
+is the platform-independent application layer (portfolio, watchlist, intelligence
+projections, notifications, workspace, and the persisted-object sync inventory),
+`optionspilot/host/` puts every OS question behind a capability interface,
+workspace state moved off `localStorage` onto the server, and seven new
+architecture guards enforce the result. No trading-behaviour change, no UI
+redesign, no test removed. Full design and the nine remaining platform blockers:
+`docs/ARCHITECTURE-PLATFORM.md`.
 
 **Previously — V0.6.0, the Trading Intelligence Engine — also awaiting review.** The analytical brain: one layer that turns everything
 already recorded about completed trades into structured, evidence-backed insight
@@ -483,7 +512,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2093 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2094 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 

@@ -94,6 +94,52 @@ def check_test_counts(live_count: int | None) -> list[str]:
     return problems
 
 
+def declared_version() -> str | None:
+    """The one true version, read from optionspilot/__init__.py."""
+    init = (ROOT / "optionspilot" / "__init__.py").read_text(encoding="utf-8")
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', init)
+    return match.group(1) if match else None
+
+
+def check_documented_version() -> list[str]:
+    """Docs that state a version in prose must state the REAL one.
+
+    `check_version()` below proves the version has a single source of truth.
+    It says nothing about whether the documentation agrees with it, and that
+    gap was not theoretical: `docs/PROJECT_STATUS.md` announced "Current
+    version `0.5.0`" while the code was 0.8.2 — through four releases, past
+    the release workflow's tag gate (which compares the tag to the constant,
+    never to the prose), and past every check in this file.
+
+    A status document that is confidently three releases stale is worse than
+    no status document, because it is read and believed.
+    """
+    version = declared_version()
+    if version is None:
+        return []                      # reported by check_version()
+    problems = []
+    # `## Current version` followed by a `X.Y.Z` in backticks.
+    pattern = re.compile(
+        r"^##\s+Current version\s*$\n+`(?P<claim>\d+\.\d+\.\d+)`", re.M)
+    for path in (DOCS / "PROJECT_STATUS.md",):
+        if not path.exists():
+            continue
+        match = pattern.search(path.read_text(encoding="utf-8"))
+        if match is None:
+            problems.append(
+                f"{path.relative_to(ROOT)}: no parsable '## Current version' "
+                f"section — the version-drift check cannot see it, so it "
+                f"would silently pass. Restore the `X.Y.Z` line or update "
+                f"scripts/check_docs.py deliberately.")
+            continue
+        if match.group("claim") != version:
+            problems.append(
+                f"{path.relative_to(ROOT)}: states version "
+                f"{match.group('claim')}, but optionspilot.__version__ is "
+                f"{version}")
+    return problems
+
+
 def check_version() -> list[str]:
     """The version has a single source of truth: optionspilot/__init__.py's
     __version__. Verify pyproject.toml derives it dynamically from there rather
@@ -122,6 +168,7 @@ def main() -> int:
     live_count = live_test_count()
     problems += check_test_counts(live_count)
     problems += check_version()
+    problems += check_documented_version()
 
     if problems:
         print(f"FAIL: {len(problems)} documentation consistency issue(s):")
@@ -130,7 +177,8 @@ def main() -> int:
         return 1
 
     note = f" (live count: {live_count})" if live_count is not None else ""
-    print(f"OK: doc cross-references resolve, test counts agree{note}, version in sync.")
+    print(f"OK: doc cross-references resolve, test counts agree{note}, "
+          f"version in sync, docs state v{declared_version()}.")
     return 0
 
 
