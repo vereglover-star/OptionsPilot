@@ -17,21 +17,6 @@ SETTLE = 5.0
 #: happened to slip through". At a 0.05 s interval this is ~0.25 s of work.
 TICKS_REQUIRED = 5
 
-#: V0.9.1-C2 adds `TaskSpec.lane`, defaulting to "coordinator" so that the new
-#: dispatch path is inert until a task opts in — that inert default IS the
-#: rollback property, and it must not be traded away to make these go green.
-#: The consequence for these two tests is concrete: they register tasks with no
-#: lane, so C2 alone will NOT flip them. C2 must add `lane="worker"` to the long
-#: tasks here in the same commit that introduces the field.
-_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="V0.9.1-C1 states the bug executably; the fix is C2 (lanes + a "
-           "bounded worker pool) and C3 (market_monitor onto the worker lane). "
-           "strict=True so this fails the suite the moment it starts passing, "
-           "which is what forces C2/C3 to come back and flip it.",
-)
-
-
 class TestSchedulingFairness:
     """A long task must not starve a short one. This is V0.9.1's bug statement.
 
@@ -48,6 +33,17 @@ class TestSchedulingFairness:
     The property asserted here is the one a user can observe: while a long task
     is in flight, a short task with a much smaller interval still ticks.
 
+    **These were merged red at C1 under `xfail(strict=True)` and went green at
+    C3.** The assertions, waits and thresholds below have never changed. The
+    only edit either test has ever received is `lane="worker"` on its long
+    task — the same one-argument declaration `ui/server.py` makes for
+    `market_monitor`, and the reason it is needed rather than automatic is
+    C2's deliberately inert default: a task that does not ask for the worker
+    lane is still executed inline, and *should* be. The coordinator-lane
+    behaviour these tests used to characterise is now asserted positively by
+    `TestLanes::test_a_coordinator_task_still_blocks_the_scheduler`, so nothing
+    stopped being covered when they flipped.
+
     On timing. The runtime accepts an injected clock, and the scheduling tests
     below this class use it. These two cannot: starvation is a claim about a
     blocked *thread*, and a fake clock cannot make a thread that is parked in
@@ -56,7 +52,6 @@ class TestSchedulingFairness:
     generous ceiling, so nothing here waits a fixed duration.
     """
 
-    @_XFAIL
     def test_a_long_task_does_not_starve_a_short_periodic_task(self):
         ticks: list[float] = []
         entered = threading.Event()
@@ -75,7 +70,8 @@ class TestSchedulingFairness:
                 enough.set()
 
         runtime = BackgroundRuntime(health_interval=60)
-        runtime.register(TaskSpec("long_scan", 30.0, long_scan, policy="monitoring"))
+        runtime.register(TaskSpec("long_scan", 30.0, long_scan,
+                                  policy="monitoring", lane="worker"))
         runtime.register(TaskSpec("short_tick", 0.05, short_tick, policy="essential"))
         runtime.start()
         try:
@@ -95,7 +91,6 @@ class TestSchedulingFairness:
             release.set()
             runtime.stop(timeout=SETTLE)
 
-    @_XFAIL
     def test_two_long_tasks_run_concurrently_rather_than_head_of_line(self):
         """Independent slow work must overlap, not queue behind whichever was first.
 
@@ -116,8 +111,10 @@ class TestSchedulingFairness:
             release.wait(SETTLE * 2)
 
         runtime = BackgroundRuntime(health_interval=60)
-        runtime.register(TaskSpec("slow_a", 30.0, slow, policy="monitoring"))
-        runtime.register(TaskSpec("slow_b", 30.0, slow, policy="normal"))
+        runtime.register(TaskSpec("slow_a", 30.0, slow,
+                                  policy="monitoring", lane="worker"))
+        runtime.register(TaskSpec("slow_b", 30.0, slow,
+                                  policy="normal", lane="worker"))
         runtime.start()
         try:
             assert both_in_flight.wait(SETTLE), (

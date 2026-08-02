@@ -200,9 +200,22 @@ class UIServer:
             self.background.pause()
         task_names = {task["name"] for task in self.background.snapshot().tasks}
         if "market_monitor" not in task_names:
+            # V0.9.1-C3: the worker lane. `_background_cycle` runs a full
+            # watchlist fetch plus an option chain per symbol over the network,
+            # and executing that inline on the coordinator froze every other
+            # task for its duration — `tray_status` has a 10-second interval
+            # precisely because the tooltip is meant to stay current, and it
+            # was the most visible casualty.
+            #
+            # This is the one-argument activation C2 was shaped around:
+            # deleting `lane="worker"` restores the previous behaviour exactly,
+            # with no other code change. Lock scope is unaffected —
+            # `run_cycle_now` already takes `_cycle_lock` and then the
+            # orchestrator lock only for the stateful part, so the same code
+            # runs under the same locks, just not on the coordinator's thread.
             self.background.register(TaskSpec(
                 "market_monitor", self.cfg.engine.scan_interval_seconds,
-                self._background_cycle, policy="monitoring"))
+                self._background_cycle, policy="monitoring", lane="worker"))
         if "symbol_metadata" not in task_names:
             self.background.register(TaskSpec(
                 "symbol_metadata", 60.0, self._refresh_pending_meta,
