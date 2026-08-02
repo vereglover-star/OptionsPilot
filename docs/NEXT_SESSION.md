@@ -43,7 +43,7 @@ demonstrate each new gate failing as well as passing.
 
 ## What was completed most recently? (V0.9.0 — the verification floor)
 
-2065 -> **2160 tests** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
+2065 -> **2173 tests** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
 No feature, no trading-behaviour change, no new runtime dependency. Full detail:
 **`docs/CHANGELOG.md`**, entry `2026-08-02 — V0.9.0`.
 

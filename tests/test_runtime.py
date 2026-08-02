@@ -127,6 +127,295 @@ class TestSchedulingFairness:
             runtime.stop(timeout=SETTLE)
 
 
+def _settle(predicate, timeout: float = SETTLE) -> bool:
+    """Wait for a property, returning the instant it holds."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+def _task_row(runtime, name: str) -> dict:
+    return next(t for t in runtime.snapshot().tasks if t["name"] == name)
+
+
+class TestLanes:
+    """V0.9.1-C2: the mechanism, exercised only where a task opts in.
+
+    The commit's whole safety argument is that the worker path is unreachable
+    by default, so these tests pass `lane="worker"` explicitly. The class
+    immediately above (C1's fairness tests) is the other half of that argument:
+    it registers tasks WITHOUT a lane and is still expected to fail.
+    """
+
+    def test_the_default_lane_is_coordinator(self):
+        """The rollback property, asserted at the API surface.
+
+        If this default ever changes, reverting an activated task stops being a
+        one-argument edit and becomes a revert — on the riskiest change in the
+        milestone.
+        """
+        assert TaskSpec("t", 1.0, lambda: None).lane == "coordinator"
+
+    def test_an_unknown_lane_is_rejected(self):
+        with pytest.raises(ValueError, match="lane"):
+            TaskSpec("t", 1.0, lambda: None, lane="turbo")
+
+    def test_a_coordinator_task_still_blocks_the_scheduler(self):
+        """The inert default, asserted as BEHAVIOUR rather than as a constant.
+
+        This is C1's fairness test inverted: with no lane declared, a long task
+        still starves a short one, because C2 changed nothing for tasks that
+        did not ask. When C3 flips the fairness tests green, this one must stay
+        green too — they are not contradictory, they are the two sides of an
+        opt-in.
+        """
+        ticks: list[int] = []
+        entered = threading.Event()
+        release = threading.Event()
+
+        def long_task():
+            entered.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("long", 30.0, long_task))          # no lane
+        runtime.register(TaskSpec("short", 0.01, lambda: ticks.append(1)))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            before = len(ticks)
+            assert not _settle(lambda: len(ticks) > before + 3, timeout=0.5), (
+                "a coordinator-lane task no longer blocks the scheduler - the "
+                "default is not inert any more")
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_a_worker_task_does_not_block_the_coordinator(self):
+        """The mechanism, once a task opts in. C3 makes this true in production."""
+        ticks: list[int] = []
+        entered = threading.Event()
+        release = threading.Event()
+
+        def long_task():
+            entered.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("long", 30.0, long_task, lane="worker"))
+        runtime.register(TaskSpec("short", 0.01, lambda: ticks.append(1)))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            before = len(ticks)
+            assert _settle(lambda: len(ticks) >= before + TICKS_REQUIRED), (
+                f"short task ticked {len(ticks) - before} times while a worker "
+                f"task was in flight")
+            assert not release.is_set(), "the long task finished too early"
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_a_worker_task_never_runs_concurrently_with_itself(self):
+        """Overlap guard. A task slower than its own interval must not stack up.
+
+        Skipped runs are counted rather than queued: queueing them would defeat
+        the pool bound, and a task that cannot keep up should say so instead of
+        accumulating a backlog that all arrives at once when it recovers.
+        """
+        concurrent = []
+        peak = []
+        release = threading.Event()
+        guard = threading.Lock()
+
+        def slow():
+            with guard:
+                concurrent.append(1)
+                peak.append(len(concurrent))
+            try:
+                release.wait(SETTLE * 2)
+            finally:
+                with guard:
+                    concurrent.pop()
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("slow", 0.01, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert _settle(lambda: bool(peak))
+            assert _settle(lambda: _task_row(runtime, "slow")["skipped"] > 0), (
+                "intervals elapsed while the task was in flight but none was "
+                "recorded as skipped")
+            assert max(peak) == 1, f"task overlapped itself (peak {max(peak)})"
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_the_pool_bound_is_respected(self):
+        """`max_workers=1` must serialise two independent worker tasks."""
+        concurrent = []
+        peak = []
+        release = threading.Event()
+        guard = threading.Lock()
+
+        def slow():
+            with guard:
+                concurrent.append(1)
+                peak.append(len(concurrent))
+            try:
+                release.wait(SETTLE * 2)
+            finally:
+                with guard:
+                    concurrent.pop()
+
+        runtime = BackgroundRuntime(health_interval=60, max_workers=1)
+        runtime.register(TaskSpec("a", 30.0, slow, lane="worker"))
+        runtime.register(TaskSpec("b", 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert _settle(lambda: bool(peak))
+            time.sleep(0.2)
+            assert max(peak) == 1, f"pool bound of 1 admitted {max(peak)}"
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_two_worker_tasks_overlap_within_the_bound(self):
+        """The default bound must be enough for the two tasks earmarked for it.
+
+        `market_monitor` and `symbol_metadata` share nothing and both block on
+        the network; serialising them would make the second one's interval its
+        own plus the first one's duration.
+        """
+        both = threading.Event()
+        release = threading.Event()
+        inside = []
+        guard = threading.Lock()
+
+        def slow():
+            with guard:
+                inside.append(1)
+                if len(inside) == 2:
+                    both.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("a", 30.0, slow, lane="worker"))
+        runtime.register(TaskSpec("b", 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert both.wait(SETTLE), "independent worker tasks ran head-of-line"
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_snapshot_distinguishes_queued_from_running(self):
+        release = threading.Event()
+        started = threading.Event()
+
+        def slow():
+            started.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60, max_workers=1)
+        runtime.register(TaskSpec("first", 30.0, slow, lane="worker"))
+        runtime.register(TaskSpec("second", 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert started.wait(SETTLE)
+            assert _settle(lambda: any(t["running"] for t in runtime.snapshot().tasks))
+            assert _settle(lambda: any(t["queued"] for t in runtime.snapshot().tasks)), (
+                "with a single worker the second task must report queued, not "
+                "running - the snapshot cannot tell them apart")
+            rows = {t["name"]: t for t in runtime.snapshot().tasks}
+            assert not (rows["first"]["queued"] and rows["first"]["running"])
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_an_exception_in_a_worker_does_not_kill_the_coordinator(self):
+        ticks: list[int] = []
+
+        def boom():
+            raise RuntimeError("worker exploded")
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("boom", 0.01, boom, lane="worker",
+                                  restartable=False))
+        runtime.register(TaskSpec("tick", 0.01, lambda: ticks.append(1)))
+        runtime.start()
+        try:
+            assert _settle(lambda: _task_row(runtime, "boom")["failures"] > 0)
+            before = len(ticks)
+            assert _settle(lambda: len(ticks) > before + 2), (
+                "the coordinator stopped after a worker raised")
+            assert "exploded" in (_task_row(runtime, "boom")["last_error"] or "")
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_stop_leaves_no_worker_thread_behind(self):
+        """Bounded shutdown, and the leak the pool could introduce.
+
+        Pool threads carry the coordinator's name prefix precisely so the
+        lifecycle leak test counts them; this asserts the same property
+        directly for a runtime used on its own.
+        """
+        def quick():
+            time.sleep(0.01)
+
+        def live_workers():
+            return [t for t in threading.enumerate()
+                    if t.is_alive() and t.name.startswith("background-runtime")]
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("quick", 0.01, quick, lane="worker"))
+        runtime.start()
+        assert _settle(lambda: _task_row(runtime, "quick")["runs"] > 0)
+        assert live_workers(), "no pool thread was ever created"
+        runtime.stop(timeout=SETTLE)
+        assert _settle(lambda: not live_workers()), (
+            f"threads survived stop(): {[t.name for t in live_workers()]}")
+
+    def test_stop_is_bounded_even_with_a_worker_still_running(self):
+        """A scan can outlast any sensible shutdown budget; exit must not."""
+        release = threading.Event()
+        started = threading.Event()
+
+        def forever():
+            started.set()
+            release.wait(30)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("forever", 30.0, forever, lane="worker"))
+        runtime.start()
+        try:
+            assert started.wait(SETTLE)
+            began = time.monotonic()
+            runtime.stop(timeout=0.5)
+            assert time.monotonic() - began < 3.0, (
+                "stop() waited on an in-flight worker instead of abandoning it")
+        finally:
+            release.set()
+
+    def test_a_runtime_with_no_worker_task_creates_no_pool(self):
+        """Inertness, measured rather than argued."""
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("plain", 0.01, lambda: None))
+        runtime.start()
+        try:
+            assert _settle(lambda: _task_row(runtime, "plain")["runs"] > 0)
+            assert runtime._pool is None, "a pool was created for no worker task"
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_max_workers_must_be_positive(self):
+        with pytest.raises(ValueError, match="max_workers"):
+            BackgroundRuntime(max_workers=0)
+
+
 def test_runtime_runs_registered_task_once_and_stops_cleanly():
     calls = []
     runtime = BackgroundRuntime(health_interval=60)
