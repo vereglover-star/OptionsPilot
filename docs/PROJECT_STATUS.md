@@ -14,7 +14,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2083 tests run against canned
+against its real API with a real key — all 2087 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -483,7 +483,7 @@ handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
 
 ## Test count
 
-**2083 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2087 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 
@@ -493,9 +493,13 @@ is the ratchet — CI fails on any drop below it. The threshold is the
 measured number floored to an integer, never an aspiration; raise it when
 coverage genuinely improves, and justify any lowering in a commit message.
 
-Until V0.9.0-C4 this project had never measured coverage at all, so "2083
-tests passing" carried no information about how much of the code those
+Until V0.9.0-C4 this project had never measured coverage at all, so a
+passing test count carried no information about how much of the code those
 tests reach. It now does, and the answer is better than the audit assumed.
+(Deliberately phrased without a figure: `scripts/check_docs.py` rewrites
+every bare "N tests" claim in this file to the live count, so a number
+quoted here as history would silently become a false statement about the
+past on the next commit that adds a test.)
 
 Line coverage, not branch coverage: enabling branches will lower the
 percentage and must come with a re-measured threshold.

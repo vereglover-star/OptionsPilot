@@ -1,5 +1,6 @@
 """Tests for the release-pipeline tooling: single-source versioning, the
-dependency lock, and the CHANGELOG release-notes extractor."""
+dependency lock, the wiring of the check scripts, and the CHANGELOG
+release-notes extractor."""
 
 import importlib.metadata as importlib_metadata
 import importlib.util
@@ -12,6 +13,13 @@ from packaging.version import Version
 
 ROOT = Path(__file__).resolve().parent.parent
 LOCK = ROOT / "requirements-lock.txt"
+SCRIPTS = ROOT / "scripts"
+WORKFLOWS = ROOT / ".github" / "workflows"
+
+# Scripts named by this convention are QUALITY GATES, not diagnostic tools.
+# `marketdata_probe.py`, `soak.py` and the `*_benchmark.py` scripts are run by
+# hand when investigating something and are deliberately excluded.
+GATE_SCRIPT_GLOBS = ("*_check.py", "check_*.py")
 
 
 def _load(name: str):
@@ -66,6 +74,80 @@ def _direct_requirements() -> list[Requirement]:
     for extra in project.get("optional-dependencies", {}).values():
         specs.extend(extra)
     return [Requirement(s) for s in specs]
+
+
+def _gate_scripts() -> list[Path]:
+    found: set[Path] = set()
+    for pattern in GATE_SCRIPT_GLOBS:
+        found.update(SCRIPTS.glob(pattern))
+    return sorted(found)
+
+
+def _caller_sources() -> dict[str, str]:
+    """Everything that could invoke a gate script: the CI/release workflows
+    and the PowerShell entry points."""
+    sources = {}
+    for path in sorted(WORKFLOWS.glob("*.yml")) + sorted(SCRIPTS.glob("*.ps1")):
+        sources[str(path.relative_to(ROOT))] = path.read_text(encoding="utf-8")
+    return sources
+
+
+class TestCheckScriptsAreWired:
+    """A quality gate that nothing executes is worse than a missing one.
+
+    `scripts/api_contract_check.py` shipped in V0.7.0 and was run by nothing
+    — not CI, not release.yml, not verify.ps1 — while docs/PROJECT_STATE.md
+    listed it among the checks that gate a release. It was counted as
+    protection for three milestones while executing zero times.
+
+    That is the third occurrence of one failure mode in this repository.
+    CLAUDE.md already records it under "Known traps": *adding a risk gate is
+    not the same as it being active*, learned when RiskManager.approve_manual_entry
+    was written but never called. Writing the lesson down did not stop it
+    recurring, so this test enforces it instead: wiring one script fixes an
+    instance, and this fixes the class.
+    """
+
+    def test_at_least_one_gate_script_is_discovered(self):
+        """Guards the guard: a glob that silently matches nothing would make
+        every assertion below vacuously true."""
+        assert len(_gate_scripts()) >= 5
+
+    def test_every_gate_script_has_a_caller(self):
+        callers = _caller_sources()
+        orphans = []
+        for script in _gate_scripts():
+            if not any(script.name in text for text in callers.values()):
+                orphans.append(script.name)
+        assert not orphans, (
+            "these check scripts are run by nothing — CI, release.yml and "
+            "scripts/*.ps1 never name them, so they gate nothing while "
+            "appearing to: " + ", ".join(sorted(orphans))
+        )
+
+    def test_contract_check_runs_in_ci_not_only_locally(self):
+        """`verify.ps1` is a developer's gate; CI is everyone's.
+
+        A check that runs only in verify.ps1 is skipped by any contributor
+        who runs pytest directly, which is why the audit found CI and
+        verify.ps1 verifying materially different things.
+        """
+        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        assert "api_contract_check.py" in ci
+
+    def test_no_caller_references_a_missing_script(self):
+        """The inverse orphan: a workflow naming a script that is not there.
+
+        Catches a rename or deletion that leaves a caller pointing at
+        nothing — and a corrupted path, which is how a `\\a` in a PowerShell
+        string silently became a BEL byte while writing this very commit.
+        """
+        broken = []
+        for name, text in _caller_sources().items():
+            for match in re.findall(r"[\w./\\$-]*?([\w-]+_check\.py|check_[\w-]+\.py)", text):
+                if not (SCRIPTS / match).is_file():
+                    broken.append(f"{name} -> {match}")
+        assert not broken, "callers reference missing scripts: " + ", ".join(broken)
 
 
 class TestDependencyLock:

@@ -84,3 +84,12 @@ jobs:
 
       - name: Docs consistency (single-source version, test counts, cross-refs)
         run: python scripts/check_docs.py
+
+      # V0.9.0-C5. This script existed since V0.7.0 and had never been run by
+      # anything: not CI, not release.yml, not verify.ps1. docs/PROJECT_STATE.md
+      # listed it among the checks that gate a release, which made it worse than
+      # absent — it was counted as protection while executing zero times.
+      # tests/test_release_tooling.py::TestCheckScriptsAreWired now fails if any
+      # check script loses its caller again.
+      - name: API v1 contract check
+        run: python scripts/api_contract_check.py
