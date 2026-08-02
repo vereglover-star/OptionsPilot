@@ -1,8 +1,10 @@
 # OptionsPilot Auto-Updater
 
-**Status:** V0.5.0 — Auto-Updater 1.0 (in-app check, download, verify, backup,
-silent install, restart). Code signing and delta/beta-server delivery are
-designed-for but not yet implemented (see *Future work*).
+**Status:** V0.9.0 — Auto-Updater 1.2 (in-app check, download, verify, backup,
+silent install, restart; **published SHA-256 checksums** enforced by the client
+since C8, and **client-side Authenticode verification** since C9-2). Signing
+releases is deferred by business decision, not unfinished — §5.1. Delta updates
+and beta-server delivery remain designed-for and unimplemented (*Future work*).
 
 The updater makes OptionsPilot self-updating like a modern desktop app: it
 quietly checks GitHub Releases on launch, and when a newer version exists it
@@ -195,10 +197,21 @@ Windows about the signature (`installer.verify_authenticode` → WinVerifyTrust)
 and enforces the same two-phase policy: an **invalid** signature refuses the
 install in both phases; an **absent** one is tolerated in Phase 1 and refused in
 Phase 2; a host that **cannot check** degrades to the hash result and never
-refuses on that basis alone. Releases are not yet signed — that is V0.9.0-C9-3,
-blocked on certificate procurement rather than on engineering — so today every
-real release lands at `hash_verified`. Full policy matrix:
-`validation.validate`'s docstring.
+refuses on that basis alone.
+
+**Releases are not signed, deliberately.** Publishing signed builds (C9-3) needs
+a purchased certificate and OptionsPilot is not in public distribution, so it is
+**deferred as a business decision, not left unfinished** — see `ROADMAP.md` ▸
+Deferred for the rationale and the revisit trigger. The consequence here is
+simply that every real release lands at `hash_verified`: the check runs, finds
+no signature, and correctly declines to treat that as a fault. Nothing regresses
+while this stays deferred, which is exactly why Phase 1 tolerates an absent
+signature. Full policy matrix: `validation.validate`'s docstring.
+
+Two constraints for whoever resumes C9-3: **`SHA256SUMS` must be generated after
+signing** (signing changes the bytes, and §5.1's manifest is enforced), and
+`service.REQUIRE_SIGNATURE` must stay `False` until releases are actually
+signed — flipping it first makes every build uninstallable.
 
 ---
 
@@ -245,8 +258,9 @@ or via a tagged CI release:
 ## 8. Future work
 
 - **Authenticode code signing** of the setup + app exe in the release pipeline
-  (removes SmartScreen warnings) — V0.9.0-C9-3, blocked on certificate
-  procurement. The *client-side* verification it feeds shipped in C9-2 (§5.1).
+  (removes SmartScreen warnings) — V0.9.0-C9-3, **deferred by business decision**
+  while the app is not publicly distributed (`ROADMAP.md` ▸ Deferred). The
+  *client-side* verification it feeds shipped complete in C9-2 (§5.1).
 - **Delta updates** (patch instead of full installer).
 - **Beta channel server** / private update endpoints for enterprise deployment
   (`transport.py` + `github_api.api_base` already parameterize the source).

@@ -3,11 +3,53 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-07-30, after the **V0.8.2 independent audit** of the
-V0.8/V0.8.1 runtime (branch `feature/v0.7`, uncommitted). 2056 → **2065 tests**
-(+9). Full detail: **`docs/CHANGELOG.md`**, `[Uncommitted] 2026-07-30 — V0.8.2`.
+**Last updated:** 2026-08-02, on closing **V0.9.0 — the verification floor**
+(branch `V3-ui`, committed `2707a01`…`e403da6`). 2065 → **2158 tests** (+93).
+Full detail: **`docs/CHANGELOG.md`**, `2026-08-02 — V0.9.0`.
 
 ## Exact stopping point
+
+**V0.9.0 is closed. Nothing is in progress. `verify.ps1` is green across all 13
+gates** — full suite, ruff, HTML ids, docs consistency, API contract, `pip
+check`, market-data stress 88/88, browser smoke, `chart_check` 65/65,
+`marketdata_check` 46/46, `intelligence_check` 54/54, `guide_check` 135/135,
+`workspace_check` 21/21. Coverage 91.56% over the 91 ratchet.
+
+Eleven commits delivered C1–C8 plus C9-1 and C9-2, and fixed a `chart_check`
+race found on the way out. The milestone added no feature and changed no trading
+behaviour; it made the build reproducible, the update path verifiable and the CI
+gate meaningful, so that V0.9.1–V0.9.5 — all refactors of live code — can be
+trusted to have changed nothing.
+
+**Two of the nine planned C9 commits are deliberately deferred, and the
+distinction matters for whoever reads this next.** C9-3 (signing steps in
+`release.yml` + `installer/OptionsPilot.iss`) and C9-4 (its operational
+documentation) require a **purchased** code-signing certificate. OptionsPilot is
+not entering public distribution, so that spend buys nothing today — the only
+thing a signature removes is a SmartScreen warning shown to downloaders who do
+not exist. **This is a business decision, not unfinished engineering.** The
+client half shipped complete: the updater asks Windows about every downloaded
+installer and refuses one whose signature is present and invalid. It is
+deliberately additive — an *absent* signature is tolerated — so unsigned
+releases install exactly as they always have and this can sit deferred
+indefinitely without regression. Rationale, revisit trigger and the ordering
+constraint that will bite whoever resumes it: `ROADMAP.md` ▸ Deferred.
+
+Stated plainly rather than quietly rewritten: the milestone's own DoD line *"a
+tag build produces a signed installer plus checksums"* is **knowingly not met**.
+Checksums yes, signature no.
+
+**One item was omitted rather than deferred**, and should not be allowed to hide
+inside the deferral: `pip-audit` and Dependabot are named in finding H-4's
+definition of done and never received a commit. Small, unblocked, in `TODO.md`.
+
+**Next: V0.9.1 — runtime & thread ownership.** Not started. It is the blocking
+prerequisite for the V0.9.2 service extraction, because a service that owns
+background work would otherwise be extracted against a broken ownership model.
+See `NEXT_SESSION.md` for the three things to hold on to before writing any of
+it — chiefly that the exit criterion is a 30-minute soak, not a green suite.
+
+## Previously: the exact stopping point at V0.8.2
 
 The audit is complete and every automated suite is green: 2065 pytest tests,
 `browser_check` (9 tabs, zero console errors), `chart_check`, `marketdata_check`

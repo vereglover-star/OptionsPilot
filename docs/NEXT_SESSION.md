@@ -5,12 +5,82 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-07-30, end of the V0.8.2 independent audit of the
-V0.8/V0.8.1 runtime.
+**Last updated:** 2026-08-02, on closing **V0.9.0 — the verification floor**.
 
-## What was completed most recently? (V0.8.2 — independent audit)
+## What to do next
 
-2056 -> **2158 tests** (+9). **Not committed.** No feature, no dependency, no
+**Begin V0.9.1 — runtime & thread ownership.** Nothing is in progress; V0.9.0
+closed cleanly and `verify.ps1` is green across all 13 gates. Plan of record:
+the V0.9 Engineering Specification, Revision 2.
+
+V0.9.1 makes `BackgroundRuntime` genuinely the one lifecycle owner, so pause,
+resume, shutdown and health reporting describe reality instead of intent. Work
+lanes plus a worker pool so a long scan cannot starve a short periodic task;
+stray threads brought under the runtime; the dead `_loop`, the tracemalloc
+monitor and the startup HTTP poll deleted; a single-entry `exit()` guard; a
+`DesktopApplication` whose wiring is assertable without a GUI. It is sequenced
+**before** the V0.9.2 service extraction deliberately — a service that owns
+background work would otherwise be extracted against a broken ownership model
+and need redoing. 8–10 days, 11 commits.
+
+**Three things to hold on to before writing any of it.**
+
+1. **Write the failing test first**: a short coordinator task that must run on
+   schedule *during* a long worker task. That test is the bug statement. Then
+   lanes, then the conversions.
+2. **The exit criterion is a 30-minute soak, not a green suite.** Concurrency
+   defects are non-deterministic and this suite has passed over a guaranteed
+   deadlock before (V0.8.2 — the test double modelled timing but not threads).
+   Use `BackgroundRuntime`'s injected clock rather than sleeping.
+3. **Decide where `pip-audit` and Dependabot go.** They are named in V0.9.0's
+   own definition of done (finding H-4) and never received a commit — an
+   omission, not a deferral. Small and unblocked. Fold into the first commit or
+   run one standalone before starting.
+
+The standing execution protocol still applies: one planned commit at a time,
+re-validate every assumption against the live tree before implementing, and
+demonstrate each new gate failing as well as passing.
+
+## What was completed most recently? (V0.9.0 — the verification floor)
+
+2065 -> **2158 tests** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
+No feature, no trading-behaviour change, no new runtime dependency. Full detail:
+**`docs/CHANGELOG.md`**, entry `2026-08-02 — V0.9.0`.
+
+**What it was for.** Every milestone after this one refactors live code, and a
+refactor is only as safe as the evidence that it changed nothing. That evidence
+did not exist: the version constant had said `0.6.0` through four shipped
+releases, dependencies were unpinned on the release path, coverage had never
+been measured, `scripts/api_contract_check.py` had been written three milestones
+earlier and *never once run*, CI was Windows-only against a portability
+abstraction, 3,238 build artifacts sat in git, and an update was verified
+against the size GitHub reported for the asset.
+
+**The two findings worth carrying forward**, both from implementation rather
+than review:
+
+- **`signtool.exe` is a Windows SDK tool, so the client cannot use it.** The C9
+  plan specified `signtool verify` for the updater's signature check; no end
+  user has the SDK, so that check would have answered "cannot determine" on
+  every real machine — present in the code, inert in production, exactly the
+  `RiskManager.approve_manual_entry` failure. It uses `wintrust.dll` instead.
+- **"Unsigned" and "invalid" must be separable.** The plan's `bool | None`
+  verdict could not express its own Phase 1 policy. Every release before V0.9.0
+  is unsigned; refusing those strands every existing installation behind an
+  update they can no longer install. `SignatureVerdict` is four-valued, and
+  C8's own backward-compatibility test is what caught it.
+
+**Deferred by business decision — C9-3 and C9-4**, the release-side signing
+pipeline and its docs. Signing needs a purchased certificate and this app is not
+publicly distributed. **Not unfinished engineering**: the client half is complete
+and enforcing, an absent signature is deliberately tolerated, so nothing
+regresses by leaving it indefinitely. `ROADMAP.md` ▸ Deferred has the rationale,
+the revisit trigger, and the one constraint that will bite whoever resumes it
+(**`SHA256SUMS` must be generated after signing**).
+
+## What was completed before that? (V0.8.2 — independent audit)
+
+2056 -> 2065 in the suite (+9). **Not committed.** No feature, no dependency, no
 architectural change: an audit of every V0.8/V0.8.1 change that treated the
 previous certification as an unverified claim. Full detail:
 **`docs/CHANGELOG.md`**, entry `[Uncommitted] 2026-07-30 — V0.8.2`.
@@ -68,7 +138,7 @@ never run end to end) and **tray Exit**.
 
 ## What was completed before that? (V0.7.0 — platform foundation)
 
-1908 -> **2158 tests** (+140); a new **21-check** headless-browser suite
+1908 -> **2048** in the suite (+140); a new **21-check** headless-browser suite
 (`scripts/workspace_check.py`, wired into `verify.ps1`). **Not committed.**
 Full design, decisions and remaining blockers: **`docs/ARCHITECTURE-PLATFORM.md`**
 — read it before touching `optionspilot/services/` or `optionspilot/host/`.
@@ -152,7 +222,7 @@ no durable store; the tab is restored only on adoption, never on every launch
 behaviour); `tkChartOpen` takes effect on the next launch rather than live; and
 `sidebar_collapsed` exists in the model with nothing writing it.
 
-**Verified:** 2158 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+**Verified at the time:** the full suite, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
 `intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
 market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
 

@@ -5,11 +5,11 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-07-31, **V0.9.0 — verification floor (C1–C7 of 9)**.
-Full `pytest` suite green, ruff green, coverage **91.49%** over the 91 ratchet,
+**Last verified:** 2026-08-02, **V0.9.0 — verification floor, CLOSED**.
+Full `pytest` suite green, ruff green, coverage **91.56%** over the 91 ratchet,
 HTML-id + doc checks green, API contract check green,
 `scripts/marketdata_stress.py` **88/88** offline,
-`scripts/chart_check.py` green, `scripts/marketdata_check.py` **46/46**,
+`scripts/chart_check.py` **65/65**, `scripts/marketdata_check.py` **46/46**,
 `scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
 and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
@@ -40,22 +40,40 @@ every automated check in the project.
 
 ## Current phase
 
-**V0.9.0 — verification floor.** Seven of nine commits delivered. The
-milestone adds no features and changes no trading behaviour; it makes the
-build reproducible, the update path verifiable and the CI gate meaningful, so
-that the refactoring milestones after it (V0.9.1 – V0.9.5) can be trusted.
+**V0.9.0 — verification floor. CLOSED 2026-08-02**, 11 commits
+(`2707a01`…`e403da6`). The milestone adds no features and changes no trading
+behaviour; it makes the build reproducible, the update path verifiable and the
+CI gate meaningful, so that the refactoring milestones after it
+(V0.9.1 – V0.9.5) can be trusted.
 
 Delivered: the version constant reconciled with the released code (C1); a
 dependency lockfile applied to CI *and* the release path (C2); ruff with a
 narrow rule set and a documented 573-item backlog (C3); coverage measured at
 **91.49%** and ratcheted (C4); the API contract check wired after three
 milestones of never running, plus a test banning orphaned gate scripts (C5); a
-two-platform CI matrix with Windows canonical (C6); and build artifacts
-untracked with the documentation reconciled (C7).
+two-platform CI matrix with Windows canonical (C6); build artifacts untracked
+with the documentation reconciled (C7); SHA-256 checksums published per release
+and enforced by the updater (C8); and client-side Authenticode verification —
+a WinVerifyTrust verdict at the updater's OS boundary (C9-1) behind a
+four-state policy in the validation gate (C9-2).
 
-Remaining: SHA-256 checksum publication and verification (C8), and Authenticode
-signing (C9), which is blocked on certificate procurement rather than on
-engineering.
+**Deferred by business decision, not incomplete:** C9-3 and C9-4, the
+release-side signing pipeline and its operational documentation. Signing
+production builds requires a purchased certificate and OptionsPilot is not yet
+in public distribution, so it buys nothing today. The client half is complete
+and enforcing; an *absent* signature is deliberately tolerated, so unsigned
+releases install exactly as before and this can sit deferred indefinitely
+without regression. Rationale, revisit trigger and the one hard ordering
+constraint: `ROADMAP.md` ▸ Deferred.
+
+**One item omitted rather than deferred:** `pip-audit` and Dependabot appear in
+finding H-4's definition of done and never got a commit. Small, unblocked,
+tracked in `TODO.md`.
+
+Consequence to state plainly: the milestone's own DoD line *"a tag build
+produces a signed installer plus checksums"* is **knowingly not met** — checksums
+yes, signature no. V0.9.0 closes with that stated exception rather than by
+quietly rewriting the criterion.
 
 Plan of record: the V0.9 Engineering Specification, Revision 2.
 
@@ -391,6 +409,7 @@ V2-6 (journal/improvement dashboard) are not started.
 - Manual/working orders evaluate once per scan cycle against fresh quotes — no intrabar/tick simulation.
 - The coach infers behavioral tags (revenge trading, chased entry) from observable timing patterns, not literal intent.
 - No live-broker implementation exists anywhere — this is the core safety property of the system, not a gap to close casually (see `CLAUDE.md`).
+- **Releases are not Authenticode-signed**, so Windows SmartScreen warns on download and the UAC prompt names an unknown publisher. Deferred by business decision while the app is not publicly distributed (`ROADMAP.md` ▸ Deferred). Download integrity is covered independently by the SHA-256 manifest published with every release since V0.9.0-C8; the updater *does* verify signatures and refuses an invalid one, it simply never sees a valid one to prefer.
 
 ## Known bugs
 
@@ -482,33 +501,40 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. **Review V0.6.0, V0.6.1 + V0.7.0 and decide on the commits.** None of the
-   three is committed. `docs/TRADING_INTELLIGENCE.md`, `docs/ONBOARDING.md` and
-   `docs/ARCHITECTURE-PLATFORM.md` are the review documents.
-2. **Contract hardening** (`ARCHITECTURE-MOBILE.md` §18 items 1-3, 6): `/api/v1`
-   aliases, a normalized error envelope, idempotency keys on mutating endpoints,
-   and the WebSocket envelope. Cheap now; expensive once any client exists that
-   cannot update in lockstep.
-2. **User review of the `v3-ui` branch** — seven milestones (V3-0…V3-6)
-   are committed there and verified; merging to `main` is the user's call.
-3. Remaining `ROADMAP-V3-UX.md` items not yet built: notification center
-   with persistence (H5), chart↔chain cross-links (N2), toast stacking
-   (N4) — plus everything under "Long-term ideas."
-3. Then the standing scope decision: V2-5 (replay engine), V2-6
-   (journal/improvement dashboard), the deferred V2-4 workspace layout,
-   or pausing feature work to accumulate paper-trading data.
-4. Exe rebuild + smoke test — deferred until the V3 branch is approved.
-5. Hygiene backlog: see `TODO.md` (deep per-flow browser regression
-   tests, CI, linting — all recommended, none installed).
+1. **Begin V0.9.1 — runtime & thread ownership.** The next milestone, and a
+   blocking one: it must land before the V0.9.2 service extraction, or every
+   service that owns background work gets extracted against a broken ownership
+   model and needs redoing. Not started. See `NEXT_SESSION.md`.
+2. **Decide where `pip-audit` + Dependabot go** — V0.9.0 scope that never got a
+   commit. Fold into V0.9.1's first commit, or run it standalone first.
+3. **User review of the uncommitted milestones.** V0.6.0, V0.6.1 and V0.7.0 are
+   built and verified but not committed; `docs/TRADING_INTELLIGENCE.md`,
+   `docs/ONBOARDING.md` and `docs/ARCHITECTURE-PLATFORM.md` are the review
+   documents. The `v3-ui` branch merge to `main` is the same kind of call.
+4. **Remaining `ROADMAP-V3-UX.md` items**: notification centre with persistence
+   (H5), chart↔chain cross-links (N2), toast stacking (N4).
+5. **The standing scope decision** once V0.9 completes: V2-5 (replay engine),
+   V2-6 (journal/improvement dashboard), the deferred V2-4 workspace layout, or
+   pausing feature work to accumulate paper-trading data.
+6. Exe rebuild + smoke test — deferred until the V3 branch is approved.
 
 ## Next milestone
 
-**Authenticode code signing** (of the setup + app exe, plus signature
-verification in `update/validation.py`) is the natural follow-up to the
-auto-updater — it removes SmartScreen warnings and closes the updater's last
-security gap. After that: whichever of V2-5 / V2-6 / workspace-layout the user
-selects. See `ROADMAP.md` for scope detail, `NEXT_SESSION.md` for the immediate
-handoff, and `AUTO_UPDATER.md` §8 for the updater's own future work.
+**V0.9.1 — Runtime & thread ownership.** Make `BackgroundRuntime` genuinely the
+one lifecycle owner, so pause, resume, shutdown and health reporting describe
+reality: work lanes plus a worker pool so a long scan cannot starve a short
+periodic task, stray threads brought under the runtime, the dead `_loop` /
+tracemalloc monitor / startup HTTP poll deleted, a single-entry `exit()` guard,
+and a `DesktopApplication` assertable without a GUI. Estimate 8–10 days, 11
+commits. Concurrency defects are non-deterministic, so the exit criterion is a
+30-minute soak, **not** a green suite.
+
+Then V0.9.2 (complete the service extraction) and V0.9.3 (a real API v1).
+Scope detail: the V0.9 Engineering Specification, Revision 2, and `ROADMAP.md`.
+
+**Not next:** Authenticode signing of releases. It was the natural follow-up to
+the auto-updater and the client half now ships, but the release half is deferred
+by business decision — see `ROADMAP.md` ▸ Deferred.
 
 ## Test count
 

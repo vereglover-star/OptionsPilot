@@ -4,6 +4,72 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-02 — V0.9.0: the verification floor
+
+*11 commits (`2707a01`…`e403da6`), 2026-07-30 → 2026-08-02. 2065 → 2158 tests
+(+93). No feature, no trading-behaviour change, no new runtime dependency.*
+
+A milestone about whether this project's own claims can be trusted. Every
+milestone after it — V0.9.1 through V0.9.5 — is a refactor of live code, and a
+refactor is only as safe as the evidence that it changed nothing. V0.9.0 built
+that evidence.
+
+**What was actually wrong.** The version constant said `0.6.0` while the code
+had shipped as V0.8.2 — four releases in a row of a number nobody checked,
+because the release workflow compared the *tag* to the *constant* and nothing
+compared either to the prose. Dependencies were unpinned on the release path, so
+two builds of the same tag were not the same software. Coverage had never been
+measured, in a codebase with 2,000 tests. `scripts/api_contract_check.py` had
+been written three milestones earlier and **never once run** — no workflow, no
+script, no wrapper called it. CI ran on Windows only, against a platform
+abstraction whose entire purpose is portability. 3,238 build artifacts were
+tracked in git, 96 MB per clone. And an update was verified against *the size
+GitHub reported for the asset*.
+
+**Delivered:** the version reconciled and a docs-version gate added (C1, C7); a
+dependency lockfile applied to CI and the release path (C2); ruff with a narrow
+rule set and a documented 573-item backlog (C3); coverage measured at 91.49% and
+ratcheted (C4); the API contract check wired, plus a test that fails if any
+`scripts/*_check.py` has no caller — the orphan *class*, not just the instance
+(C5); a two-platform CI matrix with Windows canonical and coverage enforced only
+there (C6); build artifacts untracked and the documentation reconciled (C7);
+SHA-256 checksums published per release and verified by the updater, with
+`Assurance` reporting *how* a file was checked rather than only whether (C8);
+and Authenticode verification on the client — a WinVerifyTrust verdict at the
+updater's OS boundary (C9-1) enforced by a four-state policy in the validation
+gate (C9-2).
+
+**Two specification corrections came out of implementation, not review.** The
+C9 plan called for `signtool verify` on the client; signtool ships with the
+Windows SDK, which no end user has, so that check would have returned "cannot
+determine" on every real machine — present in the code, inert in production.
+It uses `wintrust.dll` instead, the API signtool itself calls. And the plan's
+`bool | None` verdict could not express its own Phase 1 policy: *unsigned* and
+*invalid* had to be separable, because every release before V0.9.0 is unsigned
+and refusing those would strand every existing installation behind an update
+they could no longer install. `SignatureVerdict` is four-valued. C8's own
+backward-compatibility test is what caught it.
+
+**Deliberately deferred: C9-3 and C9-4, the release-side signing.** Signing
+production builds requires a purchased code-signing certificate, and OptionsPilot
+is not yet entering public distribution. This is a business decision, not
+unfinished engineering — the client-side half is complete, tested and shipping
+inert, and the release pipeline work is a day once a certificate exists. See
+`docs/ROADMAP.md` ▸ Deferred.
+
+**Also fixed:** `scripts/chart_check.py` had begun failing at its history
+scroll-back, taking `verify.ps1` red. Not a chart defect — the test raced the
+viewport guard, and because `chCanLoadHistory` is consulted only from the
+range-change callback, a settled range emits no further event and the missed
+trigger never returns. A real scroll emits a stream of events and cannot hit it.
+
+**Not done, and not deferred:** `pip-audit` and Dependabot are named in the
+milestone's own definition of done and never received a commit. That is an
+omission, tracked in `docs/TODO.md`.
+
+Verified: 2158 tests, ruff green, coverage 91.56%, `verify.ps1` PASS across all
+13 gates.
+
 ## [Uncommitted] 2026-07-30 — V0.8.2 hotfix: the tray icon never appeared
 
 *+23 tests. One line of behaviour, one line of cause.*

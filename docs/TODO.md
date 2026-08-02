@@ -5,6 +5,44 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [x] **V0.9.0 — the verification floor** — done 2026-08-02, 11 commits
+      (`2707a01`…`e403da6`), 2065 → 2158 in the suite. Version constant
+      reconciled + a docs-version gate; dependency lockfile on CI and the
+      release path; ruff; coverage measured (91.49%) and ratcheted; the API
+      contract check wired after three milestones of never running, plus a ban
+      on orphaned gate scripts; a two-platform CI matrix; 3,238 build artifacts
+      untracked; SHA-256 checksums published and enforced; client-side
+      Authenticode verification. **C9-3/C9-4 deferred by business decision** —
+      see "Deferred by user decision" below.
+
+- [ ] **Start V0.9.1 — runtime & thread ownership.** The next milestone and a
+      blocking one: it must land before the V0.9.2 service extraction or every
+      service owning background work gets extracted against a broken ownership
+      model. Work lanes + worker pool, stray threads brought under the runtime,
+      dead `_loop` / tracemalloc monitor / startup HTTP poll deleted, a
+      single-entry `exit()` guard, a GUI-free-assertable `DesktopApplication`.
+      Write the failing responsiveness test FIRST; the exit criterion is a
+      30-minute soak, not a green suite. 8–10 days, 11 commits.
+
+- [ ] **Add `pip-audit` and Dependabot.** Named in V0.9.0 finding H-4's
+      definition of done and never given a commit — an **omission, not a
+      deferral**, and it should not be allowed to hide inside the C9 deferral.
+      Small and unblocked: fold into V0.9.1's first commit or run it standalone
+      first.
+
+- [ ] **Fix `CandleCache.close()`'s duplicate definition**
+      (`optionspilot/data/cache.py:631`). Two `close` methods; Python keeps the
+      last, so the live one is the *less* careful of the two — the earlier one
+      also sets `self._conn = None`. Deliberately left in place during V0.9.0
+      to avoid scope creep, with a comment marking it. Candidate fold-in for
+      V0.9.1.
+
+- [ ] **Render the update `assurance` level in the UI.** `apply_update` returns
+      `signature_verified` / `hash_verified` / `size_only`, `index.html` reads
+      none of it, and `docs/AUTO_UPDATER.md` §5.1 claims "the UI says so" for
+      the degraded case. The claim is not implemented. Pre-existing since
+      V0.9.0-C8 and widened by C9-2, which added a fourth level nothing renders.
+
 - [ ] **Click the X button on a real desktop, once.** The only thing the V0.8.2
       audit could not cover. The deadlock was reproduced and verified fixed
       against the real stack with a real `WM_CLOSE` (old: pump dead 40s, window
@@ -410,6 +448,24 @@ is. This file is the flat, actionable checklist version.
       an explicit user decision. See `ROADMAP-V2.md`.
 
 ## Deferred by user decision
+
+- [ ] **Authenticode signing of release builds (V0.9.0-C9-3, C9-4)** — deferred
+      2026-08-02. **A business decision, not unfinished engineering.** Signing
+      needs a *purchased* certificate whose key must live on certified hardware
+      or in a cloud signing service, and OptionsPilot is not entering public
+      distribution — so it buys nothing today beyond removing a SmartScreen
+      warning shown to downloaders who do not exist. The client half shipped
+      complete in C9-1/C9-2 and is enforcing now; an absent signature is
+      deliberately tolerated, so nothing regresses by leaving this indefinitely.
+      Remaining work is release-side only (`release.yml`, the `SignTool=` line
+      already commented at `installer/OptionsPilot.iss:75`, and docs) — roughly
+      one engineering day, fully planned.
+      **Revisit when: a decision to distribute publicly.** Read the C9
+      implementation plan §1 *before purchasing* — the certificate type
+      determines the CI design. Two constraints to carry forward:
+      **`SHA256SUMS` must be generated AFTER signing** (signing changes the
+      bytes and C8 enforces that manifest), and `REQUIRE_SIGNATURE` must stay
+      `False` while releases are unsigned or every build becomes uninstallable.
 
 - [x] **Downloaded release crashed on launch (V0.3.5)** — done 2026-07-22:
       a GitHub-downloaded, Explorer-extracted release died with

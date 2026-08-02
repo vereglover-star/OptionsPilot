@@ -9,6 +9,25 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### V0.9.0 — Verification floor (2026-08-02, committed `2707a01`…`e403da6`)
+
+The milestone that makes the rest of V0.9 trustworthy. Every milestone after it
+refactors live code, and a refactor is only as safe as the evidence that it
+changed nothing — so this one built the evidence rather than a feature. The
+version constant reconciled with the shipped code and a docs-version gate added;
+a dependency lockfile applied to CI *and* the release path; ruff with a narrow
+rule set over a documented 573-item backlog; coverage measured for the first
+time (91.49%) and ratcheted; the API contract check wired after three milestones
+of never being called by anything, plus a test that bans the orphan *class*; a
+two-platform CI matrix with Windows canonical; 3,238 build artifacts untracked;
+SHA-256 checksums published per release and enforced by the updater, with
+`Assurance` reporting *how* a file was verified rather than only whether; and
+client-side Authenticode verification (WinVerifyTrust at the updater's OS
+boundary, behind a four-state policy in the validation gate). 2065 → 2158 tests.
+No feature, no trading-behaviour change, no new runtime dependency.
+**C9-3/C9-4 deliberately deferred — see Deferred below.** Full detail:
+`CHANGELOG.md`; plan of record: the V0.9 Engineering Specification, Revision 2.
+
 ### V0.6.1 — Intelligent UX & interactive onboarding (2026-07-28, uncommitted)
 
 Software that teaches itself. By V0.6.0 the backend was far more sophisticated
@@ -186,6 +205,17 @@ each browser-verified.
 
 ## In Progress
 
+**Nothing.** V0.9.0 closed on 2026-08-02 with C9-3/C9-4 deliberately deferred
+(above). **V0.9.1 — Runtime & Thread Ownership is the next milestone** and has
+not started; its scope, commit sequence and acceptance criteria are in the V0.9
+Engineering Specification, Revision 2. See `NEXT_SESSION.md`.
+
+One item from V0.9.0's own definition of done was **omitted rather than
+deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never
+received a commit. It is small and unblocked — tracked in `TODO.md`, and the
+honest options are to fold it into V0.9.1's first commit or run it as a
+standalone one first.
+
 **V0.6.0, V0.6.1 and V0.7.0 are all built, verified and uncommitted, awaiting
 the user's review.** V0.7.0 (platform foundation) is the most recent: the
 application layer was extracted out of `ui/server.py` into
@@ -206,8 +236,25 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
-Listed in the order they appear in `ROADMAP-V2.md`; no priority is implied
-beyond that ordering. Which one comes next is the user's call.
+### V0.9.1 — Runtime & thread ownership (next)
+
+Make `BackgroundRuntime` genuinely the one lifecycle owner, so pause, resume,
+shutdown and health reporting describe reality rather than intent. Scope: work
+lanes plus a worker pool so a long scan cannot starve a short periodic task;
+stray threads brought under the runtime; the dead `_loop`, the tracemalloc
+monitor and the startup HTTP poll deleted; a single-entry `exit()` guard; and a
+`DesktopApplication` whose wiring is assertable without a GUI. Sequenced
+*before* the service extraction on purpose — a service that owns background work
+would otherwise be extracted against a broken ownership model and need redoing.
+Out of scope: uvicorn/tray/`_defer` plumbing, orchestrator thread-safety, and
+scan logic itself. Estimate 8–10 days, 11 commits. Concurrency defects are
+non-deterministic, so a soak run — not a green suite — is the exit criterion.
+
+---
+
+The V2 phases below are listed in the order they appear in `ROADMAP-V2.md`; no
+priority is implied beyond that ordering. Which one comes next is the user's
+call.
 
 ### V2-5 — Replay engine
 
@@ -244,6 +291,40 @@ feature.
 
 Explicitly considered and pushed out, with the reason recorded so it isn't
 re-litigated by accident:
+
+- **Authenticode signing of release builds (V0.9.0-C9-3 and C9-4)** — deferred
+  **by business decision, 2026-08-02. This is not unfinished engineering.**
+  Signing production builds requires a *purchased* code-signing certificate, and
+  since the CA/Browser Forum tightened its baseline requirements the private key
+  for a publicly-trusted certificate must live on certified hardware or in a
+  cloud signing service — so the cost is a recurring subscription plus a CI
+  design committed to whichever provider is chosen. **OptionsPilot is not yet
+  entering public distribution**, so that spend buys nothing today: the only
+  thing a signature removes is the SmartScreen warning shown to users who
+  download the installer, and there are none.
+
+  What this does *not* mean: the work is not half-done and nothing is left in a
+  broken state. The **client half shipped complete** in C9-1 and C9-2 — the
+  updater asks Windows about every downloaded installer's signature and refuses
+  one that is present and invalid, today, on every install. It is deliberately
+  additive: an *absent* signature is tolerated (Phase 1), so unsigned releases
+  install exactly as they always have and nothing regresses by leaving this
+  deferred indefinitely. Integrity is independently covered by the SHA-256
+  manifest from C8.
+
+  What remains is release-side only — signing steps in `release.yml`, the
+  `SignTool=` line already sitting commented in `installer/OptionsPilot.iss:75`,
+  and the operational documentation. Roughly one engineering day, fully planned.
+  **Trigger to revisit: a decision to distribute publicly.** At that point read
+  the C9 implementation plan §1 *before* purchasing anything — the certificate
+  type determines the CI design, and the common tutorial advice (a `.pfx` in a
+  GitHub secret) is no longer permitted for a publicly-trusted certificate. The
+  one hard constraint to carry forward: **`SHA256SUMS` must be generated after
+  signing**, because signing changes the bytes and C8 now enforces that manifest.
+
+  Phase 2 of the client policy (`REQUIRE_SIGNATURE = True`, planned for
+  V0.9.3-C12) is deferred with it and **must not** be enabled while releases are
+  unsigned — it would make every build uninstallable.
 
 - **Stock/share (non-option) manual positions** — deferred from V2-2. Would
   need a new "stock leg" position shape and touch `broker/orders.py`,
