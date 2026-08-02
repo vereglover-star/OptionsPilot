@@ -150,6 +150,124 @@ class TestCheckScriptsAreWired:
         assert not broken, "callers reference missing scripts: " + ", ".join(broken)
 
 
+class TestSkipsAreExplained:
+    """Every test excluded from a run must say why, in the source.
+
+    V0.9.0-C6 put the suite on a second operating system. The cheapest way to
+    make a red Ubuntu leg go green is to skip whatever failed, and the
+    difference between "skipped because Windows owns the registry" and
+    "skipped because I could not work out why it broke" is invisible six
+    months later unless it was written down at the time.
+
+    So a bare `pytest.skip()` or a `skipif` without a reason fails the suite.
+    This is not vacuous today: three real `pytest.skip(...)` calls in
+    tests/test_host.py already carry messages, and they are what this asserts
+    against.
+    """
+
+    @staticmethod
+    def _test_modules() -> list[Path]:
+        return sorted((ROOT / "tests").glob("test_*.py"))
+
+    def test_there_are_test_modules_to_inspect(self):
+        """Guards the guard — a glob matching nothing would pass everything."""
+        assert len(self._test_modules()) > 50
+
+    def test_every_runtime_skip_states_a_reason(self):
+        """`pytest.skip()` with no message tells a future reader nothing."""
+        import ast
+
+        offenders = []
+        for path in self._test_modules():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                is_skip = (
+                    (isinstance(func, ast.Attribute) and func.attr == "skip"
+                     and isinstance(func.value, ast.Name) and func.value.id == "pytest")
+                )
+                if not is_skip:
+                    continue
+                positional = node.args
+                reason_kw = [k for k in node.keywords if k.arg == "reason"]
+                if not positional and not reason_kw:
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert not offenders, (
+            "pytest.skip() with no reason — state why the test cannot run: "
+            + ", ".join(offenders))
+
+    def test_every_skipif_states_a_reason(self):
+        """`@pytest.mark.skipif(cond)` silently drops a test on some machines.
+
+        None exist today. The assertion is deliberately written now, while the
+        count is zero, because the moment one is added is the moment it is
+        cheapest to require an explanation — and that moment is the first red
+        Ubuntu run, when the temptation is highest.
+        """
+        import ast
+
+        offenders = []
+        for path in self._test_modules():
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                if not (isinstance(func, ast.Attribute) and func.attr == "skipif"):
+                    continue
+                if not any(k.arg == "reason" for k in node.keywords):
+                    offenders.append(f"{path.name}:{node.lineno}")
+        assert not offenders, (
+            "@pytest.mark.skipif without reason= — an unexplained platform "
+            "exclusion is indistinguishable from a bug someone gave up on: "
+            + ", ".join(offenders))
+
+
+class TestCIMatrix:
+    """The portability guarantee is the matrix; assert it exists.
+
+    `optionspilot/host/` and the `sys.platform` ban in test_architecture.py
+    only mean something if some machine actually runs this code somewhere
+    other than Windows. Deleting the Ubuntu leg would silently retire that
+    guarantee while every test still passed.
+    """
+
+    @staticmethod
+    def _ci() -> dict:
+        import yaml  # PyYAML is a hard project dependency
+        return yaml.safe_load(
+            (WORKFLOWS / "ci.yml").read_text(encoding="utf-8"))
+
+    def test_suite_runs_on_windows_and_linux(self):
+        matrix = self._ci()["jobs"]["test"]["strategy"]["matrix"]["os"]
+        assert "windows-latest" in matrix, "Windows is the canonical baseline"
+        assert "ubuntu-latest" in matrix, (
+            "the Linux leg is the only thing verifying that host/ and "
+            "core/paths.py are actually portable")
+
+    def test_matrix_does_not_fail_fast(self):
+        """A Windows failure and a Linux failure are different information."""
+        assert self._ci()["jobs"]["test"]["strategy"]["fail-fast"] is False
+
+    def test_coverage_ratchet_is_enforced_on_windows_only(self):
+        """The 91% baseline was measured on Windows and is meaningful there.
+
+        Enforcing it on Linux, where the tray/toast/webview paths cannot run,
+        would fail that leg on coverage rather than on a defect — and the
+        usual repair is to lower the threshold for everyone, discarding the
+        Windows guarantee as collateral.
+        """
+        steps = self._ci()["jobs"]["test"]["steps"]
+        enforcing = [s for s in steps
+                     if "pytest --cov" in str(s.get("run", ""))
+                     and "--cov-fail-under=0" not in str(s.get("run", ""))]
+        assert len(enforcing) == 1, "exactly one leg may enforce the ratchet"
+        assert "windows-latest" in str(enforcing[0].get("if", "")), (
+            "the enforcing leg must be Windows")
+
+
 class TestDependencyLock:
     """The lock and pyproject.toml must never disagree.
 

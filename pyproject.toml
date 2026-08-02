@@ -118,6 +118,15 @@ skip_covered = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Registered so `--strict-markers` can be turned on later without a sweep, and
+# so a typo'd marker is a name nobody recognises rather than a silent no-op.
+# `windows_only` exists to make a platform exclusion GREPPABLE: the CI matrix
+# added in V0.9.0-C6 runs the whole suite on Linux, and the honest way to
+# exclude something is a marker carrying a reason, never a quiet deletion.
+# tests/test_release_tooling.py::TestSkipsAreExplained enforces the reason.
+markers = [
+    "windows_only: requires Windows (state the reason in the marker)",
+]
 # `--cov` is deliberately NOT here. Coverage adds ~30s to a ~95s suite, and
 # taxing every local `pytest` run would push developers toward running the
 # tests less often — a bad trade for a number only the gate needs. CI passes

@@ -19,8 +19,26 @@ concurrency:
 
 jobs:
   test:
-    name: Test & selftest (Windows)
-    runs-on: windows-latest
+    name: Test & selftest (${{ matrix.os }})
+    # V0.9.0-C6. V0.7.0 built `optionspilot/host/` with capability profiles for
+    # targets that do not exist yet, and tests/test_architecture.py forbids
+    # `sys.platform` branching outside two files — all so a non-Windows host
+    # stays possible. None of it was verified anywhere: a WindowsPath
+    # assumption or a `winreg` import leaking upward would have merged green.
+    # The abstraction was being maintained on faith. This matrix is what turns
+    # that faith into a check.
+    #
+    # Windows remains the CANONICAL baseline: it is what ships, it is where the
+    # coverage ratchet is enforced, and it is the only leg that builds an exe.
+    # Ubuntu answers one question — does this code still run somewhere that is
+    # not Windows — and nothing else.
+    strategy:
+      # Never cancel one leg because the other failed. A Windows failure and a
+      # Linux failure are different pieces of information and we want both.
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,9 +46,16 @@ jobs:
       # anyway, but this makes the selftest's storage init self-contained.
       # Set here (not in job-level env:) because the `runner` context isn't
       # available at workflow-parse time; $GITHUB_ENV exports it to all steps.
+      #
+      # `Join-Path` rather than the previous "$env:RUNNER_TEMP\OptionsPilot":
+      # a hardcoded backslash is a path separator on Windows and an ordinary
+      # FILENAME CHARACTER on Linux, so the literal version would have created
+      # a single directory called "...\OptionsPilot" on the Ubuntu leg. It
+      # would not have failed loudly — AppPaths would have used it — which is
+      # exactly the class of portability bug this matrix exists to surface.
       - name: Configure storage root
         shell: pwsh
-        run: '"OPTIONSPILOT_HOME=$env:RUNNER_TEMP\OptionsPilot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
+        run: '"OPTIONSPILOT_HOME=$(Join-Path $env:RUNNER_TEMP ''OptionsPilot'')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -64,15 +89,31 @@ jobs:
       # signal, and it is only meaningful if it runs on every change. A drop
       # below the recorded baseline fails the build.
       - name: Run test suite (with coverage ratchet)
+        if: matrix.os == 'windows-latest'
         run: pytest --cov --cov-report=term --cov-report=xml
+
+      # Same suite, ratchet DISABLED rather than lowered. The 91% baseline was
+      # measured on Windows, and ~408 statements in ui/desktop.py, ui/tray.py
+      # and notify/desktop.py are Windows-only paths that cannot execute here.
+      # Enforcing the Windows number on Linux would fail this leg on coverage
+      # instead of on a defect, and a gate that fires for the wrong reason gets
+      # ignored or weakened — usually by lowering the threshold for everyone,
+      # which would quietly discard the Windows guarantee too.
+      #
+      # Coverage is still COLLECTED and printed, so the Linux figure is visible
+      # and can become its own baseline later; it is simply not a gate today.
+      - name: Run test suite (portability, coverage reported not enforced)
+        if: matrix.os != 'windows-latest'
+        run: pytest --cov --cov-report=term --cov-report=xml --cov-fail-under=0
 
       # Kept even when the suite fails: a coverage drop is far easier to
       # diagnose from the report than from the one-line fail_under message.
+      # Per-OS artifact name — a shared name collides across matrix legs.
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-${{ github.run_id }}
+          name: coverage-${{ matrix.os }}-${{ github.run_id }}
           path: coverage.xml
           if-no-files-found: warn
 
