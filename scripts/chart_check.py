@@ -461,6 +461,21 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
 
             # 10. historical scroll-back prepends older bars
             wait_loaded("QQQ", "1d")
+            # `wait_loaded` waits for DATA, not for the viewport move the render
+            # schedules behind it. Setting a range below while that move is still
+            # in flight makes `chCanLoadHistory` refuse — correctly, because
+            # `CH.restoringViewport` is the guard that stops a programmatic move
+            # being read as a user pan and firing a spurious history fetch.
+            # The refusal is PERMANENT, though: the condition is only ever
+            # consulted from the range-change callback, and a range that has
+            # settled emits no further event, so a single discrete jump landing
+            # inside the guard window is missed forever. Measured here: the
+            # guard read 1 with the old viewport still applied, then cleared
+            # with `chCanLoadHistory` true and nothing left to ask it. A real
+            # scroll emits a stream of events and cannot hit this; only a
+            # synthetic one-shot move can, which is why it is the test that
+            # needs the wait and not the application that needs a poll.
+            page.wait_for_function("() => CH.restoringViewport === 0", timeout=15000)
             oldest_before = page.evaluate("() => CH.data.candles[0].time")
             count_before = page.evaluate("() => CH.data.candles.length")
             page.evaluate("() => { CH.historyArmed = true; "
