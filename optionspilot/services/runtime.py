@@ -33,13 +33,32 @@ with each other, up to the pool bound — `market_monitor` and `symbol_metadata`
 share nothing and both block on the network, so serialising them would silently
 turn the second one's interval into the first one's duration plus its own.
 
-Pause and stop semantics for in-flight worker tasks are stated informally below
-and made executable in V0.9.1-C4 (Decision D-2): pause prevents *dispatch* and
-lets in-flight work finish, because interrupting a stateful cycle mid-flight
-risks inconsistent broker state. ``stop`` cancels queued work and waits for
-in-flight work within the caller's timeout — shutdown stays bounded, which
-means a long scan can be left running on a daemon thread rather than delaying
-exit.
+Pause, resume and stop (V0.9.1-C4, Decision D-2)
+------------------------------------------------
+``pause()`` **prevents dispatch and does not interrupt anything.** A worker
+task already inside its callback runs to completion. This is a deliberate
+choice rather than a limitation: `market_monitor` runs a stateful cycle that
+places trades, and tearing that down mid-flight would leave broker state
+agreeing with nothing. Nothing new is dispatched in either lane while paused.
+
+The consequence is that **pause is not instantaneous**, so the state has to be
+reportable rather than assumed. :attr:`RuntimeSnapshot.pause_pending` is true
+while the runtime is paused *and* a worker task is still finishing. A client
+that shows "paused" the moment the request returns is describing its own
+intent, not the system — the honest label while ``pause_pending`` holds is
+something like "finishing current work".
+
+``resume()`` makes every task due immediately, so work restarts promptly rather
+than waiting out the remainder of an interval it slept through.
+
+``stop(timeout)`` is **bounded, and says what it dropped.** It stops the
+coordinator, cancels worker runs that have not started, and waits for in-flight
+ones with whatever remains of the caller's budget. Anything still running when
+that budget expires is *abandoned*: left on a daemon thread so exit is not
+delayed. Abandonment is logged at WARNING **by name** and returned to the
+caller, because a shutdown that silently drops a half-finished cycle is
+indistinguishable from one that completed — and the next person debugging that
+cycle needs to know which task it was.
 """
 
 from __future__ import annotations
@@ -51,6 +70,9 @@ from concurrent.futures import wait as futures_wait
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
+from optionspilot.core.logging_setup import get_logger
+
+log = get_logger("services")
 
 PROFILES = ("essential_reduced", "normal", "monitoring_only")
 POLICIES = ("essential", "normal", "monitoring")
@@ -133,11 +155,18 @@ class RuntimeSnapshot:
     started_at: float | None
     health_checks: int
     tasks: list[dict] = field(default_factory=list)
+    #: Paused, but a worker task is still finishing. Pause never interrupts
+    #: (Decision D-2), so "paused" alone describes the request rather than the
+    #: system — a client that wants to be truthful shows "finishing current
+    #: work" while this holds. False when idle, and always False for the
+    #: coordinator lane, which cannot be observed mid-callback from outside.
+    pause_pending: bool = False
 
     def to_dict(self) -> dict:
         return {
             "running": self.running,
             "paused": self.paused,
+            "pause_pending": self.pause_pending,
             "visible": self.visible,
             "profile": self.profile,
             "thread_alive": self.thread_alive,
@@ -238,7 +267,13 @@ class BackgroundRuntime:
                 target=self._run, name="background-runtime", daemon=True)
             self._thread.start()
 
-    def stop(self, timeout: float = 5.0) -> None:
+    def stop(self, timeout: float = 5.0) -> list[str]:
+        """Shut down both lanes within ``timeout``. Returns abandoned task names.
+
+        Bounded by construction — see the module docstring. The return value is
+        the caller's half of the abandonment contract: a host that wants to
+        report "a scan was interrupted by shutdown" can, without parsing a log.
+        """
         with self._lock:
             thread = self._thread
             self._stop.set()
@@ -249,10 +284,11 @@ class BackgroundRuntime:
         # The coordinator is down; drain the pool with whatever budget is left
         # so the total cost of stop() stays inside the caller's timeout rather
         # than becoming the coordinator's join PLUS the pool's.
-        self._shutdown_pool(max(0.0, deadline - self._clock()))
+        abandoned = self._shutdown_pool(max(0.0, deadline - self._clock()))
         with self._lock:
             if self._thread is thread and (thread is None or not thread.is_alive()):
                 self._thread = None
+        return abandoned
 
     def pause(self) -> None:
         with self._lock:
@@ -299,6 +335,8 @@ class BackgroundRuntime:
             return RuntimeSnapshot(
                 running=bool(thread and thread.is_alive()),
                 paused=self._paused,
+                pause_pending=self._paused and any(
+                    task.running for task in self._tasks.values()),
                 visible=self._visible,
                 profile=self._profile,
                 thread_alive=bool(thread and thread.is_alive()),
@@ -395,7 +433,12 @@ class BackgroundRuntime:
             if task.queued or task.running:
                 task.skipped += 1
                 return
-            if self._stop.is_set():
+            # Pause and stop are enforced at the due-collection step above, so
+            # neither is reachable here today. Checked anyway: the next caller
+            # of _dispatch will be a manual trigger or a lane conversion (C5,
+            # C6), and a guarantee that only holds because of where it happens
+            # to be called from is one the second caller silently breaks.
+            if self._stop.is_set() or self._paused:
                 return
             if self._pool is None:
                 self._pool = ThreadPoolExecutor(
@@ -430,14 +473,17 @@ class BackgroundRuntime:
             with self._lock:
                 task.running = False
 
-    def _shutdown_pool(self, timeout: float) -> None:
+    def _shutdown_pool(self, timeout: float) -> list[str]:
         """Cancel queued worker runs and wait, bounded, for in-flight ones.
 
         Bounded is the requirement: an in-flight scan can outlast any sensible
         shutdown budget, and a shell that ghosts an unresponsive window does
-        not care why. Anything still running is left on a daemon thread rather
-        than delaying exit. V0.9.1-C4 formalises the semantics and logs the
-        abandonment by name.
+        not care why. Anything still running when the budget expires is left on
+        a daemon thread rather than delaying exit — and named, here, because a
+        shutdown that silently drops a half-finished cycle looks exactly like
+        one that completed.
+
+        Returns the names of tasks abandoned this way.
         """
         with self._lock:
             pool, self._pool = self._pool, None
@@ -445,10 +491,23 @@ class BackgroundRuntime:
             for task in self._tasks.values():
                 task.queued = False
         if pool is None:
-            return
+            return []
         pool.shutdown(wait=False, cancel_futures=True)
         if pending and timeout > 0:
             futures_wait(pending, timeout=timeout)
+        # Read the task flags rather than the futures: `running` is what the
+        # worker body actually maintains, so a future still pending because it
+        # was cancelled before starting is correctly NOT reported as abandoned.
+        with self._lock:
+            abandoned = sorted(task.name for task in self._tasks.values()
+                               if task.running)
+        if abandoned:
+            log.warning(
+                "background runtime shutdown abandoned %d in-flight task(s) "
+                "after %.1fs: %s — they are daemon threads and will finish "
+                "without blocking exit",
+                len(abandoned), max(0.0, timeout), ", ".join(abandoned))
+        return abandoned
 
     def _wait_time(self) -> float:
         with self._lock:

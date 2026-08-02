@@ -413,6 +413,209 @@ class TestLanes:
             BackgroundRuntime(max_workers=0)
 
 
+class TestPauseAndStopSemantics:
+    """V0.9.1-C4: Decision D-2 made executable.
+
+    Pause **prevents dispatch** and lets in-flight work finish. It does not
+    interrupt a running worker task, because `market_monitor` runs a stateful
+    cycle that places trades — tearing that down mid-flight risks broker state
+    that agrees with nothing. The consequence is that pause is *not
+    instantaneous*, and something has to say so: a user who clicks Pause and
+    watches a scan keep running needs to see "finishing current work", not a
+    UI that claims it already stopped.
+
+    Stop stays **bounded**. A scan can outlast any sensible shutdown budget and
+    the shell will ghost an unresponsive window regardless, so anything still
+    running when the budget expires is abandoned on a daemon thread — but it is
+    abandoned *by name*, in the log, because a shutdown that silently drops
+    work is indistinguishable from one that completed.
+    """
+
+    def test_pause_prevents_new_worker_dispatch(self):
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("w", 0.01, lambda: runs.append(1), lane="worker"))
+        runtime.start()
+        try:
+            assert _settle(lambda: len(runs) > 0)
+            runtime.pause()
+            settled = len(runs)
+            time.sleep(0.2)
+            assert len(runs) == settled, (
+                f"{len(runs) - settled} worker runs dispatched while paused")
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_pause_lets_an_in_flight_worker_task_finish(self):
+        """D-2's core claim. Interrupting a stateful cycle is the unsafe option."""
+        entered = threading.Event()
+        release = threading.Event()
+        completed = threading.Event()
+
+        def slow():
+            entered.set()
+            release.wait(SETTLE * 2)
+            completed.set()
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("slow", 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            runtime.pause()
+            assert not completed.is_set(), "pause interrupted a running task"
+            release.set()
+            assert completed.wait(SETTLE), "pause prevented an in-flight task finishing"
+            assert _settle(lambda: not _task_row(runtime, "slow")["running"])
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_the_snapshot_says_when_a_pause_is_not_yet_complete(self):
+        """Pause is not instantaneous, so the state has to be reportable.
+
+        Without this a UI can only show "paused" the instant the request is
+        made, which is a claim about intent presented as a claim about fact.
+        """
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow():
+            entered.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("slow", 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            assert runtime.snapshot().pause_pending is False, (
+                "nothing is pausing yet")
+            runtime.pause()
+            snap = runtime.snapshot()
+            assert snap.paused is True
+            assert snap.pause_pending is True, (
+                "paused with a task still running, but the snapshot reports "
+                "the pause as complete")
+            release.set()
+            assert _settle(lambda: runtime.snapshot().pause_pending is False), (
+                "the pause never settled once the task finished")
+            assert runtime.snapshot().paused is True
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_pause_pending_is_false_for_a_coordinator_task(self):
+        """The coordinator runs inline, so a pause observed from outside is
+        always already complete for that lane."""
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("c", 0.01, lambda: None))
+        runtime.start()
+        try:
+            assert _settle(lambda: _task_row(runtime, "c")["runs"] > 0)
+            runtime.pause()
+            assert runtime.snapshot().pause_pending is False
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_resume_after_a_pause_dispatches_again(self):
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("w", 0.01, lambda: runs.append(1), lane="worker"))
+        runtime.start()
+        try:
+            assert _settle(lambda: len(runs) > 0)
+            runtime.pause()
+            time.sleep(0.1)
+            settled = len(runs)
+            runtime.resume()
+            assert _settle(lambda: len(runs) > settled)
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_stop_drains_a_worker_that_finishes_inside_the_budget(self):
+        finished = threading.Event()
+
+        def quick():
+            time.sleep(0.05)
+            finished.set()
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("quick", 30.0, quick, lane="worker"))
+        runtime.start()
+        assert _settle(lambda: bool(_task_row(runtime, "quick")["running"]) or
+                       finished.is_set())
+        runtime.stop(timeout=SETTLE)
+        assert finished.is_set(), "stop() did not let a quick task drain"
+        assert not runtime.snapshot().tasks[0]["running"]
+
+    def test_stop_logs_an_abandoned_task_by_name(self, caplog):
+        """A shutdown that silently drops work looks exactly like a clean one.
+
+        The name matters: "a task was abandoned" is not actionable, and the
+        next person debugging a half-finished cycle needs to know which.
+        """
+        entered = threading.Event()
+        release = threading.Event()
+
+        def wedged():
+            entered.set()
+            release.wait(20)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("wedged_scan", 30.0, wedged, lane="worker"))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            with caplog.at_level("WARNING", logger="optionspilot.services"):
+                runtime.stop(timeout=0.2)
+            assert "wedged_scan" in caplog.text, (
+                f"abandonment was not logged by name: {caplog.text!r}")
+            assert "abandon" in caplog.text.lower()
+        finally:
+            release.set()
+
+    def test_a_clean_stop_logs_no_abandonment(self, caplog):
+        """The other direction: a quiet shutdown must stay quiet."""
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("quick", 30.0, lambda: None, lane="worker"))
+        runtime.start()
+        assert _settle(lambda: _task_row(runtime, "quick")["runs"] > 0)
+        with caplog.at_level("WARNING", logger="optionspilot.services"):
+            runtime.stop(timeout=SETTLE)
+        assert "abandon" not in caplog.text.lower(), (
+            f"a clean shutdown reported abandonment: {caplog.text!r}")
+
+    def test_stop_stays_bounded_and_reports_what_it_left(self):
+        release = threading.Event()
+        entered = threading.Event()
+
+        def wedged():
+            entered.set()
+            release.wait(20)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("wedged", 30.0, wedged, lane="worker"))
+        runtime.start()
+        try:
+            assert entered.wait(SETTLE)
+            began = time.monotonic()
+            abandoned = runtime.stop(timeout=0.3)
+            elapsed = time.monotonic() - began
+            assert elapsed < 3.0, f"stop() blocked for {elapsed:.2f}s"
+            assert abandoned == ["wedged"], (
+                f"stop() must return what it abandoned, got {abandoned!r}")
+        finally:
+            release.set()
+
+    def test_stop_returns_an_empty_list_when_nothing_was_abandoned(self):
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("c", 0.01, lambda: None))
+        runtime.start()
+        assert _settle(lambda: _task_row(runtime, "c")["runs"] > 0)
+        assert runtime.stop(timeout=SETTLE) == []
+
+
 def test_runtime_runs_registered_task_once_and_stops_cleanly():
     calls = []
     runtime = BackgroundRuntime(health_interval=60)

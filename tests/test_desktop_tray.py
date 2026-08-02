@@ -110,6 +110,63 @@ def close_from_gui_thread(controller, window, timeout: float = 5.0):
     return verdict
 
 
+class TestPauseIsReportedHonestly:
+    """V0.9.1-C4, Decision D-2's stated consequence.
+
+    Pause does not interrupt a running worker task, so between the click and
+    the scan actually stopping there is a window — potentially a long one, a
+    full watchlist scan — in which "Paused" is a claim about the request and
+    not about the system. The tray is the surface a user checks, and it already
+    reads `background.paused`; it now distinguishes the two.
+    """
+
+    @staticmethod
+    def _controller(background: dict):
+        class _Tray(NullTray):
+            def __init__(self):
+                self.status = None
+
+            def set_status(self, status):
+                self.status = status
+
+            def set_menu(self, items):
+                pass
+
+        class _Srv(_Server):
+            def runtime_payload(self):
+                return {"health": {"state": "healthy"}, "background": background}
+
+        tray = _Tray()
+        return _DesktopController(_Window(), _Srv(), tray), tray
+
+    def test_a_settled_pause_reads_as_paused(self):
+        controller, tray = self._controller(
+            {"paused": True, "pause_pending": False})
+        controller.refresh_tray()
+        assert tray.status.state == "paused"
+        assert "Paused" in tray.status.tooltip
+
+    def test_a_pause_still_finishing_work_does_not_claim_to_be_paused(self):
+        controller, tray = self._controller(
+            {"paused": True, "pause_pending": True})
+        controller.refresh_tray()
+        assert tray.status.state == "pausing", (
+            "a pause with a scan still running reported as complete")
+        assert "Pausing" in tray.status.tooltip
+
+    def test_running_normally_is_unaffected(self):
+        controller, tray = self._controller(
+            {"paused": False, "pause_pending": False})
+        controller.refresh_tray()
+        assert tray.status.state == "healthy"
+
+    def test_a_payload_without_the_field_still_works(self):
+        """Older payloads, and the `_Server` double used across this file."""
+        controller, tray = self._controller({})
+        controller.refresh_tray()
+        assert tray.status.state == "healthy"
+
+
 def test_disabled_tray_close_exits_instead_of_hiding_an_orphan_process():
     window, server, tray = _Window(), _Server(), NullTray()
     controller = _DesktopController(window, server, tray)

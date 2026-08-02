@@ -32,6 +32,19 @@ from optionspilot.orchestrator import Orchestrator
 GROWTH_LIMIT_MB = 30.0   # heap growth allowed between cycle 1 and the last
 
 
+def _wait_until(predicate, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return predicate()
+
+
+def _scan_runs(runtime) -> int:
+    return next(t for t in runtime.snapshot().tasks if t["name"] == "scan")["runs"]
+
+
 def soak_runtime(cfg, minutes: float) -> int:
     """V0.9.1-C3: soak the SCHEDULER, not just the orchestrator.
 
@@ -82,13 +95,46 @@ def soak_runtime(cfg, minutes: float) -> int:
     started = time.monotonic()
     runtime.start()
     worst_gap = 0.0
+    measure_from = started
     triggers = 0
+    pauses = 0
+    pause_violations = 0
+    resume_violations = 0
     try:
         while time.monotonic() < deadline:
             time.sleep(5)
             triggers += 1
             runtime.trigger("scan")          # manual trigger, as a user would
-            recent = [b for b in beats if b > time.monotonic() - 5]
+
+            # V0.9.1-C4: pause/resume under load, every third pass. Pause stops
+            # DISPATCH without interrupting work, so the invariants are:
+            #   1. the pause settles (in-flight scan finishes, nothing hangs);
+            #   2. no scan starts while paused;
+            #   3. resume restarts dispatch.
+            if triggers % 3 == 0:
+                pauses += 1
+                runtime.pause()
+
+                settled = _wait_until(
+                    lambda: not runtime.snapshot().pause_pending, 10.0)
+                if not settled:
+                    pause_violations += 1
+
+                quiet = _scan_runs(runtime)
+                time.sleep(1.0)
+                if _scan_runs(runtime) != quiet:
+                    pause_violations += 1     # dispatched while paused
+
+                runtime.resume()
+                if not _wait_until(lambda: _scan_runs(runtime) > quiet, 10.0):
+                    resume_violations += 1
+                # A paused coordinator legitimately stops ticking, so the gap
+                # spanning a pause window is not starvation. Measure only from
+                # here on, or the instrumentation reports the feature it is
+                # testing as the defect it is testing for.
+                measure_from = time.monotonic()
+            recent = [b for b in beats
+                      if b > max(measure_from, time.monotonic() - 5)]
             gaps = [b - a for a, b in zip(recent, recent[1:])]
             worst_gap = max([worst_gap, *gaps]) if gaps else worst_gap
             row = next(t for t in runtime.snapshot().tasks if t["name"] == "scan")
@@ -100,7 +146,7 @@ def soak_runtime(cfg, minutes: float) -> int:
                   f"heap {tracemalloc.get_traced_memory()[0] / 1e6:.1f} MB")
     finally:
         stop_began = time.monotonic()
-        runtime.stop(timeout=5)
+        abandoned = runtime.stop(timeout=5)
         stop_took = time.monotonic() - stop_began
 
     time.sleep(1.0)
@@ -112,7 +158,11 @@ def soak_runtime(cfg, minutes: float) -> int:
           f"(a starved coordinator shows a gap >= the {scan_seconds:g}s scan)")
     print(f"scans: {row['runs']} run, {row['skipped']} skipped, "
           f"{scans['overlap']} overlapping  (manual triggers: {triggers})")
-    print(f"stop() took {stop_took:.2f}s   leaked threads: {sorted(leaked) or 'none'}")
+    print(f"pause/resume cycles: {pauses}  "
+          f"pause violations: {pause_violations}  "
+          f"resume violations: {resume_violations}")
+    print(f"stop() took {stop_took:.2f}s   abandoned: {abandoned or 'none'}   "
+          f"leaked threads: {sorted(leaked) or 'none'}")
     print(f"heap: {heap_mb:.1f} MB (limit {GROWTH_LIMIT_MB} MB)")
 
     problems = []
@@ -128,6 +178,10 @@ def soak_runtime(cfg, minutes: float) -> int:
         problems.append(f"heap {heap_mb:.1f} MB")
     if row["queued"] or row["running"]:
         problems.append("a task was still queued/running after stop()")
+    if pause_violations:
+        problems.append(f"{pause_violations} pause violations")
+    if resume_violations:
+        problems.append(f"{resume_violations} resume violations")
 
     print("SOAK PASS" if not problems else f"SOAK FAIL: {'; '.join(problems)}")
     return 0 if not problems else 1

@@ -339,7 +339,11 @@ class _DesktopController:
         snap = self.server.runtime_payload()
         state = snap["health"].get("state", "healthy")
         if snap["background"].get("paused"):
-            state = "paused"
+            # Decision D-2: pause never interrupts a running worker task, so
+            # between the click and the scan actually stopping "Paused" is a
+            # claim about the request rather than the system. Say which.
+            state = ("pausing" if snap["background"].get("pause_pending")
+                     else "paused")
         self.tray.set_status(TrayStatus(state, f"OptionsPilot — {state.title()}"))
         self.tray.set_menu(self.menu())
 
