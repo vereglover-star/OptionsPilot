@@ -1,10 +1,21 @@
-"""InstallerLauncher: mandatory backup, silent flags, restart, error paths."""
+"""InstallerLauncher: mandatory backup, silent flags, restart, error paths.
+
+Also home to the Authenticode verifier (V0.9.0-C9-1), which lives in the same
+module because `update/installer.py` is the updater's sanctioned OS boundary.
+"""
 
 from __future__ import annotations
 
+import shutil
+import sys
+from pathlib import Path
+
 import pytest
 
-from optionspilot.update.installer import SILENT_FLAGS, InstallerLauncher
+from optionspilot.update import installer as installer_mod
+from optionspilot.update.installer import (
+    SILENT_FLAGS, InstallerLauncher, classify_trust_status, verify_authenticode,
+)
 from optionspilot.update.models import UpdateError
 
 
@@ -96,3 +107,145 @@ class TestRelaunch:
                                      backup=lambda p, l: None)
         assert launcher.relaunch_app(exe_path="C:/x/OptionsPilot.exe") is True
         assert calls == ["C:/x/OptionsPilot.exe"]
+
+
+# ---------------------------------------------------------------------------
+# Authenticode verification (V0.9.0-C9-1)
+# ---------------------------------------------------------------------------
+
+#: Statuses measured from a real `WinVerifyTrust` call on Windows 11 during
+#: C9-1, one per reachable outcome. Pinned as data so the mapping can be
+#: asserted on the Ubuntu CI leg too — the codes are facts about Windows, not
+#: about the platform the test happens to run on.
+TRUSTED = 0x00000000            # embedded-signed python.exe, chain trusted
+NO_SIGNATURE = 0x800B0100       # a plain unsigned PE
+UNTRUSTED_ROOT = 0x800B0109     # signed with a self-signed dev certificate
+BAD_DIGEST = 0x80096010         # one byte flipped after signing
+SUBJECT_FORM_UNKNOWN = 0x800B0003   # not a recognised signable file at all
+FILE_ERROR = 0x80092003         # the file could not be read
+
+
+class TestClassifyTrustStatus:
+    """The status -> verdict mapping, which is where the policy actually is.
+
+    Kept separate from the OS call so it is asserted on every platform in the
+    matrix, not only on the canonical Windows leg.
+    """
+
+    def test_success_is_trusted(self):
+        assert classify_trust_status(TRUSTED) is True
+
+    @pytest.mark.parametrize("status", [
+        NO_SIGNATURE, UNTRUSTED_ROOT, BAD_DIGEST, SUBJECT_FORM_UNKNOWN,
+    ])
+    def test_real_negative_verdicts_are_false(self, status):
+        assert classify_trust_status(status) is False
+
+    def test_unreadable_file_cannot_be_evaluated(self):
+        """Not the same as "unsigned" — nothing was actually judged."""
+        assert classify_trust_status(FILE_ERROR) is None
+
+    def test_unreachable_check_is_none(self):
+        assert classify_trust_status(None) is None
+
+    def test_unrecognised_failure_is_still_a_failure(self):
+        """An unlisted non-zero status means WinVerifyTrust refused the file.
+
+        Defaulting an unknown refusal to None would turn every future error
+        code Microsoft adds into a silent bypass.
+        """
+        assert classify_trust_status(0xDEADBEEF) is False
+
+    def test_none_and_false_are_distinguishable(self):
+        """The whole reason the return type is tri-state.
+
+        `None` means "could not check" and must degrade to hash assurance;
+        `False` means "checked, and do not install this". A caller that used a
+        truthiness test would treat them identically, which is why C9-2's
+        policy matrix keys off `is None` / `is False`.
+        """
+        assert classify_trust_status(None) is not classify_trust_status(NO_SIGNATURE)
+
+
+class TestVerifyAuthenticode:
+    """Cross-platform contract: tri-state, and never raises."""
+
+    def test_off_windows_returns_none_not_false(self, monkeypatch, tmp_path):
+        """A Linux developer running the suite must not see a signature failure.
+
+        Inability to check is not evidence of a bad signature.
+        """
+        monkeypatch.setattr(sys, "platform", "linux")
+        target = tmp_path / "OptionsPilot-Setup-v9.9.9.exe"
+        target.write_bytes(b"MZ" + b"\0" * 64)
+        assert verify_authenticode(target) is None
+
+    def test_never_raises_on_a_missing_path(self, tmp_path):
+        assert verify_authenticode(tmp_path / "does-not-exist.exe") in (True, False, None)
+
+    def test_accepts_a_string_path(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(sys, "platform", "linux")
+        assert verify_authenticode(str(tmp_path / "x.exe")) is None
+
+
+@pytest.mark.windows_only
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="WinVerifyTrust is a Windows API; the mapping it "
+                           "feeds is asserted platform-independently in "
+                           "TestClassifyTrustStatus")
+class TestVerifyAuthenticodeOnWindows:
+    """Against real files, through the real OS call.
+
+    A signed reference is obtained without touching any certificate store: the
+    running interpreter is Authenticode-signed on both python.org builds and
+    the CI runner's. Where it is not, these skip rather than assert something
+    weaker — but the negative cases below need no signature at all and always
+    run.
+    """
+
+    @staticmethod
+    def _signed_reference():
+        exe = Path(sys.executable)
+        if installer_mod._win_verify_trust(exe) == TRUSTED:
+            return exe
+        return None
+
+    def test_a_trusted_signed_binary_verifies(self):
+        ref = self._signed_reference()
+        if ref is None:
+            pytest.skip(reason="this interpreter carries no trusted embedded "
+                               "Authenticode signature, so there is no signed "
+                               "reference file available without installing one")
+        assert verify_authenticode(ref) is True
+
+    def test_a_byte_flipped_after_signing_is_rejected(self, tmp_path):
+        """The demonstration that matters: tampering is detected, and it is
+        reported AS tampering rather than as "unsigned".
+
+        This is what pins `_WTD_PROV_FLAGS = 0`. Setting WTD_SAFER_FLAG makes
+        Windows return TRUST_E_NOSIGNATURE here — still a refusal, but one that
+        names the wrong cause.
+        """
+        ref = self._signed_reference()
+        if ref is None:
+            pytest.skip(reason="no signed reference file to tamper with on "
+                               "this machine; see the sibling test")
+        target = tmp_path / "tampered.exe"
+        shutil.copy(ref, target)
+        blob = bytearray(target.read_bytes())
+        blob[len(blob) // 2] ^= 0xFF
+        target.write_bytes(bytes(blob))
+
+        assert installer_mod._win_verify_trust(target) == BAD_DIGEST
+        assert verify_authenticode(target) is False
+
+    def test_an_unsigned_file_is_false_not_none(self, tmp_path):
+        """Absence of a signature is a real verdict, not an inability to check."""
+        target = tmp_path / "unsigned.exe"
+        target.write_bytes(b"MZ\x90\x00\x03\x00\x00\x00")
+        assert verify_authenticode(target) is False
+
+    def test_a_missing_file_cannot_be_evaluated(self, tmp_path):
+        """`validate()` rejects a missing file on its own; this layer says only
+        that it could not judge one."""
+        assert verify_authenticode(tmp_path / "absent.exe") is None

@@ -10,7 +10,7 @@ V0.8/V0.8.1 runtime.
 
 ## What was completed most recently? (V0.8.2 — independent audit)
 
-2056 -> **2115 tests** (+9). **Not committed.** No feature, no dependency, no
+2056 -> **2131 tests** (+9). **Not committed.** No feature, no dependency, no
 architectural change: an audit of every V0.8/V0.8.1 change that treated the
 previous certification as an unverified claim. Full detail:
 **`docs/CHANGELOG.md`**, entry `[Uncommitted] 2026-07-30 — V0.8.2`.
@@ -68,7 +68,7 @@ never run end to end) and **tray Exit**.
 
 ## What was completed before that? (V0.7.0 — platform foundation)
 
-1908 -> **2115 tests** (+140); a new **21-check** headless-browser suite
+1908 -> **2131 tests** (+140); a new **21-check** headless-browser suite
 (`scripts/workspace_check.py`, wired into `verify.ps1`). **Not committed.**
 Full design, decisions and remaining blockers: **`docs/ARCHITECTURE-PLATFORM.md`**
 — read it before touching `optionspilot/services/` or `optionspilot/host/`.
@@ -152,7 +152,7 @@ no durable store; the tab is restored only on adoption, never on every launch
 behaviour); `tkChartOpen` takes effect on the next launch rather than live; and
 `sidebar_collapsed` exists in the model with nothing writing it.
 
-**Verified:** 2115 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
+**Verified:** 2131 tests, 21/21 `workspace_check`, 135/135 `guide_check`, 54/54
 `intelligence_check`, 46/46 `marketdata_check`, `chart_check` green, 88/88
 market-data stress, `browser_check` + `check_html_ids` + `check_docs` green.
 

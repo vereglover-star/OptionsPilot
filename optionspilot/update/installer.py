@@ -27,6 +27,7 @@ installer can replace the running exe; the service coordinates that.
 
 from __future__ import annotations
 
+import ctypes
 import subprocess
 import sys
 from pathlib import Path
@@ -73,6 +74,171 @@ def app_executable() -> str | None:
     if getattr(sys, "frozen", False):
         return str(Path(sys.executable).resolve())
     return None
+
+
+# ---------------------------------------------------------------------------
+# Authenticode verification (V0.9.0-C9-1)
+# ---------------------------------------------------------------------------
+# A checksum proves the file matches what the release published. A signature
+# proves WHO published it. This is the second one, and it lives here because
+# this module is the updater's sanctioned OS boundary — the one file in
+# `update/` that `tests/test_architecture.py` permits to branch on
+# `sys.platform` ("launching an installer IS OS-specific"). `validation.py`
+# stays pure and takes the verdict as an injected callable, so `update/` never
+# has to import `host/`, which its {core}-only allow-list forbids.
+#
+# WinVerifyTrust, NOT signtool.exe. The C9 plan proposed shelling out to
+# `signtool verify`, which is right for the BUILD (a GitHub runner has the
+# Windows SDK) and wrong for the CLIENT: signtool ships with the SDK, which no
+# ordinary user has installed. A signtool-based check would return "cannot
+# determine" on essentially every real machine — a gate present in the code and
+# inert in production, which is the exact failure this repo already learned
+# from `RiskManager.approve_manual_entry`. wintrust.dll is the API signtool
+# itself calls, and it is on every Windows install since XP.
+
+#: WINTRUST_ACTION_GENERIC_VERIFY_V2 — the standard Authenticode policy.
+_WVT_ACTION = (0x00AAC56B, 0xCD44, 0x11D0, (0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE))
+
+_WTD_UI_NONE = 2
+_WTD_REVOKE_NONE = 0          # revocation needs the network; validation is offline
+_WTD_CHOICE_FILE = 1
+_WTD_STATEACTION_VERIFY = 1
+_WTD_STATEACTION_CLOSE = 2
+
+# Deliberately NOT set: WTD_SAFER_FLAG (0x100). Measured on Windows 11, it
+# collapses every distinct verdict into TRUST_E_NOSIGNATURE — a file TAMPERED
+# after signing reports as "not signed at all". That is the Finnhub 401/403
+# lesson in a new place: a diagnostic that confidently names the wrong cause is
+# worse than one that says "I don't know", because someone acts on it.
+_WTD_PROV_FLAGS = 0
+
+#: Statuses meaning "this could not be evaluated" rather than "evaluated, and
+#: not trustworthy". These map to None, never to False.
+_CANNOT_EVALUATE = frozenset({
+    0x80092003,   # CRYPT_E_FILE_ERROR — the file could not be read
+})
+
+#: For the log line only. An unlisted non-zero status is still a failure; it
+#: just gets reported by number instead of by name.
+_STATUS_NAMES = {
+    0x00000000: "valid, trusted signature",
+    0x800B0100: "no signature present",
+    0x800B0109: "signature present, but its root is not trusted",
+    0x800B0101: "the signing certificate has expired",
+    0x800B010A: "the certificate chain could not be built",
+    0x800B0111: "the signing certificate is explicitly distrusted",
+    0x80096010: "the file was modified after it was signed",
+    0x800B0003: "unrecognised file format",
+    0x80092003: "the file could not be read",
+}
+
+
+class _GUID(ctypes.Structure):
+    _fields_ = [("Data1", ctypes.c_ulong), ("Data2", ctypes.c_ushort),
+                ("Data3", ctypes.c_ushort), ("Data4", ctypes.c_ubyte * 8)]
+
+
+class _WinTrustFileInfo(ctypes.Structure):
+    _fields_ = [("cbStruct", ctypes.c_ulong),
+                ("pcwszFilePath", ctypes.c_wchar_p),
+                ("hFile", ctypes.c_void_p),
+                ("pgKnownSubject", ctypes.c_void_p)]
+
+
+class _WinTrustData(ctypes.Structure):
+    _fields_ = [("cbStruct", ctypes.c_ulong),
+                ("pPolicyCallbackData", ctypes.c_void_p),
+                ("pSIPClientData", ctypes.c_void_p),
+                ("dwUIChoice", ctypes.c_ulong),
+                ("fdwRevocationChecks", ctypes.c_ulong),
+                ("dwUnionChoice", ctypes.c_ulong),
+                ("pFile", ctypes.POINTER(_WinTrustFileInfo)),
+                ("dwStateAction", ctypes.c_ulong),
+                ("hWVTStateData", ctypes.c_void_p),
+                ("pwszURLReference", ctypes.c_wchar_p),
+                ("dwProvFlags", ctypes.c_ulong),
+                ("dwUIContext", ctypes.c_ulong),
+                ("pSignatureSettings", ctypes.c_void_p)]
+
+
+def _win_verify_trust(path: Path) -> int | None:
+    """Raw WinVerifyTrust status for a file, or ``None`` if unreachable.
+
+    ``None`` means the question could not be ASKED — not on Windows, or
+    wintrust.dll would not load. Never raises: this sits on a path where an OS
+    refusal is a normal state, exactly like `host/adapter.py`.
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        wintrust = ctypes.WinDLL("wintrust.dll")
+    except (OSError, AttributeError) as exc:   # pragma: no cover - Windows-only
+        log.debug("wintrust unavailable: %s", exc)
+        return None
+
+    action = _GUID(_WVT_ACTION[0], _WVT_ACTION[1], _WVT_ACTION[2],
+                   (ctypes.c_ubyte * 8)(*_WVT_ACTION[3]))
+    file_info = _WinTrustFileInfo(ctypes.sizeof(_WinTrustFileInfo),
+                                  str(path), None, None)
+    data = _WinTrustData()
+    data.cbStruct = ctypes.sizeof(_WinTrustData)
+    data.dwUIChoice = _WTD_UI_NONE
+    data.fdwRevocationChecks = _WTD_REVOKE_NONE
+    data.dwUnionChoice = _WTD_CHOICE_FILE
+    data.pFile = ctypes.pointer(file_info)
+    data.dwStateAction = _WTD_STATEACTION_VERIFY
+    data.dwProvFlags = _WTD_PROV_FLAGS
+    try:
+        status = wintrust.WinVerifyTrust(None, ctypes.byref(action),
+                                         ctypes.byref(data))
+        # CLOSE releases hWVTStateData. Skipping it leaks a handle per check.
+        data.dwStateAction = _WTD_STATEACTION_CLOSE
+        wintrust.WinVerifyTrust(None, ctypes.byref(action), ctypes.byref(data))
+    except OSError as exc:                     # pragma: no cover - Windows-only
+        log.debug("WinVerifyTrust raised for %s: %s", path, exc)
+        return None
+    return status & 0xFFFFFFFF
+
+
+def classify_trust_status(status: int | None) -> bool | None:
+    """Map a WinVerifyTrust status onto the tri-state verdict.
+
+    Split out from the OS call so the mapping — the part with the actual policy
+    in it — is testable on any platform, including the Ubuntu CI leg.
+
+    * ``True``  — success. A signature is present, intact, and chains to a root
+      this machine trusts.
+    * ``False`` — a real, negative verdict: unsigned, tampered, expired,
+      untrusted root. All of these mean "do not install".
+    * ``None``  — the question could not be answered here. Never a synonym for
+      ``False``; the caller falls back to hash assurance instead of refusing.
+    """
+    if status is None:
+        return None
+    if status == 0:
+        return True
+    if status in _CANNOT_EVALUATE:
+        return None
+    return False
+
+
+def verify_authenticode(path: Path | str) -> bool | None:
+    """Is ``path`` signed by a publisher this machine trusts?
+
+    Tri-state, and the third value is load-bearing — see
+    :func:`classify_trust_status`. Never raises, on any platform.
+    """
+    path = Path(path)
+    status = _win_verify_trust(path)
+    verdict = classify_trust_status(status)
+    if status is None:
+        log.debug("authenticode not checkable here for %s", path.name)
+    else:
+        log.info("authenticode %s for %s: 0x%08X (%s)",
+                 {True: "OK", False: "REJECTED", None: "UNKNOWN"}[verdict],
+                 path.name, status,
+                 _STATUS_NAMES.get(status, "unrecognised status"))
+    return verdict
 
 
 class InstallerLauncher:
