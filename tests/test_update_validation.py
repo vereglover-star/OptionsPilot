@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from optionspilot.update.models import Assurance
+import pytest
+
+from optionspilot.update.models import Assurance, SignatureVerdict
 from optionspilot.update.validation import (
     digest_for, parse_sha256sums, sha256_file, validate,
 )
 
 NAME = "OptionsPilot-Setup-v0.5.0.exe"
+
+
+def _says(verdict):
+    """A signature verifier that always returns `verdict`.
+
+    Injected, so every row of the policy matrix is reachable with no
+    certificate, no Windows API and no signed fixture — the platform-specific
+    half is proved separately in tests/test_update_installer.py.
+    """
+    return lambda path: verdict
 
 
 def _write(tmp_path, data=b"installer-bytes", name=NAME):
@@ -156,3 +168,152 @@ class TestAssurance:
         r = validate(p, expected_size=3,
                      expected_sha256="  " + sha256_file(p).upper() + "\n")
         assert r.ok and r.assurance is Assurance.HASH_VERIFIED
+
+
+class TestSignaturePolicy:
+    """V0.9.0-C9-2: the client-side policy matrix, in full.
+
+    A checksum proves a download matches what the release published; a
+    signature proves who published it. An attacker able to serve both the
+    installer and the manifest satisfies the first completely, which is why
+    a signature outranks a hash — and why a BAD one overrides a good hash.
+    """
+
+    # (signature verdict, has a published digest) -> (installs?, assurance)
+    MATRIX = [
+        (SignatureVerdict.TRUSTED, True, True, Assurance.SIGNATURE_VERIFIED),
+        (SignatureVerdict.TRUSTED, False, True, Assurance.SIGNATURE_VERIFIED),
+        (SignatureVerdict.UNSIGNED, True, True, Assurance.HASH_VERIFIED),
+        (SignatureVerdict.UNSIGNED, False, True, Assurance.SIZE_ONLY),
+        (SignatureVerdict.UNKNOWN, True, True, Assurance.HASH_VERIFIED),
+        (SignatureVerdict.UNKNOWN, False, True, Assurance.SIZE_ONLY),
+        (SignatureVerdict.INVALID, True, False, Assurance.FAILED),
+        (SignatureVerdict.INVALID, False, False, Assurance.FAILED),
+    ]
+
+    @pytest.mark.parametrize("verdict,hashed,installs,assurance", MATRIX)
+    def test_policy_matrix(self, tmp_path, verdict, hashed, installs, assurance):
+        """Every row of the table in `validate`'s docstring, asserted.
+
+        The documented matrix and the enforced one are the same object here;
+        two places holding one fact is how they drift.
+        """
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3,
+                     expected_sha256=sha256_file(p) if hashed else None,
+                     verify_signature=_says(verdict))
+        assert r.ok is installs
+        assert r.assurance is assurance
+
+    def test_a_bad_signature_overrides_a_matching_hash(self, tmp_path):
+        """The case the mechanism exists for.
+
+        The bytes are exactly what the manifest published — and the manifest
+        came from the same place the file did.
+        """
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p),
+                     verify_signature=_says(SignatureVerdict.INVALID))
+        assert not r.ok
+        assert "signature" in r.message.lower()
+        assert any(name == "signature" and not passed
+                   for name, passed, _ in r.checks)
+
+    def test_a_mismatched_hash_overrides_a_good_signature(self, tmp_path):
+        """Neither check can excuse the other; both must hold."""
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256="f" * 64,
+                     verify_signature=_says(SignatureVerdict.TRUSTED))
+        assert not r.ok and r.assurance is Assurance.FAILED
+
+    def test_an_unsigned_pre_c9_release_still_installs(self, tmp_path):
+        """The compatibility guarantee, restated at the signature layer.
+
+        Every release published before V0.9.0 is unsigned, and the client doing
+        the checking is the OLD one. Refusing here would strand every existing
+        installation on its current version, permanently.
+        """
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3,
+                     verify_signature=_says(SignatureVerdict.UNSIGNED))
+        assert r.ok, "an unsigned pre-C9 release must remain installable"
+        assert r.assurance is Assurance.SIZE_ONLY
+
+    def test_a_host_that_cannot_check_degrades_rather_than_refusing(self, tmp_path):
+        """Non-Windows, and the reason the verdict is not a boolean."""
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p),
+                     verify_signature=_says(SignatureVerdict.UNKNOWN))
+        assert r.ok and r.assurance is Assurance.HASH_VERIFIED
+
+    def test_no_verifier_at_all_behaves_exactly_as_before_c9(self, tmp_path):
+        """Regression guard for every caller that never passes a verifier."""
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p))
+        assert r.ok and r.assurance is Assurance.HASH_VERIFIED
+
+    def test_a_verifier_that_raises_cannot_break_the_update(self, tmp_path):
+        """`validate` returns verdicts; it does not throw them.
+
+        `apply_update` reports dicts, so an escape here would surface as an
+        unhandled exception on the install path. And a verifier that failed to
+        answer is not evidence against the FILE — it degrades, it does not
+        condemn.
+        """
+        def boom(path):
+            raise RuntimeError("wintrust exploded")
+
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p),
+                     verify_signature=boom)
+        assert r.ok and r.assurance is Assurance.HASH_VERIFIED
+
+    def test_a_missing_file_is_never_handed_to_the_verifier(self, tmp_path):
+        calls = []
+        r = validate(tmp_path / "absent.exe",
+                     verify_signature=lambda p: calls.append(p))
+        assert not r.ok and not calls
+
+
+class TestRequireSignature:
+    """Phase 2 (V0.9.3-C12) readiness — asserted now, enabled later.
+
+    It is deliberately not on yet: while an absent signature is tolerated an
+    emergency unsigned build stays shippable, which is exactly the situation
+    in which one is needed.
+    """
+
+    def test_unsigned_is_refused_when_a_signature_is_required(self, tmp_path):
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p),
+                     verify_signature=_says(SignatureVerdict.UNSIGNED),
+                     require_signature=True)
+        assert not r.ok and r.assurance is Assurance.FAILED
+        assert any(name == "signature_missing" for name, _, _ in r.checks)
+
+    def test_unverifiable_is_refused_separately_from_unsigned(self, tmp_path):
+        """"There is no signature" and "this machine could not look" are
+        different facts, and a user told the wrong one acts on the wrong
+        thing."""
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3, expected_sha256=sha256_file(p),
+                     verify_signature=_says(SignatureVerdict.UNKNOWN),
+                     require_signature=True)
+        assert not r.ok
+        assert any(name == "signature_unverifiable" for name, _, _ in r.checks)
+        assert "could not be checked" in r.message.lower()
+
+    def test_a_trusted_signature_satisfies_the_requirement(self, tmp_path):
+        p = _write(tmp_path, b"abc")
+        r = validate(p, expected_size=3,
+                     verify_signature=_says(SignatureVerdict.TRUSTED),
+                     require_signature=True)
+        assert r.ok and r.assurance is Assurance.SIGNATURE_VERIFIED
+
+    def test_requiring_a_signature_is_off_by_default(self, tmp_path):
+        """The same call, one flag apart, is the whole Phase 1 / Phase 2 line."""
+        p = _write(tmp_path, b"abc")
+        args = dict(expected_size=3,
+                    verify_signature=_says(SignatureVerdict.UNSIGNED))
+        assert validate(p, **args).ok
+        assert not validate(p, **args, require_signature=True).ok

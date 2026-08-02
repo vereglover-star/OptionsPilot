@@ -32,8 +32,8 @@ installer execution.
 | `github_api.py` | GitHub Releases → `ReleaseInfo`; selects **only** the `OptionsPilot-Setup-vX.Y.Z.exe` asset. |
 | `checker.py` | "Is there a newer release?" decision (channel, frequency helpers). **Never raises.** |
 | `downloader.py` | Streams the installer to `%TEMP%\OptionsPilotUpdater`, progress + cancellation, atomic `.part`→final. |
-| `validation.py` | Verifies a download before execution (exists, size, name; hash + Authenticode-ready). |
-| `installer.py` | Mandatory pre-update backup → launch installer silently → restart. |
+| `validation.py` | Verifies a download before execution (exists, size, name, SHA-256, Authenticode). Platform-free: the signature verdict is **injected**. |
+| `installer.py` | Mandatory pre-update backup → launch installer silently → restart. Also the updater's **OS boundary**: `verify_authenticode` (WinVerifyTrust) lives here because this is the one module in `update/` permitted to branch on the platform. |
 | `ui.py` | Pure presentation helpers (sizes, ETA, safe markdown→HTML for release notes, dialog payloads). |
 | `service.py` | `UpdateService` — the app-facing facade + thread-safe state machine tying it all together. |
 
@@ -164,6 +164,7 @@ check from a length check — and before C8 both rendered as "Update verified."
 
 | Level | Meaning | Installs? |
 |---|---|---|
+| `signature_verified` | Authenticode: signed by a trusted publisher (V0.9.0-C9) | Yes |
 | `hash_verified` | SHA-256 matched the published digest | Yes |
 | `size_only` | No manifest published; name and size only | Yes, **and the UI says so** |
 | `failed` | A check failed | No |
@@ -186,11 +187,18 @@ cover the downloaded file — or that cannot be fetched or parsed — is a
 *discrepancy*, and that **fails**. `validate(checksums_published=True)` is what
 distinguishes the two.
 
-**Not yet done: Authenticode.** Signing is a separate concern tracked as
-V0.9.0-C9 and gated on certificate procurement, not on engineering. A checksum
-proves the file matches what the release published; a signature proves who
-published it. This section delivers the first and not the second, and the
-distinction is worth keeping clear when reading `assurance`.
+**Authenticode: the client half is done, the publishing half is not.** A
+checksum proves the file matches what the release published; a signature proves
+*who* published it — and an attacker able to serve both the installer and the
+manifest satisfies the first completely. Since V0.9.0-C9-2 the updater asks
+Windows about the signature (`installer.verify_authenticode` → WinVerifyTrust)
+and enforces the same two-phase policy: an **invalid** signature refuses the
+install in both phases; an **absent** one is tolerated in Phase 1 and refused in
+Phase 2; a host that **cannot check** degrades to the hash result and never
+refuses on that basis alone. Releases are not yet signed — that is V0.9.0-C9-3,
+blocked on certificate procurement rather than on engineering — so today every
+real release lands at `hash_verified`. Full policy matrix:
+`validation.validate`'s docstring.
 
 ---
 
@@ -236,9 +244,9 @@ or via a tagged CI release:
 
 ## 8. Future work
 
-- **Authenticode code signing** of the setup + app exe (removes SmartScreen
-  warnings) and signature verification in `validation.py`.
-- **SHA-256 checksums asset** published with releases, enforced by the validator.
+- **Authenticode code signing** of the setup + app exe in the release pipeline
+  (removes SmartScreen warnings) — V0.9.0-C9-3, blocked on certificate
+  procurement. The *client-side* verification it feeds shipped in C9-2 (§5.1).
 - **Delta updates** (patch instead of full installer).
 - **Beta channel server** / private update endpoints for enterprise deployment
   (`transport.py` + `github_api.api_base` already parameterize the source).

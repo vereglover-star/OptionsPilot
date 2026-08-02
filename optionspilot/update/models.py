@@ -47,6 +47,46 @@ class UpdatePhase(str, Enum):
     ERROR = "error"
 
 
+class SignatureVerdict(str, Enum):
+    """What Authenticode had to say about a file (V0.9.0-C9).
+
+    FOUR states, not three, and the fourth is the whole reason this enum exists
+    instead of the ``bool | None`` the C9 plan specified. That shape can express
+    "trusted", "not trusted" and "could not check" — but Phase 1 policy needs
+    to separate **"there is no signature"** from **"there is one and it is
+    bad"**, because every release published before V0.9.0 is unsigned. Refusing
+    the first would strand every existing installation on its current version,
+    permanently: the client doing the checking is the OLD one, so the fix would
+    ship in an update they could no longer install.
+
+    It is the same distinction C8 already drew for checksums — *no manifest
+    published* (install, at reduced assurance) versus *a manifest that does not
+    cover this file* (refuse) — and it needs saying once per mechanism.
+    """
+
+    #: Intact signature chaining to a root this machine trusts.
+    TRUSTED = "trusted"
+    #: No signature at all. Normal for every pre-V0.9.0 release; tolerated in
+    #: Phase 1 and refused in Phase 2 (see service.REQUIRE_SIGNATURE).
+    UNSIGNED = "unsigned"
+    #: A signature exists and is not acceptable — tampered, expired, untrusted
+    #: root, explicitly distrusted. Refused in BOTH phases: this is the case
+    #: the whole mechanism was built for.
+    INVALID = "invalid"
+    #: The question could not be asked here — not Windows, or the OS refused.
+    #: Never a synonym for a negative verdict.
+    UNKNOWN = "unknown"
+
+    @property
+    def refuses_install(self) -> bool:
+        """Phase 1 policy: only a *bad* signature blocks an install."""
+        return self is SignatureVerdict.INVALID
+
+    @property
+    def is_trusted(self) -> bool:
+        return self is SignatureVerdict.TRUSTED
+
+
 class Assurance(str, Enum):
     """How strongly a downloaded installer was verified before it is run.
 
@@ -58,8 +98,18 @@ class Assurance(str, Enum):
     The level is carried out of :func:`validation.validate` and surfaced to the
     user, so the update dialog can say what was actually checked rather than
     implying a guarantee that was never made.
+
+    Ordered strongest first. The two questions are genuinely different: a
+    checksum proves the file matches what the release *published*, a signature
+    proves *who* published it — and an attacker able to serve both the
+    installer and the manifest satisfies the first completely. That is why
+    :attr:`SIGNATURE_VERIFIED` outranks :attr:`HASH_VERIFIED` rather than
+    sitting beside it.
     """
 
+    #: Authenticode: the file carries an intact signature chaining to a root
+    #: this machine trusts. Strictly stronger than a checksum (V0.9.0-C9).
+    SIGNATURE_VERIFIED = "signature_verified"
     #: SHA-256 matched the digest published alongside the release.
     HASH_VERIFIED = "hash_verified"
     #: Name and size matched, but the release published no checksums to compare
@@ -73,11 +123,13 @@ class Assurance(str, Enum):
     def is_verified(self) -> bool:
         """True only when verification actually happened. Deliberately narrow —
         callers that want to say "verified" must be able to mean it."""
-        return self is Assurance.HASH_VERIFIED
+        return self in (Assurance.SIGNATURE_VERIFIED, Assurance.HASH_VERIFIED)
 
     @property
     def summary(self) -> str:
         return {
+            Assurance.SIGNATURE_VERIFIED: (
+                "Verified — digitally signed by a trusted publisher."),
             Assurance.HASH_VERIFIED: "Verified against the published checksum.",
             Assurance.SIZE_ONLY: (
                 "Integrity data unavailable — this release publishes no "

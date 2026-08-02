@@ -6,8 +6,11 @@ import time
 
 from optionspilot.update.downloader import Downloader
 from optionspilot.update.github_api import GitHubReleases
-from optionspilot.update.installer import InstallerLauncher
-from optionspilot.update.service import InMemoryPrefs, UpdateService
+from optionspilot.update.installer import InstallerLauncher, verify_authenticode
+from optionspilot.update.models import SignatureVerdict
+from optionspilot.update.service import (
+    REQUIRE_SIGNATURE, InMemoryPrefs, UpdateService,
+)
 from optionspilot.update.transport import NetworkError
 from tests.update_helpers import FakeOpener, FakeResponse, release_json, releases_response
 
@@ -20,7 +23,9 @@ def _client(*docs, error=None):
 
 
 def _service(tmp_path, *, current="0.4.6", body=b"x" * 1000, installer_size=1000,
-             docs=None, error=None, spawn=None, backup=None, prefs=None):
+             docs=None, error=None, spawn=None, backup=None, prefs=None,
+             verify_signature=verify_authenticode,
+             require_signature=REQUIRE_SIGNATURE):
     docs = docs if docs is not None else [release_json("v0.5.0",
                                                         installer_size=installer_size)]
     downloader = Downloader(opener=FakeOpener(default=FakeResponse(
@@ -28,10 +33,14 @@ def _service(tmp_path, *, current="0.4.6", body=b"x" * 1000, installer_size=1000
     spawn = spawn or (lambda cmd: cmd)
     backup = backup or (lambda paths, label: tmp_path / "backup")
     launcher = InstallerLauncher(spawn=spawn, backup=backup)
+    # Defaults deliberately mirror production rather than stubbing the
+    # signature check out: the pre-existing tests below then exercise the real
+    # verifier against an unsigned download, which is the pre-V0.9.0 case.
     return UpdateService(
         current, prefs or InMemoryPrefs(),
         client=_client(*docs, error=error),
-        downloader=downloader, launcher=launcher, download_dir=tmp_path)
+        downloader=downloader, launcher=launcher, download_dir=tmp_path,
+        verify_signature=verify_signature, require_signature=require_signature)
 
 
 def _wait_download(service, timeout=5.0):
@@ -319,3 +328,90 @@ class TestPublishedChecksums:
         _wait_download(svc)
         out = svc.apply_update(restart=False)
         assert not out["ok"]
+
+
+def _signed_service(tmp_path, verdict, *, require_signature=False, body=b"x" * 1000):
+    """A service whose downloads carry `verdict` as their signature status."""
+    return _service(tmp_path, body=body,
+                    docs=[release_json("v0.5.0", installer_size=len(body))],
+                    verify_signature=lambda path: verdict,
+                    require_signature=require_signature)
+
+
+class TestSignatureVerification:
+    """V0.9.0-C9-2, end to end through `apply_update`.
+
+    `RiskManager.approve_manual_entry` taught this codebase that adding a gate
+    is not the same as the gate being wired in. Every test here drives the real
+    `apply_update`, so a service that stopped passing the verifier through to
+    `validate` would fail them.
+    """
+
+    def test_a_trusted_signature_installs_at_signature_verified(self, tmp_path):
+        svc = _signed_service(tmp_path, SignatureVerdict.TRUSTED)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert out["ok"], out
+        assert out["assurance"] == "signature_verified"
+
+    def test_an_invalid_signature_is_refused_and_nothing_is_launched(self, tmp_path):
+        """The tampered-installer case, all the way to the install decision."""
+        spawned = []
+        svc = _service(tmp_path, spawn=lambda cmd: spawned.append(cmd),
+                       verify_signature=lambda path: SignatureVerdict.INVALID)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert not out["ok"]
+        assert "signature" in out["error"].lower()
+        assert spawned == [], "a refused update must never reach the installer"
+        assert svc.snapshot()["phase"] == "error"
+
+    def test_an_unsigned_release_still_installs(self, tmp_path):
+        """Every release before V0.9.0. Refusing here strands them all."""
+        svc = _signed_service(tmp_path, SignatureVerdict.UNSIGNED)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert out["ok"], out
+        assert out["assurance"] == "size_only"
+
+    def test_a_host_that_cannot_check_degrades_rather_than_refusing(self, tmp_path):
+        svc = _signed_service(tmp_path, SignatureVerdict.UNKNOWN)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert out["ok"], out
+        assert out["assurance"] == "size_only"
+
+    def test_phase_two_refuses_an_unsigned_release(self, tmp_path):
+        """Readiness only — `REQUIRE_SIGNATURE` is False until V0.9.3-C12."""
+        svc = _signed_service(tmp_path, SignatureVerdict.UNSIGNED,
+                              require_signature=True)
+        svc.check_now()
+        svc.start_download()
+        _wait_download(svc)
+        out = svc.apply_update(restart=False)
+        assert not out["ok"]
+        assert "not digitally signed" in out["error"].lower()
+
+    def test_phase_one_is_the_shipped_default(self, tmp_path):
+        """If this flips unintentionally, every existing install is stranded."""
+        assert REQUIRE_SIGNATURE is False
+        svc = _service(tmp_path)
+        assert svc._require_signature is False
+
+    def test_the_real_verifier_is_wired_in_by_default(self, tmp_path):
+        """Not a unit test of a function nobody calls.
+
+        A service built with no `verify_signature` argument must still be
+        asking Authenticode — otherwise C9-1 shipped a verifier and C9-2
+        shipped a policy, and nothing in production ever ran either.
+        """
+        svc = UpdateService("0.4.6", InMemoryPrefs(), download_dir=tmp_path)
+        assert svc._verify_signature is verify_authenticode

@@ -16,7 +16,7 @@ from optionspilot.update import installer as installer_mod
 from optionspilot.update.installer import (
     SILENT_FLAGS, InstallerLauncher, classify_trust_status, verify_authenticode,
 )
-from optionspilot.update.models import UpdateError
+from optionspilot.update.models import SignatureVerdict, UpdateError
 
 
 class _Spawn:
@@ -133,59 +133,84 @@ class TestClassifyTrustStatus:
     """
 
     def test_success_is_trusted(self):
-        assert classify_trust_status(TRUSTED) is True
+        assert classify_trust_status(TRUSTED) is SignatureVerdict.TRUSTED
 
-    @pytest.mark.parametrize("status", [
-        NO_SIGNATURE, UNTRUSTED_ROOT, BAD_DIGEST, SUBJECT_FORM_UNKNOWN,
-    ])
-    def test_real_negative_verdicts_are_false(self, status):
-        assert classify_trust_status(status) is False
+    def test_a_plain_unsigned_file_is_unsigned_not_invalid(self):
+        """The distinction C9-2 could not be built without.
+
+        Every release before V0.9.0 is unsigned. Folding this into INVALID
+        refuses all of them, and the client doing the refusing is the OLD one
+        — so the fix would ship in an update nobody could install.
+        """
+        assert classify_trust_status(NO_SIGNATURE) is SignatureVerdict.UNSIGNED
+
+    def test_an_unrecognised_file_form_is_unsigned_not_invalid(self):
+        """Nothing located a signature — that is not a verdict ON a signature.
+
+        Whether the download is a well-formed installer is `validate`'s
+        name/size/hash question, answered with evidence this layer does not
+        have.
+        """
+        assert classify_trust_status(SUBJECT_FORM_UNKNOWN) is SignatureVerdict.UNSIGNED
+
+    @pytest.mark.parametrize("status", [UNTRUSTED_ROOT, BAD_DIGEST])
+    def test_a_signature_that_does_not_hold_up_is_invalid(self, status):
+        assert classify_trust_status(status) is SignatureVerdict.INVALID
 
     def test_unreadable_file_cannot_be_evaluated(self):
         """Not the same as "unsigned" — nothing was actually judged."""
-        assert classify_trust_status(FILE_ERROR) is None
+        assert classify_trust_status(FILE_ERROR) is SignatureVerdict.UNKNOWN
 
-    def test_unreachable_check_is_none(self):
-        assert classify_trust_status(None) is None
+    def test_unreachable_check_is_unknown(self):
+        assert classify_trust_status(None) is SignatureVerdict.UNKNOWN
 
     def test_unrecognised_failure_is_still_a_failure(self):
         """An unlisted non-zero status means WinVerifyTrust refused the file.
 
-        Defaulting an unknown refusal to None would turn every future error
-        code Microsoft adds into a silent bypass.
+        Defaulting an unknown refusal to anything softer would turn every
+        future error code Microsoft adds into a silent bypass.
         """
-        assert classify_trust_status(0xDEADBEEF) is False
+        assert classify_trust_status(0xDEADBEEF) is SignatureVerdict.INVALID
 
-    def test_none_and_false_are_distinguishable(self):
-        """The whole reason the return type is tri-state.
+    def test_the_three_ways_of_not_being_trusted_stay_apart(self):
+        """The whole reason the verdict is an enum and not a bool.
 
-        `None` means "could not check" and must degrade to hash assurance;
-        `False` means "checked, and do not install this". A caller that used a
-        truthiness test would treat them identically, which is why C9-2's
-        policy matrix keys off `is None` / `is False`.
+        "no signature", "bad signature" and "could not look" drive three
+        different decisions in `validate()`. A caller reduced to truthiness
+        would treat them identically.
         """
-        assert classify_trust_status(None) is not classify_trust_status(NO_SIGNATURE)
+        verdicts = {classify_trust_status(NO_SIGNATURE),
+                    classify_trust_status(BAD_DIGEST),
+                    classify_trust_status(None)}
+        assert len(verdicts) == 3
+        assert SignatureVerdict.TRUSTED not in verdicts
+
+    def test_only_invalid_blocks_a_phase_one_install(self):
+        assert SignatureVerdict.INVALID.refuses_install
+        assert not SignatureVerdict.UNSIGNED.refuses_install
+        assert not SignatureVerdict.UNKNOWN.refuses_install
+        assert not SignatureVerdict.TRUSTED.refuses_install
 
 
 class TestVerifyAuthenticode:
-    """Cross-platform contract: tri-state, and never raises."""
+    """Cross-platform contract: a verdict, always, and never an exception."""
 
-    def test_off_windows_returns_none_not_false(self, monkeypatch, tmp_path):
+    def test_off_windows_is_unknown_not_a_negative_verdict(self, monkeypatch, tmp_path):
         """A Linux developer running the suite must not see a signature failure.
 
-        Inability to check is not evidence of a bad signature.
+        Inability to check is not evidence about the file.
         """
         monkeypatch.setattr(sys, "platform", "linux")
         target = tmp_path / "OptionsPilot-Setup-v9.9.9.exe"
         target.write_bytes(b"MZ" + b"\0" * 64)
-        assert verify_authenticode(target) is None
+        assert verify_authenticode(target) is SignatureVerdict.UNKNOWN
 
     def test_never_raises_on_a_missing_path(self, tmp_path):
-        assert verify_authenticode(tmp_path / "does-not-exist.exe") in (True, False, None)
+        assert isinstance(verify_authenticode(tmp_path / "nope.exe"), SignatureVerdict)
 
     def test_accepts_a_string_path(self, monkeypatch, tmp_path):
         monkeypatch.setattr(sys, "platform", "linux")
-        assert verify_authenticode(str(tmp_path / "x.exe")) is None
+        assert verify_authenticode(str(tmp_path / "x.exe")) is SignatureVerdict.UNKNOWN
 
 
 @pytest.mark.windows_only
@@ -216,7 +241,7 @@ class TestVerifyAuthenticodeOnWindows:
             pytest.skip(reason="this interpreter carries no trusted embedded "
                                "Authenticode signature, so there is no signed "
                                "reference file available without installing one")
-        assert verify_authenticode(ref) is True
+        assert verify_authenticode(ref) is SignatureVerdict.TRUSTED
 
     def test_a_byte_flipped_after_signing_is_rejected(self, tmp_path):
         """The demonstration that matters: tampering is detected, and it is
@@ -237,15 +262,15 @@ class TestVerifyAuthenticodeOnWindows:
         target.write_bytes(bytes(blob))
 
         assert installer_mod._win_verify_trust(target) == BAD_DIGEST
-        assert verify_authenticode(target) is False
+        assert verify_authenticode(target) is SignatureVerdict.INVALID
 
-    def test_an_unsigned_file_is_false_not_none(self, tmp_path):
-        """Absence of a signature is a real verdict, not an inability to check."""
+    def test_an_unsigned_file_is_a_verdict_not_an_inability_to_check(self, tmp_path):
+        """Absence of a signature is something Windows actually told us."""
         target = tmp_path / "unsigned.exe"
         target.write_bytes(b"MZ\x90\x00\x03\x00\x00\x00")
-        assert verify_authenticode(target) is False
+        assert verify_authenticode(target) is not SignatureVerdict.UNKNOWN
 
     def test_a_missing_file_cannot_be_evaluated(self, tmp_path):
         """`validate()` rejects a missing file on its own; this layer says only
         that it could not judge one."""
-        assert verify_authenticode(tmp_path / "absent.exe") is None
+        assert verify_authenticode(tmp_path / "absent.exe") is SignatureVerdict.UNKNOWN

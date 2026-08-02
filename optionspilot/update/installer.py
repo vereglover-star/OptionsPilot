@@ -36,7 +36,7 @@ from typing import Callable
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.migration import create_backup
 from optionspilot.core.paths import AppPaths
-from optionspilot.update.models import UpdateError
+from optionspilot.update.models import SignatureVerdict, UpdateError
 
 log = get_logger("update")
 
@@ -113,9 +113,23 @@ _WTD_STATEACTION_CLOSE = 2
 _WTD_PROV_FLAGS = 0
 
 #: Statuses meaning "this could not be evaluated" rather than "evaluated, and
-#: not trustworthy". These map to None, never to False.
+#: not trustworthy". These map to UNKNOWN, never to a negative verdict.
 _CANNOT_EVALUATE = frozenset({
     0x80092003,   # CRYPT_E_FILE_ERROR — the file could not be read
+})
+
+#: Statuses meaning "there is no signature here at all", which is a DIFFERENT
+#: fact from "there is one and it is bad" — see models.SignatureVerdict. Every
+#: release before V0.9.0 lands here, so conflating the two would strand them.
+#:
+#: SUBJECT_FORM_UNKNOWN belongs here and not with the failures: it means no
+#: subject-interface package recognised the file's format, so no signature was
+#: ever located — it is not a judgement on a signature. Whether the download is
+#: a well-formed installer at all is `validate`'s name/size/hash question, and
+#: answering it from here would be this layer naming a cause it cannot see.
+_NO_SIGNATURE = frozenset({
+    0x800B0100,   # TRUST_E_NOSIGNATURE — a valid PE carrying no signature
+    0x800B0003,   # TRUST_E_SUBJECT_FORM_UNKNOWN — nothing here to verify
 })
 
 #: For the log line only. An unlisted non-zero status is still a failure; it
@@ -200,33 +214,37 @@ def _win_verify_trust(path: Path) -> int | None:
     return status & 0xFFFFFFFF
 
 
-def classify_trust_status(status: int | None) -> bool | None:
-    """Map a WinVerifyTrust status onto the tri-state verdict.
+def classify_trust_status(status: int | None) -> SignatureVerdict:
+    """Map a WinVerifyTrust status onto a :class:`SignatureVerdict`.
 
     Split out from the OS call so the mapping — the part with the actual policy
     in it — is testable on any platform, including the Ubuntu CI leg.
 
-    * ``True``  — success. A signature is present, intact, and chains to a root
-      this machine trusts.
-    * ``False`` — a real, negative verdict: unsigned, tampered, expired,
-      untrusted root. All of these mean "do not install".
-    * ``None``  — the question could not be answered here. Never a synonym for
-      ``False``; the caller falls back to hash assurance instead of refusing.
+    The three ways of NOT being trusted are kept apart on purpose. ``UNSIGNED``
+    is the normal state of every release before V0.9.0 and must remain
+    installable in Phase 1; ``INVALID`` is the case the mechanism exists to
+    catch; ``UNKNOWN`` is not a claim about the file at all. An unrecognised
+    non-zero status is ``INVALID``, because defaulting an unknown refusal to
+    anything softer would turn each error code Microsoft adds into a silent
+    bypass.
     """
     if status is None:
-        return None
+        return SignatureVerdict.UNKNOWN
     if status == 0:
-        return True
+        return SignatureVerdict.TRUSTED
     if status in _CANNOT_EVALUATE:
-        return None
-    return False
+        return SignatureVerdict.UNKNOWN
+    if status in _NO_SIGNATURE:
+        return SignatureVerdict.UNSIGNED
+    return SignatureVerdict.INVALID
 
 
-def verify_authenticode(path: Path | str) -> bool | None:
-    """Is ``path`` signed by a publisher this machine trusts?
+def verify_authenticode(path: Path | str) -> SignatureVerdict:
+    """What does Authenticode say about ``path``?
 
-    Tri-state, and the third value is load-bearing — see
-    :func:`classify_trust_status`. Never raises, on any platform.
+    Never raises, on any platform. Off Windows the answer is always
+    :attr:`SignatureVerdict.UNKNOWN` — an inability to check, never a negative
+    verdict about the file.
     """
     path = Path(path)
     status = _win_verify_trust(path)
@@ -235,8 +253,7 @@ def verify_authenticode(path: Path | str) -> bool | None:
         log.debug("authenticode not checkable here for %s", path.name)
     else:
         log.info("authenticode %s for %s: 0x%08X (%s)",
-                 {True: "OK", False: "REJECTED", None: "UNKNOWN"}[verdict],
-                 path.name, status,
+                 verdict.value.upper(), path.name, status,
                  _STATUS_NAMES.get(status, "unrecognised status"))
     return verdict
 

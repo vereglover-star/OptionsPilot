@@ -584,7 +584,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2131 tests as of this writing, all passing)
+# Tests (2158 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -701,7 +701,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2131 tests cover this
+   exercises the FastAPI layer via `TestClient` (2158 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

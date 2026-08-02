@@ -32,7 +32,7 @@ from optionspilot.update import ui as fmt
 from optionspilot.update.checker import UpdateChecker, is_check_due
 from optionspilot.update.downloader import Downloader, default_download_dir
 from optionspilot.update.github_api import DEFAULT_REPO, GitHubReleases
-from optionspilot.update.installer import InstallerLauncher
+from optionspilot.update.installer import InstallerLauncher, verify_authenticode
 from optionspilot.update.models import (
     DownloadProgress,
     ReleaseInfo,
@@ -41,10 +41,19 @@ from optionspilot.update.models import (
     UpdateError,
     UpdatePhase,
 )
-from optionspilot.update.validation import digest_for, validate
+from optionspilot.update.validation import SignatureCheck, digest_for, validate
 from optionspilot.update.version import Version
 
 log = get_logger("update")
+
+#: Phase 1 of code signing (V0.9.0-C9): a BAD signature refuses the install, an
+#: ABSENT or uncheckable one does not. Every release before V0.9.0 is unsigned
+#: and the client doing the checking is the currently-installed one, so
+#: requiring a signature today would strand exactly the users an update is meant
+#: to reach. Flipping this to True is Phase 2 (V0.9.3-C12), and it should only
+#: happen once signing has been reliable across several releases — while an
+#: absent signature is tolerated, an emergency unsigned build stays shippable.
+REQUIRE_SIGNATURE = False
 
 
 class PreferencesStore(Protocol):  # pragma: no cover - structural type
@@ -85,7 +94,9 @@ class UpdateService:
                  downloader: Downloader | None = None,
                  launcher: InstallerLauncher | None = None,
                  download_dir: Path | str | None = None,
-                 on_install_launched: Callable[[], None] | None = None):
+                 on_install_launched: Callable[[], None] | None = None,
+                 verify_signature: SignatureCheck | None = verify_authenticode,
+                 require_signature: bool = REQUIRE_SIGNATURE):
         self.current = (current_version if isinstance(current_version, Version)
                         else Version.parse(str(current_version)))
         self._prefs = prefs
@@ -95,6 +106,10 @@ class UpdateService:
         self._launcher = launcher or InstallerLauncher()
         self._download_dir = Path(download_dir) if download_dir else default_download_dir()
         self._on_install_launched = on_install_launched
+        # Injected so a test can present any of the four verdicts without a
+        # certificate, and so a non-Windows caller can supply nothing at all.
+        self._verify_signature = verify_signature
+        self._require_signature = require_signature
 
         self._lock = threading.RLock()
         self._phase = UpdatePhase.IDLE
@@ -310,7 +325,9 @@ class UpdateService:
         expected_size = release.installer.size if release and release.installer else None
         verdict = validate(path, expected_size=expected_size,
                            expected_sha256=expected_sha256,
-                           checksums_published=checksums_published)
+                           checksums_published=checksums_published,
+                           verify_signature=self._verify_signature,
+                           require_signature=self._require_signature)
         if not verdict.ok:
             with self._lock:
                 self._phase = UpdatePhase.ERROR
