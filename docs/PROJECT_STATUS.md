@@ -15,7 +15,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2225 tests run against canned
+against its real API with a real key — all 2230 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -529,7 +529,7 @@ and a `DesktopApplication` assertable without a GUI. Estimate 8–10 days, 11
 commits. Concurrency defects are non-deterministic, so the exit criterion is a
 30-minute soak, **not** a green suite.
 
-**Committed so far — C1…C8** (`d92de20`…): the starvation bug stated as a
+**Committed so far — C1…C9** (`d92de20`…): the starvation bug stated as a
 failing test (C1); lanes and a bounded worker pool, inert by default (C2); the
 market scan moved onto the worker lane (C3); real pause/resume/shutdown
 semantics, including `pause_pending` because pause is not instantaneous (C4);
@@ -537,7 +537,8 @@ manual scans brought under one owner and a check-then-act race removed (C5);
 the last two unowned jobs — the backtest and the intelligence refresh —
 registered as on-demand worker tasks, with the pool bound raised from 2 to 4 to
 match the registered workload (C6); `_DesktopController.exit()` made genuinely
-single-entry (C7); and the legacy `UIServer._loop` deleted (C8). **`ui/server.py`
+single-entry (C7); the legacy `UIServer._loop` deleted (C8); and the
+tracemalloc monitor removed (C9). **`ui/server.py`
 and `intelligence/engine.py` now construct no threads at all**, asserted on the
 AST, and **`BackgroundRuntime` is the only path to a trading cycle** — every
 caller of `run_cycle_now` is named by a test.
@@ -547,8 +548,9 @@ an unlocked check-then-act, and with eight concurrent callers **all eight ran
 the shutdown and Restart spawned eight successor processes** — unrejected,
 because releasing the single-instance lock is the first thing a restart does.
 
-Remaining: the startup HTTP poll deleted, the tracemalloc monitor removed, and
-a `DesktopApplication` assertable without a GUI.
+Remaining: the startup HTTP poll deleted, and a `DesktopApplication` assertable
+without a GUI. **The per-commit sequence is tabulated in `ROADMAP.md` ▸ V0.9.1
+▸ Commit map** — keep it current in the same commit that lands a row.
 
 Then V0.9.2 (complete the service extraction) and V0.9.3 (a real API v1).
 Scope detail: the V0.9 Engineering Specification, Revision 2, and `ROADMAP.md`.
@@ -559,7 +561,7 @@ by business decision — see `ROADMAP.md` ▸ Deferred.
 
 ## Test count
 
-**2225 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2230 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 

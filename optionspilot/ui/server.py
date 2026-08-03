@@ -15,7 +15,6 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-import tracemalloc
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -140,12 +139,7 @@ class UIServer:
         self._closed = False
         self.background = BackgroundRuntime(health_check=self._health_check)
         self._runtime_health: dict = {"state": "healthy", "last_check": None,
-                                      "issues": [], "repairs": [], "memory": {}}
-        # Tracing every allocation is intentionally a live-runtime diagnostic,
-        # not a side effect of constructing an app for an HTTP request or a
-        # test.  The server that starts it also releases it during shutdown.
-        self._owns_memory_tracing = False
-        self._health_memory_baseline = 0
+                                      "issues": [], "repairs": []}
         self._bt_lock = threading.Lock()
         self.backtest_job: dict = {"state": "idle"}
         # `TaskSpec.callback` takes no arguments, so a parameterised job hands
@@ -244,7 +238,6 @@ class UIServer:
             raise RuntimeError("UI server is closed")
         if self.background.snapshot().running:
             return
-        self._start_memory_monitoring()
         prefs = self.runtime.runtime_prefs()
         self.background.set_profile(prefs["hidden_profile"])
         if not prefs["auto_resume_monitoring"]:
@@ -289,7 +282,6 @@ class UIServer:
         self.stop_loop()
         self.orch.close()
         self.idempotency.close()
-        self._stop_memory_monitoring()
 
     def set_background_visibility(self, visible: bool) -> None:
         self.background.set_visibility(visible)
@@ -333,39 +325,24 @@ class UIServer:
                 repairs.append(f"{task['name']}: retry scheduled")
             elif task["failures"] and task["last_error"]:
                 issues.append(f"{task['name']}: {task['last_error']}")
-        current, peak = tracemalloc.get_traced_memory()
-        memory = {"current_bytes": current, "peak_bytes": peak,
-                  "baseline_bytes": self._health_memory_baseline}
-        if (self._health_memory_baseline > 1_000_000 and
-                current > self._health_memory_baseline * 3):
-            issues.append("traced memory grew beyond the health threshold")
+        # V0.9.1-C9: a `memory` block used to be built here from `tracemalloc`,
+        # plus one rule — "traced memory grew beyond the health threshold" —
+        # comparing current usage against a baseline captured once at
+        # `start_loop`. No client ever read the block: not `index.html`, not the
+        # API contract check, not the docs. The rule measured growth against the
+        # moment the app started, which on a long session is not a statement
+        # about now. Tracing every allocation in a pandas/numpy process for that
+        # was not a trade worth making; real memory questions want an external
+        # profiler against a real workload.
         self._runtime_health = {
             "state": "degraded" if issues else "healthy",
             "last_check": utcnow().isoformat(),
             "issues": issues,
             "repairs": repairs,
-            "memory": memory,
         }
         if issues:
             self.orch.notifier.notify(
                 "error", "Background health check needs attention", issues[0])
-
-    def _start_memory_monitoring(self) -> None:
-        if not tracemalloc.is_tracing():
-            # ONE frame, not ten. The health check reads `get_traced_memory()`,
-            # which reports totals and never looks at a traceback; nothing in
-            # the application calls `take_snapshot()`. Ten frames per live
-            # allocation was pure overhead — paid on every allocation, for the
-            # whole life of a desktop session, to produce identical numbers.
-            tracemalloc.start(1)
-            self._owns_memory_tracing = True
-        self._health_memory_baseline = tracemalloc.get_traced_memory()[0]
-
-    def _stop_memory_monitoring(self) -> None:
-        if self._owns_memory_tracing:
-            tracemalloc.stop()
-            self._owns_memory_tracing = False
-        self._health_memory_baseline = 0
 
     # V0.9.1-C8: `_loop` used to sit here — a complete second scheduler
     # (`while not self._stop.is_set()`, calling `run_cycle_now` and

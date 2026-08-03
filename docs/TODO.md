@@ -18,14 +18,14 @@ is. This file is the flat, actionable checklist version.
 - [ ] **Finish V0.9.1 — runtime & thread ownership.** In progress, and a
       blocking milestone: it must land before the V0.9.2 service extraction or
       every service owning background work gets extracted against a broken
-      ownership model. **C1…C8 committed** — lanes + bounded worker pool, the
+      ownership model. **C1…C9 committed** — lanes + bounded worker pool, the
       market scan, manual scans, the backtest and the intelligence refresh all
       runtime-owned; real pause/resume/shutdown semantics; `ui/server.py` and
       `intelligence/engine.py` construct no threads at all; `exit()` genuinely
       single-entry; the legacy `_loop` deleted, so `BackgroundRuntime` is the
-      only path to a cycle. **Remaining for C9…C11:** the startup HTTP poll
-      deleted, the tracemalloc monitor removed, a GUI-free-assertable
-      `DesktopApplication`. The exit criterion is a 30-minute soak, not a green
+      only path to a cycle; the tracemalloc monitor removed. **Remaining for
+      C10…C11:** the startup HTTP poll deleted, a GUI-free-assertable
+      `DesktopApplication` (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
 - [ ] **Add `pip-audit` and Dependabot.** Named in V0.9.0 finding H-4's

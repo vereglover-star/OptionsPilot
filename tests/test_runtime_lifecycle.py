@@ -432,6 +432,105 @@ class TestSchedulerShutdown:
             runtime.stop()
 
 
+class TestTheAppDoesNotTraceItsOwnAllocations:
+    """V0.9.1-C9: the tracemalloc monitor is gone.
+
+    `UIServer` started `tracemalloc` for the life of every desktop session to
+    feed one health rule — *"traced memory grew beyond the health threshold"* —
+    and a `memory` block in `/api/runtime`'s health payload that **no client
+    ever read**: not `index.html`, not the API contract check, not the docs.
+
+    What that cost is not hypothetical. `tracemalloc` intercepts every
+    allocation in the process for as long as it is on; V0.8.2 already cut it
+    from ten frames per allocation to one after finding it was storing
+    tracebacks nothing looked at. One frame is cheaper, not free — this is a
+    pandas/numpy application whose scan path allocates continuously, and the
+    remaining cost bought a threshold heuristic (`current > 3 x baseline`)
+    against a baseline captured once at `start_loop`, which on a long session
+    describes the moment the app started rather than anything current.
+
+    Removing it makes the honest statement: the app does not profile itself.
+    Real memory questions are answered by an external profiler against a real
+    workload, not by a permanently-on sampler feeding an unread field.
+
+    This does change `/api/runtime`: `health.memory` disappears. That is a
+    deliberate, accepted API change — the key had no consumer, and leaving an
+    empty dict behind to preserve a shape nobody reads would be the
+    compatibility wrapper this project prefers to delete.
+    """
+
+    EXPECTED_HEALTH_KEYS = {"state", "last_check", "issues", "repairs"}
+
+    def test_the_health_payload_carries_no_memory_block(self, server):
+        """Asserted BEFORE and AFTER a health check, deliberately.
+
+        The first version of this test only read a fresh server, whose
+        `_runtime_health` is the initial dict. `_health_check` REBUILDS that
+        dict, so a `memory` key reintroduced there would never have been seen —
+        which is exactly what the induced-failure demo did, and the test passed.
+        A payload assertion has to cover the payload as it is actually served.
+        """
+        assert set(server.runtime_payload()["health"]) == \
+            self.EXPECTED_HEALTH_KEYS
+        server._health_check(server.background.snapshot())
+        health = server.runtime_payload()["health"]
+        assert "memory" not in health, (
+            "the unread memory block came back when the health check ran")
+        assert set(health) == self.EXPECTED_HEALTH_KEYS
+
+    def test_a_health_check_still_reports_task_state(self, server):
+        """The removal must cost the health check nothing it was useful for."""
+        server.background.register(TaskSpec("broken", 30.0, lambda: None))
+        snap = server.background.snapshot()
+        for row in snap.tasks:
+            if row["name"] == "broken":
+                row["failures"], row["last_error"] = 1, "nope"
+        server._health_check(snap)
+        health = server.runtime_payload()["health"]
+        assert health["state"] == "degraded"
+        assert health["issues"] == ["broken: nope"]
+        assert health["last_check"] is not None
+        assert set(health) == self.EXPECTED_HEALTH_KEYS
+
+    def test_running_the_application_never_starts_tracing(self, server):
+        """The property the old test asserted, made absolute.
+
+        It used to check that *constructing* an app left tracing off, because
+        `start_loop` legitimately turned it on. Now nothing turns it on, so the
+        stronger statement holds: a fully started server traces nothing.
+        """
+        import tracemalloc
+
+        assert not tracemalloc.is_tracing(), (
+            "something started tracemalloc before this test")
+        server.start_loop()
+        assert settle(lambda: server.background.snapshot().running)
+        assert not tracemalloc.is_tracing(), (
+            "starting the loop switched global allocation tracing back on")
+
+    def test_no_memory_monitoring_state_survives(self, server):
+        for leftover in ("_start_memory_monitoring", "_stop_memory_monitoring",
+                         "_owns_memory_tracing", "_health_memory_baseline"):
+            assert not hasattr(server, leftover), (
+                f"{leftover} survived the C9 removal")
+
+    def test_the_ui_server_module_no_longer_imports_tracemalloc(self):
+        """A retired diagnostic that keeps its import is one edit from
+        returning, and reads as though it is still in use."""
+        import ast
+        import inspect
+
+        import optionspilot.ui.server as mod
+
+        imported = set()
+        for node in ast.walk(ast.parse(inspect.getsource(mod))):
+            if isinstance(node, ast.Import):
+                imported.update(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+        assert "tracemalloc" not in imported
+
+
 class TestThereIsOnlyOneSchedulingPath:
     """V0.9.1-C8: the legacy `_loop` is gone, and nothing may grow back.
 

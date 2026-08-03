@@ -17,16 +17,17 @@ all (asserted on the AST, not on source text), `_DesktopController.exit()` is
 genuinely single-entry, and the legacy `UIServer._loop` is gone —
 `BackgroundRuntime` is now the only path to a trading cycle.
 
-⚠ **The per-commit V0.9.1 sequence is NOT in this repository.** It lives only in
-the Engineering Specification, Revision 2, which a session can lose to
-compaction. C7's identity had to be confirmed with the user for exactly that
-reason. **Remaining, in no confirmed order:** the startup HTTP poll deleted
-(`ui/desktop.py`, the 100 × 0.1s `urlopen` wait), the tracemalloc monitor
-removed (`UIServer._start/_stop_memory_monitoring` plus the `memory` block in
-`_health_check` — note this one changes the `/api/runtime` health payload
-shape), and a `DesktopApplication` assertable without a GUI. If you are resuming
-without the spec, confirm the mapping before implementing rather than inferring
-it.
+➡ **The commit map is now in `ROADMAP.md` ▸ V0.9.1 ▸ "Commit map".** Read it
+before starting anything. The per-commit plan lives in the Engineering
+Specification, Revision 2, which is *not* in this repository and which a session
+loses to context compaction — C7 and C9 both had to be confirmed with the user
+for that reason. The table is the fix, and it is only worth having if it is
+**updated in the same commit that lands a row.**
+
+C10 and C11 are recorded there as the two remaining scope items — the startup
+HTTP poll (`ui/desktop.py`, the 100 × 0.1 s `urlopen` wait) and a
+`DesktopApplication` assertable without a GUI — but **their order is inferred,
+not confirmed.** Confirm before implementing.
 
 **Three things carried forward.**
 

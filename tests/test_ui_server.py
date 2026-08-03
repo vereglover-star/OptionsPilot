@@ -37,9 +37,19 @@ def client(tmp_path, monkeypatch):
 
 
 class TestStatusAPI:
-    def test_request_app_does_not_start_global_memory_tracing(self, client):
-        """Memory sampling belongs to the live runtime, never app creation."""
-        assert client.server._owns_memory_tracing is False
+    def test_the_app_never_starts_global_memory_tracing(self, client):
+        """V0.9.1-C9 made this absolute rather than conditional.
+
+        It used to assert that *constructing* an app left tracing off, because
+        `start_loop` legitimately switched it on for the life of a desktop
+        session. The tracemalloc monitor is gone — it fed one health rule and a
+        `memory` payload block no client read — so the stronger form holds:
+        nothing in this application turns global allocation tracing on, ever.
+        """
+        import tracemalloc
+
+        assert client.server is not None
+        assert not tracemalloc.is_tracing()
 
     def test_status_shape(self, client):
         s = client.get("/api/status").json()
