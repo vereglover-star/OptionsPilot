@@ -21,6 +21,8 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "optionspilot"
 BUILD_SCRIPT = ROOT / "scripts" / "build_exe.ps1"
@@ -157,3 +159,118 @@ class TestUnblockBundle:
         src = (ROOT / "optionspilot_app.py").read_text(encoding="utf-8")
         body = src.split('if __name__ == "__main__":', 1)[1]
         assert body.index("unblock_bundle()") < body.index("main(args)")
+
+
+class TestWindowedBuildsHaveNoStandardStreams:
+    """A `--windowed` PyInstaller exe has ``sys.stdout is sys.stderr is None``.
+
+    This shipped. The packaged app died before drawing a window with
+    ``ValueError: Unable to configure formatter 'default'`` caused by
+    ``AttributeError: 'NoneType' object has no attribute 'isatty'``, from
+    ``uvicorn.logging.DefaultFormatter.__init__``::
+
+        self.use_colors = sys.stdout.isatty()
+
+    `uvicorn.Config.__init__` calls `configure_logging()`, which runs
+    `logging.config.dictConfig` over uvicorn's default `LOGGING_CONFIG` — so
+    merely CONSTRUCTING the config is enough to crash. No request, no bind, no
+    server.
+
+    **Why the whole suite missed it, and the lesson:** every test runs under
+    pytest with real streams attached, so `sys.stdout.isatty()` returns a
+    boolean and the code path is never taken. `core/logging_setup.py` has known
+    about `sys.stderr is None` since the first windowed build — the application
+    handled it correctly and a *dependency* did not, in a branch no test entered.
+    Anything that only executes when stdio is absent must be tested with stdio
+    removed, because CI will never do it for you.
+
+    Setting `use_colors=False` would silence the crash and leave uvicorn's
+    handlers bound to `ext://sys.stderr`, i.e. to None — trading a loud failure
+    for records that vanish. The fix is that uvicorn does not configure logging
+    at all here: `setup_logging` is the one owner, and it adopts uvicorn's
+    loggers so their records still reach `app.log`.
+    """
+
+    def test_the_transport_config_survives_absent_stdio(self, monkeypatch):
+        """The real `uvicorn.Config`, built the way the application builds it."""
+        import uvicorn
+
+        from optionspilot.core.logging_setup import uvicorn_logging_kwargs
+
+        monkeypatch.setattr(sys, "stdout", None)
+        monkeypatch.setattr(sys, "stderr", None)
+        uvicorn.Config(object(), host="127.0.0.1", port=8787,
+                       log_level="warning", **uvicorn_logging_kwargs())
+
+    def test_uvicorn_defaults_really_do_crash_without_stdio(self, monkeypatch):
+        """The test above proves nothing unless the unfixed form still fails.
+
+        Pinning the upstream behaviour also means a future uvicorn that stops
+        touching `sys.stdout` shows up here as a failure to reproduce, rather
+        than as a guard quietly protecting against nothing.
+        """
+        import uvicorn
+
+        monkeypatch.setattr(sys, "stdout", None)
+        monkeypatch.setattr(sys, "stderr", None)
+        with pytest.raises(ValueError, match="formatter"):
+            uvicorn.Config(object(), host="127.0.0.1", port=8787,
+                           log_level="warning")
+
+    def test_every_uvicorn_call_site_disables_uvicorn_logging(self):
+        """Both call sites, matched on the AST.
+
+        `ui/desktop.py` builds a `Config`; `ui/server.py::serve` calls
+        `uvicorn.run`. The packaged exe passes its arguments through to the CLI,
+        so `OptionsPilot.exe serve` reaches the second one inside the same
+        windowed process as the first.
+        """
+        import ast
+
+        for module in ("optionspilot/ui/desktop.py", "optionspilot/ui/server.py"):
+            tree = ast.parse((ROOT / module).read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not (isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Attribute)
+                        and node.func.attr in ("Config", "run")):
+                    continue
+                value = node.func.value
+                if not (isinstance(value, ast.Name) and value.id == "uvicorn") \
+                        and not (isinstance(value, ast.Attribute)
+                                 and value.attr == "uvicorn"):
+                    continue
+                spread = [k for k in node.keywords if k.arg is None]
+                explicit = [k.arg for k in node.keywords]
+                assert "log_config" in explicit or spread, (
+                    f"{module}:{node.lineno} constructs uvicorn without "
+                    "disabling its logging config — a windowed build dies here")
+
+    def test_uvicorn_records_still_reach_the_application_log(self, tmp_path):
+        """Disabling uvicorn's logging must not mean discarding it.
+
+        With `log_config=None` uvicorn configures nothing, and the root logger
+        has no handlers in this application — `setup_logging` owns the
+        `optionspilot` tree only. Left there, a uvicorn warning would fall to
+        `logging.lastResort`, which writes to `sys.stderr`: None in the build
+        that needed the fix. Silently dropping the transport's errors in exactly
+        the configuration that cannot show a console is not an acceptable
+        outcome, so its loggers are adopted.
+        """
+        import logging
+
+        from optionspilot.config.settings import LoggingConfig
+        from optionspilot.core.logging_setup import setup_logging
+
+        setup_logging(LoggingConfig(), base_dir=tmp_path)
+        try:
+            logging.getLogger("uvicorn.error").warning("transport unhappy")
+            for handler in logging.getLogger("uvicorn").handlers:
+                handler.flush()
+            combined = (tmp_path / "logs" / "app.log").read_text(encoding="utf-8")
+            assert "transport unhappy" in combined
+        finally:
+            for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+                logger = logging.getLogger(name)
+                for handler in list(logger.handlers):
+                    logger.removeHandler(handler)
+                    handler.close()

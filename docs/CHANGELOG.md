@@ -4,6 +4,48 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-03 — Packaging fix: the windowed exe could not start
+
+*Independent bugfix, found on the first real EXE launch after V0.9.1. 2243 →
+2247 tests (+4).*
+
+The packaged app died before drawing a window with `ValueError: Unable to
+configure formatter 'default'`, caused by `AttributeError: 'NoneType' object has
+no attribute 'isatty'`.
+
+**A `--windowed` PyInstaller build has `sys.stdout is sys.stderr is None`**, and
+`uvicorn.logging.DefaultFormatter.__init__` ends with
+`self.use_colors = sys.stdout.isatty()`. `uvicorn.Config.__init__` calls
+`configure_logging()`, which runs `dictConfig` over uvicorn's default
+`LOGGING_CONFIG` — so merely *constructing* the config was fatal. No bind, no
+request, no server.
+
+`use_colors=False` was rejected: it silences the crash and leaves uvicorn's
+handlers bound to `ext://sys.stderr`, i.e. to None, trading a loud failure for
+records that vanish. Instead uvicorn configures nothing
+(`logging_setup.uvicorn_logging_kwargs()` → `log_config=None`), because
+`setup_logging` is already the single owner of this application's logging and
+has known that stdio can be absent since the first windowed build. It now also
+**adopts** uvicorn's loggers onto its own handlers — otherwise, with the root
+logger unconfigured, a uvicorn warning would fall to `logging.lastResort` and be
+written to the `sys.stderr` that does not exist.
+
+Fixed at **both** uvicorn call sites: the desktop launcher's embedded transport
+and `ui/server.py::serve`, which the packaged exe reaches via `OptionsPilot.exe
+serve` inside the same windowed process.
+
+**Why nothing caught it.** Every test runs under pytest with real streams
+attached, so `sys.stdout.isatty()` returns a boolean and the branch is never
+entered. The build script's packaged-selftest gate passed *with the bug present*,
+because `selftest` never constructs a uvicorn Config — it proves the bundle's
+imports resolve and never touches the launch path. Four regression tests now run
+with `sys.stdout`/`sys.stderr` monkeypatched to None, one of which pins that
+upstream uvicorn genuinely still crashes, so the guard cannot quietly end up
+protecting against nothing.
+
+Verified by rebuilding and launching the real windowed exe: it stayed up,
+listened on `127.0.0.1:60171`, ran a live market scan and logged cleanly.
+
 ## 2026-08-03 — V0.9.1: runtime & thread ownership
 
 *11 commits (`d92de20`…), 2026-08-02 → 2026-08-03. 2158 → 2243 tests (+85). No

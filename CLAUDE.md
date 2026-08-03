@@ -746,6 +746,25 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   a job that had been accepted but had not yet begun, saw `running == False`, and
   read the previous job's 0% progress. A flaky concurrency test is usually a real
   race wearing a costume.
+- **A `--windowed` build has `sys.stdout is sys.stderr is None`, and a
+  dependency will eventually dereference one.** `core/logging_setup.py` has
+  guarded `sys.stderr is not None` since the first windowed build — and the app
+  still died before drawing a window, because *uvicorn* did not:
+  `DefaultFormatter.__init__` ends with `self.use_colors = sys.stdout.isatty()`,
+  and `uvicorn.Config.__init__` runs `dictConfig` over its own default config,
+  so **constructing the config was fatal** (no bind, no request, no server).
+  Handling absent stdio in your own code is not enough; anything you hand a
+  stream-shaped question to must be checked too. The fix is `log_config=None`
+  (`logging_setup.uvicorn_logging_kwargs()`) rather than `use_colors=False`,
+  which would leave uvicorn's handlers bound to `ext://sys.stderr` — to None —
+  swapping a loud failure for silently discarded records. And because
+  `setup_logging` owns the `optionspilot` tree only, uvicorn's loggers are
+  **adopted** onto its handlers; otherwise they fall to `logging.lastResort`,
+  which writes to the `sys.stderr` that does not exist. The whole suite missed
+  this because pytest always has real streams: **anything that only runs when
+  stdio is absent must be tested with stdio removed.** The packaged `selftest`
+  gate missed it too — it proves lazy imports resolve, it never touches the
+  desktop launch path.
 - PyInstaller only bundles what it can see in literal `import` statements.
   A lazy `importlib.import_module("...")` (added for startup speed in
   `f1bae42`) silently dropped yfinance from every exe built afterwards —

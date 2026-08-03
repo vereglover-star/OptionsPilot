@@ -29,6 +29,15 @@ is. This file is the flat, actionable checklist version.
       landed** (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
+- [ ] **Make the packaged-build gate reach the desktop launch path.** The
+      windowed-exe startup crash (uvicorn's formatter reading
+      `sys.stdout.isatty()`) got through `build_exe.ps1`'s packaged-selftest
+      gate, because `selftest` proves lazy imports resolve and never constructs
+      a uvicorn Config. A gate that launched the built exe, waited for it to
+      listen on its loopback port, and killed it would have caught this — that
+      is exactly how the fix was finally verified by hand. Cheap, and it closes
+      the one class of defect the build script exists to catch.
+
 - [ ] **Add `pip-audit` and Dependabot.** Named in V0.9.0 finding H-4's
       definition of done and never given a commit — an **omission, not a
       deferral**, and it should not be allowed to hide inside the C9 deferral.

@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from optionspilot.config.settings import AppConfig
-from optionspilot.core.logging_setup import get_logger
+from optionspilot.core.logging_setup import get_logger, uvicorn_logging_kwargs
 from optionspilot.host import current_host
 from optionspilot.services.runtime import TaskSpec
 from optionspilot.ui.tray import TrayMenuItem, TrayStatus, create_tray
@@ -216,8 +216,12 @@ class DesktopApplication:
         # Transport serving stays separate from application lifecycle
         # ownership. The controller drives runtime/tray operations on
         # UIServer; the Uvicorn Server only owns HTTP process shutdown.
+        # `uvicorn_logging_kwargs()` is not optional here: without it, merely
+        # constructing this Config kills a windowed build, because uvicorn's
+        # default formatter reads `sys.stdout.isatty()` and there is no stdout.
         self.transport = self.uvicorn.Server(self.uvicorn.Config(
-            app, host="127.0.0.1", port=self.port, log_level="warning"))
+            app, host="127.0.0.1", port=self.port, log_level="warning",
+            **uvicorn_logging_kwargs()))
         threading.Thread(target=self.transport.run, daemon=True,
                          name="uvicorn").start()
         self.server = app.state.server

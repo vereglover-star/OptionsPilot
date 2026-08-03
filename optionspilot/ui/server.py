@@ -34,7 +34,7 @@ from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.coach import CoachProfile, build_dashboard
 from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.config.settings import AppConfig
-from optionspilot.core.logging_setup import get_logger
+from optionspilot.core.logging_setup import get_logger, uvicorn_logging_kwargs
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
 from optionspilot.core.paths import AppPaths
 from optionspilot.data import replay as mdreplay
@@ -1885,4 +1885,8 @@ def serve(config: AppConfig, host: str = "127.0.0.1", port: int = 8787,
 
     app = create_app(config, run_loop=run_loop, runtime=runtime, data_dir=data_dir)
     print(f"OptionsPilot dashboard: http://{host}:{port}  (paper trading only)")
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    # The packaged exe passes its arguments through to this CLI, so `serve`
+    # runs inside the same windowed process the desktop launcher does — where
+    # uvicorn's default logging config has no stdout to ask about colours.
+    uvicorn.run(app, host=host, port=port, log_level="warning",
+                **uvicorn_logging_kwargs())
