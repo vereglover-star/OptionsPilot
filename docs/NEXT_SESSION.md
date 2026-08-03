@@ -6,16 +6,18 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
 **Last updated:** 2026-08-03, mid **V0.9.1 — runtime & thread ownership**
-(C1…C8 committed).
+(C1…C10 committed).
 
 ## What to do next
 
-**Continue V0.9.1 at C9.** Plan of record: the V0.9 Engineering Specification,
-Revision 2. Eight commits are in; the runtime owns every application background
-workload, `ui/server.py` and `intelligence/engine.py` construct no threads at
-all (asserted on the AST, not on source text), `_DesktopController.exit()` is
-genuinely single-entry, and the legacy `UIServer._loop` is gone —
-`BackgroundRuntime` is now the only path to a trading cycle.
+**Continue V0.9.1 at C11 — the last commit.** Plan of record: the V0.9
+Engineering Specification, Revision 2. Ten commits are in: the runtime owns
+every application background workload, `ui/server.py` and
+`intelligence/engine.py` construct no threads at all (asserted on the AST, not
+on source text), `_DesktopController.exit()` is genuinely single-entry, the
+legacy `UIServer._loop` is gone so `BackgroundRuntime` is the only path to a
+trading cycle, the tracemalloc monitor is removed, and the launcher takes its
+readiness from `uvicorn.Server.started` rather than polling itself over HTTP.
 
 ➡ **The commit map is now in `ROADMAP.md` ▸ V0.9.1 ▸ "Commit map".** Read it
 before starting anything. The per-commit plan lives in the Engineering
@@ -24,10 +26,7 @@ loses to context compaction — C7 and C9 both had to be confirmed with the user
 for that reason. The table is the fix, and it is only worth having if it is
 **updated in the same commit that lands a row.**
 
-C10 and C11 are recorded there as the two remaining scope items — the startup
-HTTP poll (`ui/desktop.py`, the 100 × 0.1 s `urlopen` wait) and a
-`DesktopApplication` assertable without a GUI — but **their order is inferred,
-not confirmed.** Confirm before implementing.
+C11 — a `DesktopApplication` assertable without a GUI — is the last row.
 
 **Three things carried forward.**
 

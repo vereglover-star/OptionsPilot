@@ -32,6 +32,18 @@ class GuiThreadViolation(BaseException):
     """
 
 
+class HttpPollViolation(BaseException):
+    """The launcher reached for HTTP to answer a local question.
+
+    A `BaseException` for the same reason `GuiThreadViolation` is one, and the
+    lesson was re-learned here: the retired startup probe sat inside
+    ``except Exception: time.sleep(0.1)``, so an ordinary assertion raised from
+    the fake `urlopen` was **swallowed by the very code under test**. The first
+    version of the C10 ordering test passed against the unfixed launcher — it
+    simply polled for ten seconds and still produced the expected order.
+    """
+
+
 class _Window:
     """A window that enforces pywebview's real thread contract.
 
@@ -553,6 +565,154 @@ def test_desktop_notifier_exposes_optional_adapter_symbol_without_notify_extra(
     importlib.reload(desktop_notify)
 
 
+def _launch_harness(monkeypatch, transport_cls, events=None):
+    """The minimum doubles `launch()` needs, shared by the C10 tests.
+
+    Deliberately does NOT stub `urllib.request.urlopen` into working: the point
+    of these tests is that the launcher never reaches for it.
+    """
+    events = events if events is not None else []
+
+    class ApplicationServer(_Server):
+        def __init__(self):
+            super().__init__()
+            self.background = SimpleNamespace(
+                snapshot=lambda: SimpleNamespace(paused=False),
+                register=lambda _task: None)
+            self.orch = SimpleNamespace(
+                notifier=SimpleNamespace(set_action_handler=lambda _h: None))
+            self.updater = SimpleNamespace(check_async=lambda: None,
+                                           set_install_hook=lambda _h: None)
+
+    class EventHook:
+        def __iadd__(self, _handler):
+            return self
+
+    class Window(_Window):
+        def __init__(self):
+            super().__init__()
+            self.events = SimpleNamespace(closing=EventHook())
+
+    class Webview:
+        windows = []
+
+        @staticmethod
+        def create_window(*_args, **_kwargs):
+            events.append("window-created")
+            window = Window()
+            Webview.windows.append(window)
+            return window
+
+        @staticmethod
+        def start(callback=None):
+            if callback:
+                callback()
+
+    application_server = ApplicationServer()
+    app = SimpleNamespace(state=SimpleNamespace(server=application_server))
+
+    def never_poll(*_args, **_kwargs):
+        raise HttpPollViolation(
+            "the launcher polled its own server over HTTP instead of asking "
+            "the transport whether it had started")
+
+    monkeypatch.setattr("urllib.request.urlopen", never_poll)
+    monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(
+        Config=lambda *_a, **_k: object(), Server=transport_cls))
+    monkeypatch.setitem(sys.modules, "webview", Webview)
+    monkeypatch.setattr("optionspilot.ui.server.create_app",
+                        lambda *_a, **_k: app)
+    monkeypatch.setattr(desktop, "create_tray", lambda _icon: NullTray())
+    monkeypatch.setattr(desktop, "_free_port", lambda: 17778)
+    monkeypatch.setattr(desktop, "_acquire_single_instance",
+                        lambda: SimpleNamespace(close=lambda: None))
+    return events, application_server
+
+
+class TestTheLauncherDoesNotPollItself:
+    """V0.9.1-C10: readiness comes from the transport, not from HTTP.
+
+    `launch()` used to wait for its own in-process server like this::
+
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(url + "/api/status", timeout=1)
+                break
+            except Exception:
+                time.sleep(0.1)
+
+    It asks over the network a question the object in the same process can
+    answer: `uvicorn.Server.started` is set the moment the listener is up.
+
+    **What it cost was measured, and the intuitive answer was wrong.** Building
+    the `/api/status` payload came in at 0.02 ms on a fresh account, so the
+    hundred probes were not a meaningful amount of work — an earlier draft of
+    this docstring called it "one of the most expensive endpoints" on the
+    strength of reading its body, and the benchmark did not support that. The
+    real cost is latency: the loop notices readiness only on a 0.1s sleep
+    boundary, so every launch waited up to 100 ms after the server was already
+    serving. A flag read notices within 0.02s.
+
+    The failure mode was quiet rather than dramatic, which is why it survived.
+    """
+
+    def test_readiness_comes_from_the_transport_and_the_window_waits_for_it(
+            self, monkeypatch):
+        class TransportServer:
+            def __init__(self, _config):
+                self.should_exit = False
+                self.started = False
+
+            def run(self):
+                # A real server takes a moment to bind. If the launcher does
+                # not wait, the window is created against a dead port.
+                time.sleep(0.05)
+                events.append("server-started")
+                self.started = True
+
+        events, _ = _launch_harness(monkeypatch, TransportServer)
+        desktop.launch(SimpleNamespace())
+        assert events == ["server-started", "window-created"], (
+            f"the window did not wait for the transport: {events}")
+
+    def test_a_server_that_never_starts_does_not_hang_the_launcher(
+            self, monkeypatch):
+        """The old loop gave up after ~100 attempts and opened the window
+        anyway. A wait on a flag that is never set must stay bounded too —
+        an unbounded one turns a failed bind into a process that never draws
+        a window and never exits."""
+        class DeadTransport:
+            def __init__(self, _config):
+                self.should_exit = False
+                self.started = False
+
+            def run(self):
+                time.sleep(30)
+
+        events, _ = _launch_harness(monkeypatch, DeadTransport)
+        monkeypatch.setattr(desktop, "SERVER_START_TIMEOUT", 0.3)
+        began = time.monotonic()
+        desktop.launch(SimpleNamespace())
+        elapsed = time.monotonic() - began
+        assert elapsed < 5.0, f"the launcher blocked for {elapsed:.1f}s"
+        assert events == ["window-created"]
+
+    def test_the_desktop_module_no_longer_imports_urllib(self):
+        """A retired probe that keeps its import reads as though it is still
+        the mechanism, and is one line from becoming it again."""
+        import ast
+        import inspect
+
+        imported = set()
+        for node in ast.walk(ast.parse(inspect.getsource(desktop))):
+            if isinstance(node, ast.Import):
+                imported.update(a.name for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module)
+        assert not {n for n in imported if n.startswith("urllib")}, (
+            "ui/desktop.py still imports urllib")
+
+
 def test_desktop_launch_binds_tray_menu_to_application_runtime(monkeypatch):
     """The launcher must not hand Uvicorn's transport object to the tray."""
     class ApplicationServer(_Server):
@@ -575,9 +735,13 @@ def test_desktop_launch_binds_tray_menu_to_application_runtime(monkeypatch):
     class TransportServer:
         def __init__(self, _config):
             self.should_exit = False
+            # V0.9.1-C10: the launcher waits on the transport's own readiness
+            # flag instead of polling `/api/status` over HTTP, so a double for
+            # uvicorn has to carry it. Set in `run()`, where uvicorn sets it.
+            self.started = False
 
         def run(self):
-            return None
+            self.started = True
 
     class EventHook:
         def __iadd__(self, _handler):
@@ -618,7 +782,6 @@ def test_desktop_launch_binds_tray_menu_to_application_runtime(monkeypatch):
     monkeypatch.setitem(sys.modules, "webview", Webview)
     monkeypatch.setattr("optionspilot.ui.server.create_app", lambda *_args, **_kwargs: app)
     monkeypatch.setattr(desktop, "create_tray", lambda _icon: tray)
-    monkeypatch.setattr(desktop.urllib.request, "urlopen", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(desktop, "_free_port", lambda: 17777)
     monkeypatch.setattr(desktop, "_acquire_single_instance",
                         lambda: SimpleNamespace(close=lambda: None))

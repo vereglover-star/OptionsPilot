@@ -7,7 +7,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
 from pathlib import Path
 
 from optionspilot.config.settings import AppConfig
@@ -23,6 +22,48 @@ def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+#: How long the launcher will wait for the transport to bind before opening the
+#: window anyway. The retired HTTP poll gave up after ~100 attempts for the same
+#: reason: a window against a dead port is a bad outcome, but a process that
+#: never draws one and never exits is a worse one.
+SERVER_START_TIMEOUT = 10.0
+
+
+def _await_transport(transport_server, timeout: float | None = None) -> bool:
+    """Wait for uvicorn to report its listener is up. Returns whether it did.
+
+    V0.9.1-C10. This used to be an HTTP poll — up to 100 `urlopen` calls
+    against `/api/status`, 0.1s apart, asking over the network a question the
+    object in this process can answer. `uvicorn.Server.started` is set the
+    moment the listener is bound.
+
+    **The cost is latency, not CPU, and that is worth stating precisely
+    because the obvious guess is wrong.** Building the `/api/status` payload
+    was measured at 0.02 ms on a fresh account, so a hundred probes are not a
+    meaningful amount of work — the argument for deleting the poll is not that
+    it was expensive. It is that the loop only *notices* readiness on a 0.1s
+    sleep boundary, so every launch waited up to 100 ms after the server was
+    already serving; a flag read notices within 0.02s. A liveness probe that
+    builds a full application payload is also simply the wrong shape, and it
+    would get more expensive with a real account, but that is a reason to
+    prefer the flag rather than a measurement anyone has taken.
+
+    Bounded, and it *reports* rather than raises: the old loop fell through
+    silently after its attempts, so a failure to bind produced a window
+    pointing at a dead port with nothing in the log to say why. It also
+    swallowed every exception, including a genuine one.
+    """
+    deadline = time.monotonic() + (SERVER_START_TIMEOUT if timeout is None
+                                   else timeout)
+    while time.monotonic() < deadline:
+        if getattr(transport_server, "started", False):
+            return True
+        time.sleep(0.02)
+    log.warning("the HTTP transport did not report started within %.1fs; "
+                "opening the window anyway", SERVER_START_TIMEOUT)
+    return False
 
 
 def _acquire_single_instance():
@@ -91,12 +132,7 @@ def launch(config: AppConfig, runtime=None, data_dir=None) -> None:  # pragma: n
     application_server.updater.set_install_hook(_on_install_launched)
 
     url = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            urllib.request.urlopen(url + "/api/status", timeout=1)
-            break
-        except Exception:  # noqa: BLE001
-            time.sleep(0.1)
+    _await_transport(transport_server)
 
     tray = create_tray(Path(__file__).parent / "static" / "favicon.ico")
     controller = _DesktopController(None, application_server, tray,

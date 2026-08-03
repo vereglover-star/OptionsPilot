@@ -210,7 +210,7 @@ closed on 2026-08-02 with C9-3/C9-4 deliberately deferred (above). Scope, commit
 sequence and acceptance criteria are in the V0.9 Engineering Specification,
 Revision 2. See `NEXT_SESSION.md`.
 
-C1…C9 have made `BackgroundRuntime` the single owner of every application
+C1…C10 have made `BackgroundRuntime` the single owner of every application
 background workload: work lanes over a bounded pool (C2), the market scan (C3),
 honest pause/resume/shutdown (C4), manual scans (C5), and the backtest plus the
 intelligence refresh (C6); C7 then made `_DesktopController.exit()` genuinely
@@ -219,9 +219,9 @@ and spawned eight successor processes on Restart; and C8 deleted the legacy
 `UIServer._loop`, a complete second scheduler that nothing called, leaving the
 runtime as the only path to a trading cycle; and C9 removed the tracemalloc
 monitor, which traced every allocation in a pandas/numpy process to feed one
-threshold rule and a `health.memory` payload block no client read. Remaining:
-the startup HTTP poll deleted, and a `DesktopApplication` assertable without a
-GUI.
+threshold rule and a `health.memory` payload block no client read; and C10
+replaced the launcher's HTTP self-poll with uvicorn's own readiness flag.
+Remaining: a `DesktopApplication` assertable without a GUI.
 
 One item from V0.9.0's own definition of done was **omitted rather than
 deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never
@@ -269,15 +269,13 @@ that never happens again: **update it in the same commit that lands a row.**
 | C6 | ✅ | Backtest + intelligence refresh runtime-owned; pool bound 2→4 | `687cd0e` |
 | C7 | ✅ | `_DesktopController.exit()` made genuinely single-entry | `9bd7f7c` |
 | C8 | ✅ | The dead `UIServer._loop` deleted — one scheduler only | `45fda53` |
-| C9 | ✅ | The tracemalloc monitor removed (drops `health.memory`) | *this commit* |
-| C10 | ⏳ | Startup HTTP poll deleted (`ui/desktop.py`) — **order unconfirmed** | — |
-| C11 | ⏳ | A `DesktopApplication` assertable without a GUI — **order unconfirmed** | — |
+| C9 | ✅ | The tracemalloc monitor removed (drops `health.memory`) | `76d18d1` |
+| C10 | ✅ | Startup HTTP poll deleted — readiness from `uvicorn.Server.started` | *this commit* |
+| C11 | ⏳ | A `DesktopApplication` assertable without a GUI | — |
 
-**C1…C9 are confirmed** (C7 and C9 by direct user confirmation, the rest by
-their commit bodies). **C10 and C11 are the two remaining scope items in a
-plausible order, not a verified one** — the specification's ordering for them has
-never been read into this repository. Confirm before implementing, and mark them
-confirmed here when you do.
+**C1…C10 are confirmed** (C7, C9 and C10 by direct user confirmation, the rest
+by their commit bodies). C11 is the last remaining scope item, so its identity
+follows by elimination rather than by having been read from the specification.
 
 Make `BackgroundRuntime` genuinely the one lifecycle owner, so pause, resume,
 shutdown and health reporting describe reality rather than intent. Scope: work
