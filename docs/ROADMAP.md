@@ -210,12 +210,14 @@ closed on 2026-08-02 with C9-3/C9-4 deliberately deferred (above). Scope, commit
 sequence and acceptance criteria are in the V0.9 Engineering Specification,
 Revision 2. See `NEXT_SESSION.md`.
 
-C1…C6 have made `BackgroundRuntime` the single owner of every application
+C1…C7 have made `BackgroundRuntime` the single owner of every application
 background workload: work lanes over a bounded pool (C2), the market scan (C3),
 honest pause/resume/shutdown (C4), manual scans (C5), and the backtest plus the
-intelligence refresh (C6). Remaining: the dead `_loop` and the startup HTTP
-poll deleted, a single-entry `exit()` guard, and a `DesktopApplication`
-assertable without a GUI.
+intelligence refresh (C6); C7 then made `_DesktopController.exit()` genuinely
+single-entry, which it was not — eight concurrent callers ran eight shutdowns
+and spawned eight successor processes on Restart. Remaining: the dead `_loop`
+deleted (C8), the startup HTTP poll and the tracemalloc monitor removed, and a
+`DesktopApplication` assertable without a GUI.
 
 One item from V0.9.0's own definition of done was **omitted rather than
 deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never

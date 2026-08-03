@@ -327,6 +327,139 @@ def test_a_frozen_build_does_not_pass_itself_its_own_path(monkeypatch):
     assert desktop._relaunch_command() == ["OptionsPilot.exe", "ui"]
 
 
+class TestExitIsSingleEntry:
+    """V0.9.1-C7: `exit()` must run its shutdown exactly once, not merely
+    usually.
+
+    The guard was a check-then-act with nothing serialising it::
+
+        if self._exited:
+            return
+        self._exited = True
+
+    `exit()` is reachable from five call sites on at least four threads — the
+    tray menu's Exit and Restart (tray thread), the pywebview JS bridge, the
+    `desktop-exit` worker `on_closing` defers to, and `launch()`'s `finally` on
+    the main thread. Two arriving together both observe False and both proceed.
+
+    The consequences are not symmetric. A double `server.close()` and a double
+    `tray.stop()` are absorbed by their own idempotence, but **Restart spawns a
+    successor process**, and it releases the single-instance lock first —
+    precisely so the successor can bind the port. Two winners therefore start
+    two OptionsPilot processes, and neither is rejected, because the guard that
+    would have rejected the second was just handed away by the first.
+
+    This is the shape the milestone keeps removing: `MarketDataControl`
+    admitted 8 of 8 concurrent requests against one slot, and C5's manual scan
+    ran a whole extra cycle. Checking a slot and then claiming it is not
+    claiming it.
+    """
+
+    class _SlowFalse:
+        """A `_exited` whose truth test is slow.
+
+        Between `if self._exited` and `self._exited = True` there are two
+        bytecodes, so a plain concurrent test reproduces the race only by luck
+        and would be a flaky guard rather than a proof. Making the *read* slow
+        widens the window deterministically, and it stays honest after the fix:
+        the corrected guard reads this same object inside the lock, so the
+        second caller simply waits for the first to finish claiming.
+        """
+
+        def __bool__(self):
+            time.sleep(0.05)
+            return False
+
+    class _CountingTray(NullTray):
+        def __init__(self):
+            super().__init__()
+            self.stops = 0
+
+        def stop(self):
+            self.stops += 1
+            super().stop()
+
+    @staticmethod
+    def _race(fn, count=8):
+        ready = threading.Barrier(count)
+
+        def run():
+            ready.wait()
+            fn()
+
+        threads = [threading.Thread(target=run, name=f"exit-{i}")
+                   for i in range(count)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert not any(t.is_alive() for t in threads), "an exit call hung"
+
+    def test_concurrent_exits_run_the_shutdown_once(self):
+        window, server = _Window(), _Server()
+        tray = self._CountingTray()
+        controller = _DesktopController(window, server, tray)
+        controller._exited = self._SlowFalse()
+
+        self._race(controller.exit)
+
+        assert server.closed == 1, f"the server was closed {server.closed} times"
+        assert tray.stops == 1, f"the tray was stopped {tray.stops} times"
+
+    def test_concurrent_restarts_spawn_exactly_one_successor(self):
+        """The failure that reaches the user: two running applications."""
+        window, server = _Window(), _Server()
+        releases = []
+        controller = _DesktopController(
+            window, server, self._CountingTray(),
+            release_instance_lock=lambda: releases.append(1))
+        controller._exited = self._SlowFalse()
+        spawned = []
+
+        class _Popen:
+            def __init__(self, command, **_kwargs):
+                spawned.append(command)
+
+        original = desktop.subprocess.Popen
+        desktop.subprocess.Popen = _Popen
+        try:
+            self._race(controller.restart)
+        finally:
+            desktop.subprocess.Popen = original
+
+        assert len(spawned) == 1, (
+            f"{len(spawned)} successor processes were spawned")
+        assert len(releases) == 1, (
+            f"the instance lock was released {len(releases)} times")
+
+    def test_a_caller_that_did_not_win_is_not_made_to_wait(self):
+        """`exit()` is called from the tray thread and the JS bridge thread.
+
+        Blocking either for the length of a real shutdown — `tray.stop()` and
+        `server.close()` join workers for up to seven seconds between them —
+        would freeze the tray menu behind a shutdown it did not start. The
+        loser returns; it does not queue.
+        """
+        window, server = _Window(), _Server()
+        started = threading.Event()
+        release = threading.Event()
+        server.on_close = lambda: (started.set(), release.wait(10))
+
+        controller = _DesktopController(window, server, self._CountingTray())
+        winner = threading.Thread(target=controller.exit, name="exit-winner")
+        winner.start()
+        try:
+            assert started.wait(5), "the shutdown never began"
+            began = time.monotonic()
+            controller.exit()
+            assert time.monotonic() - began < 1.0, (
+                "a losing caller waited for a shutdown it did not start")
+        finally:
+            release.set()
+            winner.join(timeout=10)
+        assert server.closed == 1
+
+
 def test_tray_hide_restore_and_exit_are_idempotent():
     window, server = _Window(), _Server()
     tray = NullTray()

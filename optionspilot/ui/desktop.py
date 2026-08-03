@@ -191,6 +191,9 @@ class _DesktopController:
         self.tray_started = False
         self.allow_close = False
         self._exited = False
+        #: Serialises the claim in `exit()` ONLY — never the shutdown itself.
+        #: See `exit`'s docstring for why the body must run outside it.
+        self._exit_lock = threading.Lock()
         self._prompt_shown = False
         self._release_instance_lock = release_instance_lock
         self._workers: list[threading.Thread] = []
@@ -351,9 +354,33 @@ class _DesktopController:
         self.exit(restart_command=_relaunch_command())
 
     def exit(self, restart_command=None):
-        if self._exited:
-            return
-        self._exited = True
+        """Shut the application down. Runs its body exactly once, ever.
+
+        V0.9.1-C7. The guard used to be ``if self._exited: return`` followed by
+        ``self._exited = True``, with nothing between them — and `exit()` is
+        reachable from five call sites on at least four threads (tray Exit,
+        tray Restart, the JS bridge, the `desktop-exit` worker, and `launch()`'s
+        `finally`). Measured with eight concurrent callers, **all eight ran the
+        shutdown and Restart spawned eight successor processes** — and the
+        successors were not rejected, because releasing the single-instance
+        lock is the first thing a restart does. Checking a slot and then
+        claiming it is not claiming it; `MarketDataControl` shipped the same
+        shape and admitted 8 of 8 against one slot.
+
+        **The lock covers the claim, not the work.** `tray.stop()` and
+        `server.close()` join workers for up to seven seconds between them, and
+        this method is called from the tray thread and the pywebview JS-bridge
+        thread — holding a lock across that would freeze the tray menu behind a
+        shutdown it did not start. A caller that does not win returns
+        immediately, which is what the old guard did for a *sequential* second
+        call and is safe for a concurrent one too: nothing in the body runs
+        after ``window.destroy()``, so there is no later step a loser could
+        race ahead of.
+        """
+        with self._exit_lock:
+            if self._exited:
+                return
+            self._exited = True
         self.allow_close = True
         self.tray.stop()
         self.server.close()

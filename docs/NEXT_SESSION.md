@@ -6,16 +6,25 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
 **Last updated:** 2026-08-03, mid **V0.9.1 — runtime & thread ownership**
-(C1…C6 committed).
+(C1…C7 committed).
 
 ## What to do next
 
-**Continue V0.9.1 at C7.** Plan of record: the V0.9 Engineering Specification,
-Revision 2. Six commits are in; the runtime now owns every application
-background workload, and `ui/server.py` and `intelligence/engine.py` construct
-no threads at all (asserted on the AST, not on source text).
+**Continue V0.9.1 at C8 — delete the dead `_loop`.** Plan of record: the V0.9
+Engineering Specification, Revision 2. Seven commits are in; the runtime owns
+every application background workload, `ui/server.py` and
+`intelligence/engine.py` construct no threads at all (asserted on the AST, not
+on source text), and `_DesktopController.exit()` is genuinely single-entry.
 
-**Three things carried into C7.**
+⚠ **The per-commit V0.9.1 sequence is NOT in this repository.** It lives only in
+the Engineering Specification, Revision 2, which a session can lose to
+compaction. C7's identity had to be confirmed with the user for exactly that
+reason. What is recorded here: **C8 = delete the dead `_loop`**; the remaining
+items are the startup HTTP poll, the tracemalloc monitor, and the GUI-free
+`DesktopApplication`. If you are resuming without the spec, confirm the mapping
+before implementing rather than inferring it.
+
+**Three things carried forward.**
 
 1. **F-1 is out of scope for this whole milestone, not just for one commit.**
    `_maybe_send_summaries` runs outside the server lock on a worker thread
