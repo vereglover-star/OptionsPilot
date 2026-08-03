@@ -89,6 +89,13 @@ ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
 MAX_EQUITY_POINTS = 2000
 
+#: The runtime task a user's "Scan now" request triggers (V0.9.1-C5). It is
+#: `on_demand`, so the interval is never used to schedule it — the value exists
+#: only because `TaskSpec` requires a positive one, and it is deliberately long
+#: enough that reading it as a schedule would be obviously wrong.
+MANUAL_SCAN_TASK = "manual_scan"
+MANUAL_SCAN_INTERVAL = 24 * 60 * 60.0
+
 # V0.7.0: the intelligence projections moved to `services/intelligence.py`.
 # They decide which twelve of thirty-eight metrics are a headline and how much
 # of a five-year series a client receives — presentation decisions, reachable
@@ -143,6 +150,17 @@ class UIServer:
         # background loop and a manual scan can never interleave.
         self._cycle_lock = threading.Lock()
         self.scan_state: dict = {"running": False, "done": 0, "total": 0}
+        # Registered at construction, not in `start_loop`: a manual scan must
+        # work on a server started with `run_loop=False`, where no scheduled
+        # task is ever registered. The interval is nominal — the task only ever
+        # runs when `trigger()` makes it due, which is what a user's request
+        # does. Worker lane for the same reason `market_monitor` is: a cycle
+        # fetches the whole watchlist over the network and must not sit on the
+        # coordinator thread.
+        self.background.register(TaskSpec(
+            MANUAL_SCAN_TASK, MANUAL_SCAN_INTERVAL, self._background_scan,
+            policy="essential", lane="worker", on_demand=True,
+            restartable=False))
         self._journal_cache: tuple[int, list] | None = None
         self._coach_cache: tuple[int, dict] | None = None
         self._meta_path = data_dir / "state" / "symbol_meta.json"
@@ -330,25 +348,48 @@ class UIServer:
                 if self.orch.market_open(utcnow()) else 60
             )
 
-    def run_cycle_now(self) -> dict:
+    def run_cycle_now(self, *, blocking: bool = True) -> dict:
         """One full cycle: parallel candle prefetch (no orchestrator lock, with
-        live progress for the UI), then the stateful cycle under the lock."""
-        with self._cycle_lock:
-            symbols = list(self.cfg.data.watchlist)
-            self.scan_state = {"running": True, "done": 0, "total": len(symbols)}
-            try:
-                candles = self.orch.fetch_watchlist_candles(
-                    symbols, on_symbol=self._on_symbol_fetched)
-                with self.lock:
-                    summary = self.orch.run_cycle(candles=candles)
-                    self.last_summary = summary
-                    equity = self.orch.broker.get_account().equity
-                    self.equity_history.append((summary["ts"], equity))
-                    del self.equity_history[:-MAX_EQUITY_POINTS]
-                    return summary
-            finally:
-                self.scan_state = {"running": False,
-                                   "done": len(symbols), "total": len(symbols)}
+        live progress for the UI), then the stateful cycle under the lock.
+
+        ``blocking=False`` declines rather than waits when a cycle is already
+        in flight, returning ``{}``. That preserves the pre-V0.9.1-C5 manual
+        scan behaviour exactly: `request_scan` used to test
+        ``_cycle_lock.locked()`` and skip, so a request arriving during a
+        scheduled scan produced nothing rather than a second cycle immediately
+        afterwards. The synchronous ``/api/scan {"wait": true}`` path keeps the
+        default and still blocks.
+        """
+        if not self._cycle_lock.acquire(blocking=blocking):
+            log.info("scan request declined: a cycle is already running")
+            return {}
+        try:
+            return self._run_cycle_locked()
+        finally:
+            self._cycle_lock.release()
+
+    def _run_cycle_locked(self) -> dict:
+        """The cycle body. `_cycle_lock` is held by the caller.
+
+        Split out of `run_cycle_now` unchanged when that method gained the
+        non-blocking option — the algorithm, the lock order and the progress
+        bookkeeping are byte-for-byte what they were.
+        """
+        symbols = list(self.cfg.data.watchlist)
+        self.scan_state = {"running": True, "done": 0, "total": len(symbols)}
+        try:
+            candles = self.orch.fetch_watchlist_candles(
+                symbols, on_symbol=self._on_symbol_fetched)
+            with self.lock:
+                summary = self.orch.run_cycle(candles=candles)
+                self.last_summary = summary
+                equity = self.orch.broker.get_account().equity
+                self.equity_history.append((summary["ts"], equity))
+                del self.equity_history[:-MAX_EQUITY_POINTS]
+                return summary
+        finally:
+            self.scan_state = {"running": False,
+                               "done": len(symbols), "total": len(symbols)}
 
     def _on_symbol_fetched(self, symbol: str, frames: dict) -> None:
         """Progressive scan feedback: as each symbol's candles land, publish
@@ -362,17 +403,38 @@ class UIServer:
                 self.last_summary.setdefault("quotes", {})[symbol] = quote
 
     def request_scan(self) -> dict:
-        """Non-blocking manual scan: start a cycle in the background (unless
-        one is already running) and return immediately. Progress is surfaced
-        in every status payload / WS push as `scan`."""
-        if not self.scan_state.get("running") and not self._cycle_lock.locked():
-            threading.Thread(target=self._background_scan,
-                             daemon=True, name="manual-scan").start()
+        """Non-blocking manual scan: ask the runtime to run a cycle and return
+        immediately. Progress is surfaced in every status payload / WS push as
+        `scan`.
+
+        V0.9.1-C5: the runtime owns this, exactly as it owns the scheduled
+        scan. What used to be here was a raw thread behind a check-then-act
+        test — `if not running and not locked: Thread(...).start()` — which two
+        concurrent requests both passed, so the second ran a whole extra cycle
+        once `_cycle_lock` released. Checking a slot and then starting
+        something that claims it is not claiming it; `MarketDataControl`
+        shipped the same shape and admitted 8 of 8 simultaneous requests.
+
+        The runtime's per-task overlap guard is now the only arbiter, and the
+        caller decides nothing. That also means a manual scan is finally
+        pausable, drainable at shutdown and visible in the runtime snapshot,
+        none of which was true of a thread the runtime could not see.
+        """
+        # The runtime owns scan execution, so it has to be alive to own it.
+        # `start()` is idempotent and registers no scheduled work, so a server
+        # constructed with `run_loop=False` still scans only when asked.
+        self.background.start()
+        self.background.trigger(MANUAL_SCAN_TASK)
         return {"state": "started", "scan": self.scan_state}
 
     def _background_scan(self) -> None:
         try:
-            self.run_cycle_now()
+            # Non-blocking: a request arriving while a cycle is already running
+            # is declined, not queued. Queueing it would run a second full
+            # cycle the instant the first returned, which is not what the old
+            # `if not _cycle_lock.locked()` check did and not what the user
+            # asked for — they asked for a scan, and one is already happening.
+            self.run_cycle_now(blocking=False)
         except Exception as exc:  # noqa: BLE001 — surfaced via logs/status
             log.exception("manual scan failed: %s", exc)
 

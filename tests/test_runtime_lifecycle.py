@@ -223,6 +223,153 @@ class TestScanDoesNotFreezeTheApplication:
             f"leaked {live_worker_names() - baseline}")
 
 
+class TestManualScansAreRuntimeOwned:
+    """V0.9.1-C5: one owner for scan execution, however the scan was started.
+
+    Before this, a scheduled scan was a runtime task on the worker lane and a
+    manual scan was a raw ``threading.Thread(name="manual-scan")`` — two
+    ownership models over one workload. The runtime could not see the manual
+    one, so it could not pause it, could not drain it at shutdown and could not
+    report it; and because `live_worker_names()` matches on the coordinator's
+    prefix, a leaked `manual-scan` thread was invisible to the one test written
+    to catch leaks.
+
+    The dispatch was also a check-then-act race:
+
+        if not self.scan_state.get("running") and not self._cycle_lock.locked():
+            threading.Thread(...).start()
+
+    Two concurrent requests both observe an idle state and both spawn.
+    `_cycle_lock` then serialises them, so the second runs a whole extra cycle.
+    That is the shape `MarketDataControl.start_maintenance` shipped with, where
+    8 of 8 simultaneous requests were admitted against a single slot.
+    """
+
+    @pytest.fixture
+    def blocking_cycle(self, server, monkeypatch):
+        entered = threading.Event()
+        release = threading.Event()
+        cycles = []
+
+        def slow_cycle(*, blocking: bool = True):
+            # `_background_scan` calls run_cycle_now(blocking=False); the real
+            # method declines when a cycle is in flight, so the double does too.
+            if not blocking and entered.is_set():
+                return {}
+            cycles.append(1)
+            entered.set()
+            release.wait(20)
+            return {}
+
+        monkeypatch.setattr(server, "run_cycle_now", slow_cycle)
+        yield server, entered, release, cycles
+        release.set()
+
+    def test_no_raw_thread_remains_on_the_manual_scan_path(self, server):
+        """The spec's review focus, asserted rather than eyeballed.
+
+        Matched on the AST, not the text: the first version of this test
+        searched the source for `Thread(` and failed on `request_scan`'s own
+        docstring, which explains the raw thread it replaced.
+        `test_architecture.py` records the same lesson — a test that a docstring
+        can break is a test measuring the wrong thing.
+        """
+        import ast
+        import inspect
+        import textwrap
+
+        tree = ast.parse(textwrap.dedent(
+            inspect.getsource(type(server).request_scan)))
+        spawns = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Thread"
+        ]
+        assert not spawns, "request_scan still constructs a raw thread"
+
+    def test_a_manual_scan_runs_as_a_registered_runtime_task(self, server):
+        server.request_scan()
+        rows = {t["name"]: t for t in server.background.snapshot().tasks}
+        assert "manual_scan" in rows, (
+            f"the manual scan is not a runtime task: {sorted(rows)}")
+        assert rows["manual_scan"]["lane"] == "worker"
+        assert settle(lambda: server.background.snapshot().running)
+
+    def test_ten_simultaneous_requests_produce_one_scan(self, blocking_cycle):
+        """The race, closed. Ten requests, one cycle.
+
+        The old code let two concurrent requests both pass `if not running and
+        not locked` and both spawn; `_cycle_lock` then serialised them, so the
+        second ran a whole extra cycle. Now the requests only mark the task
+        due, and a due task is collected once — the caller decides nothing.
+        """
+        server, entered, release, cycles = blocking_cycle
+        for _ in range(10):
+            server.request_scan()
+        assert settle(lambda: entered.is_set()), "no scan started"
+        time.sleep(0.3)
+        assert len(cycles) == 1, f"{len(cycles)} cycles ran for 10 requests"
+
+    def test_a_request_during_a_running_scan_is_refused_and_counted(
+            self, blocking_cycle):
+        """The other half: the overlap guard, once dispatch has happened.
+
+        Distinct from the test above, which closes the race before dispatch.
+        This one arrives after, and must be refused rather than queued —
+        queueing would mean a second full cycle the moment the first returns.
+        """
+        server, entered, release, cycles = blocking_cycle
+        server.request_scan()
+        assert settle(lambda: entered.is_set()), "no scan started"
+        for _ in range(5):
+            server.request_scan()
+            time.sleep(0.05)
+        row = next(t for t in server.background.snapshot().tasks
+                   if t["name"] == "manual_scan")
+        assert row["running"] is True
+        assert row["skipped"] > 0, "re-entry was refused but never recorded"
+        assert len(cycles) == 1
+
+    def test_the_api_contract_is_unchanged(self, server):
+        out = server.request_scan()
+        assert out["state"] == "started"
+        assert set(out["scan"]) == {"running", "done", "total"}
+
+    def test_pause_halts_a_queued_manual_scan(self, server):
+        """The point of single ownership: pause now reaches manual scans too."""
+        ran = []
+        server.background.start()
+        server.background.pause()
+        monkey = getattr(server, "run_cycle_now")
+        try:
+            server.run_cycle_now = lambda **kw: ran.append(1) or {}
+            server.request_scan()
+            time.sleep(0.3)
+            assert ran == [], "a manual scan ran while the runtime was paused"
+            server.background.resume()
+            assert settle(lambda: bool(ran)), "resume did not release the scan"
+        finally:
+            server.run_cycle_now = monkey
+
+    def test_a_manual_scan_is_drained_by_shutdown(self, blocking_cycle):
+        """It is the runtime's to abandon, and it is abandoned BY NAME."""
+        server, entered, release, _ = blocking_cycle
+        server.request_scan()
+        assert settle(lambda: entered.is_set())
+        abandoned = server.background.stop(timeout=0.3)
+        assert abandoned == ["manual_scan"], (
+            f"shutdown did not report the in-flight manual scan: {abandoned!r}")
+
+    def test_a_manual_scan_leaves_no_thread_behind(self, server):
+        baseline = live_worker_names()
+        server.request_scan()
+        assert settle(lambda: server.background.snapshot().running)
+        server.close()
+        assert settle(lambda: live_worker_names() == baseline), (
+            f"leaked {live_worker_names() - baseline}")
+
+
 class TestSchedulerShutdown:
     def test_stop_returns_even_when_a_task_is_still_working(self):
         """Shutdown is bounded. A wedged callback must not hold the process.

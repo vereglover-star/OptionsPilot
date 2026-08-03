@@ -63,6 +63,7 @@ cycle needs to know which task it was.
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -110,6 +111,12 @@ class TaskSpec:
     #: `coordinator`, which is the pre-lanes behaviour; the worker path stays
     #: unreachable until something opts in.
     lane: str = "coordinator"
+    #: Runs ONLY when :meth:`BackgroundRuntime.trigger` makes it due — never on
+    #: registration, never on resume, never on its interval. This is what lets
+    #: user-initiated work (a manual scan) be a runtime task rather than a raw
+    #: thread: without it, registering the task would run it, because
+    #: `register` makes every task immediately due by design.
+    on_demand: bool = False
     owner: str = "runtime"
     restartable: bool = True
     next_due: float = 0.0
@@ -219,7 +226,7 @@ class BackgroundRuntime:
             if task.name in self._tasks:
                 raise ValueError(f"background task already registered: {task.name}")
             now = self._clock()
-            task.next_due = now
+            task.next_due = math.inf if task.on_demand else now
             self._tasks[task.name] = task
             self._wake.set()
 
@@ -300,7 +307,11 @@ class BackgroundRuntime:
             self._paused = False
             now = self._clock()
             for task in self._tasks.values():
-                task.next_due = min(task.next_due, now)
+                # An on-demand task was not waiting for its interval, so there
+                # is nothing for resume to catch up. Pulling it forward here
+                # would turn every resume into a scan nobody asked for.
+                if not task.on_demand:
+                    task.next_due = min(task.next_due, now)
             self._wake.set()
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -323,7 +334,13 @@ class BackgroundRuntime:
                     "last_started": task.last_started,
                     "last_success": task.last_success,
                     "last_failure": task.last_failure,
-                    "next_due": task.next_due,
+                    # An on-demand task's deadline is `inf`, which is a truthful
+                    # internal value and NOT valid JSON — `json.dumps` emits a
+                    # bare `Infinity` and a browser's parse dies on it. `None`
+                    # is the honest wire form: there is no scheduled time.
+                    # (Same boundary rule as `intelligence/models._finite`.)
+                    "next_due": (task.next_due if math.isfinite(task.next_due)
+                                 else None),
                     "runs": task.runs,
                     "failures": task.failures,
                     "restart_count": task.restart_count,
@@ -365,7 +382,10 @@ class BackgroundRuntime:
                         due.append(task)
                         # Schedule from now, not the old deadline, so a slow
                         # callback cannot accumulate a backlog of executions.
-                        task.next_due = now + task.interval
+                        # An on-demand task goes back to sleep instead: it runs
+                        # once per trigger, not once per interval thereafter.
+                        task.next_due = (math.inf if task.on_demand
+                                         else now + task.interval)
                 health_due = not paused and self._health_check and now >= self._next_health
                 if health_due:
                     self._next_health = now + self._health_interval

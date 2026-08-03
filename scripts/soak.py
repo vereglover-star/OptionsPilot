@@ -68,23 +68,61 @@ def soak_runtime(cfg, minutes: float) -> int:
     deadline = time.monotonic() + minutes * 60
     scan_seconds = 0.4          # a "scan" far slower than the tray's interval
     beats: list[float] = []
-    scans = {"started": 0, "finished": 0, "overlap": 0}
+    scans = {"started": 0, "finished": 0, "overlap": 0, "depth": 0}
     inside = threading.Lock()
 
-    def fake_scan():
-        if not inside.acquire(blocking=False):
-            scans["overlap"] += 1
-            return
+    def fake_scan(blocking: bool = True) -> bool:
+        """Mirrors `UIServer.run_cycle_now`: one cycle at a time, and a
+        non-blocking caller DECLINES rather than queues.
+
+        The acquire is atomic on purpose. An earlier version of this model
+        tested `inside.locked()` and then called the body — the same
+        check-then-act shape C5 exists to remove — and reported overlaps that
+        production cannot have.
+        """
+        if not inside.acquire(blocking=blocking):
+            return False
         try:
+            scans["depth"] += 1
+            if scans["depth"] > 1:
+                scans["overlap"] += 1     # impossible unless the lock is broken
             scans["started"] += 1
             time.sleep(scan_seconds)
             scans["finished"] += 1
+            scans["depth"] -= 1
         finally:
             inside.release()
+        return True
+
+    # V0.9.1-C5: a manual scan is a runtime task like any other, so the soak
+    # runs one. It shares `inside` with the scheduled scan, so any cycle that
+    # overlaps another — whichever way it was started — is counted as an
+    # overlap and fails the run. That shared lock is the point: before C5 the
+    # two paths had separate owners and only `_cycle_lock` stopped them
+    # colliding.
+    manual = {"requested": 0, "ran": 0, "declined": 0}
+
+    def fake_manual_scan():
+        # `_background_scan` calls run_cycle_now(blocking=False): a request
+        # arriving while a cycle is running is declined, not queued. Queueing
+        # would run a second full cycle the instant the first returned, which
+        # is not what the pre-C5 code did.
+        if fake_scan(blocking=False):
+            manual["ran"] += 1
+        else:
+            manual["declined"] += 1
 
     runtime = BackgroundRuntime(health_interval=60)
-    runtime.register(TaskSpec("scan", 0.2, fake_scan,
+    # 0.4s of work on a 0.6s interval: a ~67% duty cycle. Aggressive enough
+    # that the coordinator is nearly always competing with a scan (which is
+    # what the starvation check needs), but with real gaps, so a manual scan
+    # sometimes wins the lock instead of always declining — otherwise C5's
+    # path is present in the soak and never exercised by it.
+    runtime.register(TaskSpec("scan", 0.6, fake_scan,
                               policy="monitoring", lane="worker"))
+    runtime.register(TaskSpec("manual_scan", 3600.0, fake_manual_scan,
+                              policy="essential", lane="worker",
+                              on_demand=True))
     runtime.register(TaskSpec("tray", 0.05, lambda: beats.append(time.monotonic()),
                               policy="essential"))
     baseline_threads = {t.name for t in threading.enumerate() if t.is_alive()}
@@ -104,7 +142,16 @@ def soak_runtime(cfg, minutes: float) -> int:
         while time.monotonic() < deadline:
             time.sleep(5)
             triggers += 1
-            runtime.trigger("scan")          # manual trigger, as a user would
+            runtime.trigger("scan")          # force the scheduled task due
+            # A user pressing "Scan now", repeatedly and impatiently. Before
+            # C5 each press could spawn its own thread; now they coalesce.
+            # Offset from the forced scheduled scan above: triggering both in
+            # the same instant correlates them, so the manual one always lost
+            # the lock and never actually ran.
+            time.sleep(0.5)
+            for _ in range(5):
+                manual["requested"] += 1
+                runtime.trigger("manual_scan")
 
             # V0.9.1-C4: pause/resume under load, every third pass. Pause stops
             # DISPATCH without interrupting work, so the invariants are:
@@ -158,6 +205,9 @@ def soak_runtime(cfg, minutes: float) -> int:
           f"(a starved coordinator shows a gap >= the {scan_seconds:g}s scan)")
     print(f"scans: {row['runs']} run, {row['skipped']} skipped, "
           f"{scans['overlap']} overlapping  (manual triggers: {triggers})")
+    print(f"manual scans: {manual['requested']} requested, {manual['ran']} ran, "
+          f"{manual['declined']} declined while a cycle was in flight "
+          f"(coalescing is expected; more RAN than REQUESTED would be a bug)")
     print(f"pause/resume cycles: {pauses}  "
           f"pause violations: {pause_violations}  "
           f"resume violations: {resume_violations}")
@@ -182,6 +232,11 @@ def soak_runtime(cfg, minutes: float) -> int:
         problems.append(f"{pause_violations} pause violations")
     if resume_violations:
         problems.append(f"{resume_violations} resume violations")
+    if manual["ran"] == 0:
+        problems.append("no manual scan ever ran - C5's path was not exercised")
+    if manual["ran"] > manual["requested"]:
+        problems.append(f"{manual['ran']} manual scans for "
+                        f"{manual['requested']} requests")
 
     print("SOAK PASS" if not problems else f"SOAK FAIL: {'; '.join(problems)}")
     return 0 if not problems else 1

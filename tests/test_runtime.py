@@ -413,6 +413,104 @@ class TestLanes:
             BackgroundRuntime(max_workers=0)
 
 
+class TestOnDemandTasks:
+    """V0.9.1-C5: a task that runs only when something asks for it.
+
+    Without this the runtime cannot own user-initiated work at all, because
+    `register` deliberately makes every task immediately due — so registering a
+    "manual scan" task would run a scan, on every server construction. The
+    three ways a task becomes due are registration, its interval, and
+    `trigger`; an on-demand task answers only to the third.
+    """
+
+    def test_registering_an_on_demand_task_does_not_run_it(self):
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("manual", 0.01, lambda: runs.append(1),
+                                  on_demand=True))
+        runtime.start()
+        try:
+            time.sleep(0.3)      # many intervals; none of them apply
+            assert runs == [], "an on-demand task ran without being triggered"
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_trigger_runs_an_on_demand_task_exactly_once(self):
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("manual", 0.01, lambda: runs.append(1),
+                                  on_demand=True))
+        runtime.start()
+        try:
+            runtime.trigger("manual")
+            assert _settle(lambda: len(runs) == 1)
+            time.sleep(0.3)      # the interval must not re-arm it
+            assert len(runs) == 1, f"ran {len(runs)} times for one trigger"
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_resume_does_not_fire_an_on_demand_task(self):
+        """Resume pulls every waiting task forward. An on-demand task was not
+        waiting, so catching it up would be a scan nobody asked for."""
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("manual", 0.01, lambda: runs.append(1),
+                                  on_demand=True))
+        runtime.register(TaskSpec("normal", 0.01, lambda: None))
+        runtime.start()
+        try:
+            runtime.pause()
+            time.sleep(0.05)
+            runtime.resume()
+            time.sleep(0.3)
+            assert runs == [], "resume fired an on-demand task"
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_an_ordinary_task_is_unaffected(self):
+        """The default must stay exactly what it was."""
+        assert TaskSpec("t", 1.0, lambda: None).on_demand is False
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("normal", 0.01, lambda: runs.append(1)))
+        runtime.start()
+        try:
+            assert _settle(lambda: len(runs) > 2)
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+    def test_an_on_demand_deadline_survives_json(self):
+        """`inf` is truthful internally and invalid on the wire.
+
+        The snapshot reaches `/api/runtime` through `json.dumps`, which emits a
+        bare `Infinity` that no conforming parser accepts — the failure this
+        codebase already recorded once for `intelligence/models._finite`. It
+        was reintroduced here and caught by `test_ui_server.py`.
+        """
+        import json
+
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("manual", 3600.0, lambda: None,
+                                  on_demand=True))
+        row = runtime.snapshot().tasks[0]
+        assert row["next_due"] is None, "an unscheduled task must not claim a time"
+        json.dumps(runtime.snapshot().to_dict())      # must not raise
+
+    def test_an_on_demand_worker_task_is_triggerable_repeatedly(self):
+        runs: list[int] = []
+        runtime = BackgroundRuntime(health_interval=60)
+        runtime.register(TaskSpec("manual", 3600.0, lambda: runs.append(1),
+                                  lane="worker", on_demand=True))
+        runtime.start()
+        try:
+            for expected in (1, 2, 3):
+                runtime.trigger("manual")
+                assert _settle(lambda n=expected: len(runs) == n), (
+                    f"trigger {expected} did not run: {len(runs)}")
+        finally:
+            runtime.stop(timeout=SETTLE)
+
+
 class TestPauseAndStopSemantics:
     """V0.9.1-C4: Decision D-2 made executable.
 
