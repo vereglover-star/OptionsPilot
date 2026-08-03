@@ -15,7 +15,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2205 tests run against canned
+against its real API with a real key — all 2217 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -518,7 +518,7 @@ called the risk preflight that existed but wasn't wired up.
    pausing feature work to accumulate paper-trading data.
 6. Exe rebuild + smoke test — deferred until the V3 branch is approved.
 
-## Next milestone
+## Current milestone (in progress)
 
 **V0.9.1 — Runtime & thread ownership.** Make `BackgroundRuntime` genuinely the
 one lifecycle owner, so pause, resume, shutdown and health reporting describe
@@ -529,6 +529,20 @@ and a `DesktopApplication` assertable without a GUI. Estimate 8–10 days, 11
 commits. Concurrency defects are non-deterministic, so the exit criterion is a
 30-minute soak, **not** a green suite.
 
+**Committed so far — C1…C6** (`d92de20`…): the starvation bug stated as a
+failing test (C1); lanes and a bounded worker pool, inert by default (C2); the
+market scan moved onto the worker lane (C3); real pause/resume/shutdown
+semantics, including `pause_pending` because pause is not instantaneous (C4);
+manual scans brought under one owner and a check-then-act race removed (C5);
+and the last two unowned jobs — the backtest and the intelligence refresh —
+registered as on-demand worker tasks, with the pool bound raised from 2 to 4 to
+match the registered workload (C6). **`ui/server.py` and
+`intelligence/engine.py` now construct no threads at all**, asserted on the
+AST.
+
+Remaining: the dead `_loop` and the startup HTTP poll, the `exit()` guard, and
+the GUI-free `DesktopApplication`.
+
 Then V0.9.2 (complete the service extraction) and V0.9.3 (a real API v1).
 Scope detail: the V0.9 Engineering Specification, Revision 2, and `ROADMAP.md`.
 
@@ -538,7 +552,7 @@ by business decision — see `ROADMAP.md` ▸ Deferred.
 
 ## Test count
 
-**2205 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2217 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 

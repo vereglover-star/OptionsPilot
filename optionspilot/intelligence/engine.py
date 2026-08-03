@@ -159,14 +159,20 @@ class TradingIntelligence:
             self._cache = None
             self._cache_key = None
 
-    def refresh_in_background(self) -> threading.Thread:
-        """Recompute off the request path. Returns the thread so a caller (or a
-        test) can join it; nothing in the app does, because a refresh that
-        hasn't finished simply means the next read computes synchronously."""
-        thread = threading.Thread(target=self.snapshot, kwargs={"force": True},
-                                  name="intelligence-refresh", daemon=True)
-        thread.start()
-        return thread
+    # `refresh_in_background()` used to live here: it started a daemon thread
+    # named "intelligence-refresh" and returned it. Removed in V0.9.1-C6.
+    #
+    # This layer imports `core` only (`tests/test_architecture.py`), so it can
+    # never reach `services.runtime` — which means it could start that thread
+    # but could not pause it, drain it at shutdown or report it, and the one
+    # leak test in the suite matched neither its name nor its prefix. A module
+    # that cannot own a thread's lifecycle should not begin one; the owner is
+    # the caller. `UIServer.refresh_intelligence()` triggers an on-demand
+    # runtime task that calls `snapshot(force=True)` on the worker lane.
+    #
+    # Nothing in the application had called it, which is why the gap survived
+    # three milestones. Warming the cache is still available and still off the
+    # request path — it now has a lifecycle owner.
 
     # ── the pipeline ─────────────────────────────────────────────────────
 

@@ -355,8 +355,15 @@ Operational decisions:
   advisory intelligence attached to an application that manages positions. A
   malformed review file must cost a dashboard panel, not a session. A failure is
   never cached as though it were an answer.
-* **`refresh_in_background()`** exists for callers that want to warm the cache
-  off the request path.
+* **Warming the cache is the caller's job, not this layer's.** There used to be
+  a `refresh_in_background()` here that started its own daemon thread; V0.9.1-C6
+  removed it. This layer imports `core` only, so it can never reach
+  `services.runtime` — it could start that thread but could not pause it, drain
+  it at shutdown or report it, and the suite's only thread-leak test matched
+  neither its name nor its prefix. A module that cannot own a thread's lifecycle
+  should not begin one. `UIServer.refresh_intelligence()` triggers an on-demand
+  runtime task that calls `snapshot(force=True)` on the worker lane; the engine
+  itself is unchanged and `snapshot()` is still safe to call from any thread.
 
 ---
 

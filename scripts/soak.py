@@ -112,6 +112,42 @@ def soak_runtime(cfg, minutes: float) -> int:
         else:
             manual["declined"] += 1
 
+    # V0.9.1-C6: the other two jobs the runtime now owns. Both are on-demand
+    # worker tasks, so with the scheduled scan and the manual scan the pool has
+    # four contenders against a bound of four — the configuration the soak has
+    # to exercise, because a bound that is one too small does not error, it
+    # just leaves a job sitting at "running" until a slot frees.
+    #
+    # The backtest models `start_backtest`'s single slot. The claim is atomic:
+    # a test-then-set would be the check-then-act shape C5 removed, and the C5
+    # soak reported overlaps production cannot have for exactly that reason.
+    bt = {"requested": 0, "ran": 0, "refused": 0, "overlap": 0, "depth": 0}
+    bt_claim = threading.Lock()
+    bt_running = threading.Event()
+    refresh = {"requested": 0, "ran": 0}
+
+    def request_backtest() -> None:
+        bt["requested"] += 1
+        with bt_claim:
+            if bt_running.is_set():
+                bt["refused"] += 1
+                return
+            bt_running.set()
+        runtime.trigger("backtest")
+
+    def fake_backtest() -> None:
+        bt["depth"] += 1
+        if bt["depth"] > 1:
+            bt["overlap"] += 1       # two backtests at once: the slot failed
+        bt["ran"] += 1
+        time.sleep(0.25)             # months of candles, then two report files
+        bt["depth"] -= 1
+        bt_running.clear()
+
+    def fake_refresh() -> None:
+        refresh["ran"] += 1
+        time.sleep(0.15)             # rebuild the intelligence snapshot
+
     runtime = BackgroundRuntime(health_interval=60)
     # 0.4s of work on a 0.6s interval: a ~67% duty cycle. Aggressive enough
     # that the coordinator is nearly always competing with a scan (which is
@@ -123,6 +159,12 @@ def soak_runtime(cfg, minutes: float) -> int:
     runtime.register(TaskSpec("manual_scan", 3600.0, fake_manual_scan,
                               policy="essential", lane="worker",
                               on_demand=True))
+    runtime.register(TaskSpec("backtest", 3600.0, fake_backtest,
+                              policy="essential", lane="worker",
+                              on_demand=True, restartable=False))
+    runtime.register(TaskSpec("intelligence_refresh", 3600.0, fake_refresh,
+                              policy="normal", lane="worker",
+                              on_demand=True, restartable=False))
     runtime.register(TaskSpec("tray", 0.05, lambda: beats.append(time.monotonic()),
                               policy="essential"))
     baseline_threads = {t.name for t in threading.enumerate() if t.is_alive()}
@@ -152,6 +194,15 @@ def soak_runtime(cfg, minutes: float) -> int:
             for _ in range(5):
                 manual["requested"] += 1
                 runtime.trigger("manual_scan")
+
+            # V0.9.1-C6: a user pressing Run Backtest impatiently (the second
+            # press must be refused by the slot, not queued) and a cache warm.
+            # Both land while the scheduled scan is very likely mid-cycle, so
+            # all four worker tasks contend for the pool.
+            for _ in range(3):
+                request_backtest()
+            refresh["requested"] += 1
+            runtime.trigger("intelligence_refresh")
 
             # V0.9.1-C4: pause/resume under load, every third pass. Pause stops
             # DISPATCH without interrupting work, so the invariants are:
@@ -208,6 +259,11 @@ def soak_runtime(cfg, minutes: float) -> int:
     print(f"manual scans: {manual['requested']} requested, {manual['ran']} ran, "
           f"{manual['declined']} declined while a cycle was in flight "
           f"(coalescing is expected; more RAN than REQUESTED would be a bug)")
+    print(f"backtests: {bt['requested']} requested, {bt['ran']} ran, "
+          f"{bt['refused']} refused by the single slot, "
+          f"{bt['overlap']} overlapping")
+    print(f"intelligence refreshes: {refresh['requested']} requested, "
+          f"{refresh['ran']} ran")
     print(f"pause/resume cycles: {pauses}  "
           f"pause violations: {pause_violations}  "
           f"resume violations: {resume_violations}")
@@ -237,6 +293,22 @@ def soak_runtime(cfg, minutes: float) -> int:
     if manual["ran"] > manual["requested"]:
         problems.append(f"{manual['ran']} manual scans for "
                         f"{manual['requested']} requests")
+    # V0.9.1-C6. The "ever ran" checks are the ones that matter: the C5 soak
+    # passed a full run with `manual ran: 0` because the scheduled scan held
+    # the lock throughout, so the path it was written to exercise was present
+    # and never executed. A soak that passes without touching the feature is
+    # worse than one that fails.
+    if bt["overlap"]:
+        problems.append(f"{bt['overlap']} overlapping backtests")
+    if bt["ran"] == 0:
+        problems.append("no backtest ever ran - C6's path was not exercised")
+    if bt["refused"] == 0:
+        problems.append("the backtest slot never refused a second request")
+    if refresh["ran"] == 0:
+        problems.append("no intelligence refresh ever ran")
+    if refresh["ran"] > refresh["requested"]:
+        problems.append(f"{refresh['ran']} refreshes for "
+                        f"{refresh['requested']} requests")
 
     print("SOAK PASS" if not problems else f"SOAK FAIL: {'; '.join(problems)}")
     return 0 if not problems else 1

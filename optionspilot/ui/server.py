@@ -96,6 +96,12 @@ MAX_EQUITY_POINTS = 2000
 MANUAL_SCAN_TASK = "manual_scan"
 MANUAL_SCAN_INTERVAL = 24 * 60 * 60.0
 
+#: The other two on-demand jobs, brought onto the runtime in V0.9.1-C6. Both
+#: share `MANUAL_SCAN_INTERVAL`'s nominal-interval reasoning above: they run
+#: once per `trigger()` and never on a schedule.
+BACKTEST_TASK = "backtest"
+INTELLIGENCE_TASK = "intelligence_refresh"
+
 # V0.7.0: the intelligence projections moved to `services/intelligence.py`.
 # They decide which twelve of thirty-eight metrics are a headline and how much
 # of a five-year series a client receives — presentation decisions, reachable
@@ -144,6 +150,13 @@ class UIServer:
         self._health_memory_baseline = 0
         self._bt_lock = threading.Lock()
         self.backtest_job: dict = {"state": "idle"}
+        # `TaskSpec.callback` takes no arguments, so a parameterised job hands
+        # its parameters over through server state rather than through the
+        # scheduler. Written and read under `_bt_lock`, the same lock that
+        # claims the single backtest slot, so the parameters and the claim are
+        # one atomic fact — a slot claimed with nobody's parameters behind it
+        # would run the previous request's symbol.
+        self._bt_pending: tuple[str, int, float | None] | None = None
         # Scan pipeline: candle fetching runs OUTSIDE self.lock (it only
         # touches the thread-safe provider), so status reads and the UI stay
         # responsive during a scan. _cycle_lock serializes whole cycles so the
@@ -161,6 +174,28 @@ class UIServer:
             MANUAL_SCAN_TASK, MANUAL_SCAN_INTERVAL, self._background_scan,
             policy="essential", lane="worker", on_demand=True,
             restartable=False))
+        # V0.9.1-C6, and registered here for the same reason the manual scan
+        # is: `POST /api/backtest` is served whether or not `run_loop` is set,
+        # so the task has to exist on a server that never starts a schedule.
+        #
+        # `policy="essential"` — a user who starts a backtest and then hides
+        # the window to the tray asked for a report, and the reduced hidden
+        # profile runs `essential` and `monitoring` only. `restartable=False`
+        # because `_run_backtest` records its own failure in `backtest_job`;
+        # a runtime retry would overwrite that with a second attempt the user
+        # never asked for and cannot see.
+        self.background.register(TaskSpec(
+            BACKTEST_TASK, MANUAL_SCAN_INTERVAL, self._background_backtest,
+            policy="essential", lane="worker", on_demand=True,
+            restartable=False))
+        # `policy="normal"` — warming a cache is genuinely deferrable, so a
+        # hidden window may skip it; the next read simply computes inline. That
+        # is the difference between this and a backtest, which produces a file
+        # the user is waiting for.
+        self.background.register(TaskSpec(
+            INTELLIGENCE_TASK, MANUAL_SCAN_INTERVAL,
+            self._background_intelligence, policy="normal", lane="worker",
+            on_demand=True, restartable=False))
         self._journal_cache: tuple[int, list] | None = None
         self._coach_cache: tuple[int, dict] | None = None
         self._meta_path = data_dir / "state" / "symbol_meta.json"
@@ -997,16 +1032,76 @@ class UIServer:
 
     def start_backtest(self, symbol: str, days: int, min_confidence: float | None
                        ) -> dict:
+        """Claim the single backtest slot and let the runtime execute it.
+
+        V0.9.1-C6: what used to be here was
+        ``threading.Thread(..., name="backtest").start()``. Unlike the manual
+        scan C5 replaced, this was never a check-then-act race — the slot is
+        tested and claimed inside one `_bt_lock`. The defect was *ownership*: a
+        job that reads months of candles and writes two report files ran on a
+        thread the runtime could not pause, could not drain at shutdown and
+        could not report, and whose name matched none of the prefixes the
+        suite's only leak test looks for.
+
+        The `_bt_lock` claim stays exactly as it was. It is not a second copy
+        of the runtime's overlap guard: that guard is dispatch state, while
+        `backtest_job` is the user-visible record carrying the symbol, the
+        report and any error, and `GET /api/backtest` returns it.
+        """
         with self._bt_lock:
             if self.backtest_job.get("state") == "running":
                 return self.backtest_job
+            self._bt_pending = (symbol.upper(), days, min_confidence)
             self.backtest_job = {"state": "running", "symbol": symbol.upper(),
                                  "started": utcnow().isoformat()}
-        threading.Thread(
-            target=self._run_backtest, args=(symbol.upper(), days, min_confidence),
-            daemon=True, name="backtest",
-        ).start()
-        return self.backtest_job
+            claimed = self.backtest_job
+        # The runtime owns the execution, so it has to be alive to own it —
+        # `start()` is idempotent and registers no scheduled work.
+        self.background.start()
+        if not self.background.trigger(BACKTEST_TASK):
+            # Unreachable while the task is registered at construction, and
+            # released rather than trusted: a claimed slot with nothing behind
+            # it would wedge every later backtest for the life of the process,
+            # which is the failure `MarketDataControl.start_maintenance` guards
+            # against by hand for exactly the same reason.
+            with self._bt_lock:
+                self._bt_pending = None
+                self.backtest_job = {"state": "error", "symbol": symbol.upper(),
+                                     "error": "the background runtime is "
+                                              "unavailable"}
+                return self.backtest_job
+        return claimed
+
+    def _background_backtest(self) -> None:
+        with self._bt_lock:
+            pending, self._bt_pending = self._bt_pending, None
+        if pending is None:
+            # A trigger with no claim behind it: nothing to do, and inventing
+            # parameters here would run a backtest nobody requested.
+            return
+        self._run_backtest(*pending)
+
+    def refresh_intelligence(self) -> dict:
+        """Warm the intelligence cache off the request path, under the runtime.
+
+        V0.9.1-C6: this replaces `IntelligenceEngine.refresh_in_background()`,
+        which started its own daemon thread. `intelligence/` imports `core`
+        only, so it cannot reach the runtime and therefore cannot own the
+        thread's lifecycle — the owner has to be a caller that can, which is
+        this layer.
+        """
+        self.background.start()
+        started = self.background.trigger(INTELLIGENCE_TASK)
+        return {"state": "started" if started else "unavailable"}
+
+    def _background_intelligence(self) -> None:
+        # A failed analysis returns an empty snapshot rather than raising
+        # (docs/TRADING_INTELLIGENCE.md), so this cannot fail the task; the
+        # guard is here because a worker escape would vanish into the pool.
+        try:
+            self.services.intelligence.snapshot(force=True)
+        except Exception as exc:  # noqa: BLE001 — surfaced via logs/status
+            log.exception("intelligence refresh failed: %s", exc)
 
     def _run_backtest(self, symbol: str, days: int,
                       min_confidence: float | None) -> None:

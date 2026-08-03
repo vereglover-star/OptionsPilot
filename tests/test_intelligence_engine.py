@@ -158,10 +158,23 @@ class TestCaching:
         intel.invalidate()
         assert intel.snapshot() is not first
 
-    def test_background_refresh_completes(self):
+    def test_a_forced_refresh_off_the_calling_thread_completes(self):
+        """What `refresh_in_background()` was actually worth testing.
+
+        V0.9.1-C6 removed that method: this layer imports `core` only, so it
+        could start a daemon thread but never pause, drain or report one. The
+        property it covered — a forced recompute driven from another thread
+        finishes and leaves a correct cached snapshot — is unchanged, and is
+        asserted here against a thread the *test* owns rather than one the
+        engine spawns. Who owns the thread in the application is asserted in
+        `test_runtime_lifecycle.py::TestBackgroundJobsAreRuntimeOwned`.
+        """
         intel = TradingIntelligence(lambda: factset(series(30)),
                                     fingerprint_provider=lambda: "v1")
-        intel.refresh_in_background().join(timeout=30)
+        worker = threading.Thread(target=intel.snapshot, kwargs={"force": True})
+        worker.start()
+        worker.join(timeout=30)
+        assert not worker.is_alive()
         assert intel.snapshot().trades_analyzed == 30
 
     def test_concurrent_reads_are_serialised(self):

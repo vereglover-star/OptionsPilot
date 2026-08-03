@@ -441,7 +441,7 @@ every shipped build**, and the `/api/marketdata/qa/*` endpoints return **404**
 | POST/GET/DELETE | `/api/marketdata/maintenance` | Start / poll / stop one of eight maintenance actions (clear cache, rebuild cache, verify cache integrity, run validation, run replay, run benchmark, run diagnostics, re-measure capabilities). One background job slot with polled progress — a capability re-measurement takes minutes, so a synchronous endpoint would hold a request open past any client timeout. A busy slot is refused **by name** ("'Re-measure capabilities' is still running"). Cancellation is cooperative, checked between units of work, keeps what it measured, and reports state `cancelled` rather than `error` |
 | GET/POST/DELETE | `/api/marketdata/qa/*` | Developer fault injection: `qa` (state), `qa/fault` (arm/clear), `qa/breaker` (force a provider out of rotation), `qa/reset` (clear every breaker), `qa/corrupt_cache` (the corruption-recovery drill, run on a **copy** — the real cache is never touched). **All return 404 unless `market_data.qa_mode` is true**, which it is in no shipped build |
 | GET | `/api/status` | Full dashboard payload (account, positions, signals, notifications, watchlist, modes, scan progress) — also pushed over `/ws` |
-| POST | `/api/scan` | Run one cycle: non-blocking by default (background thread; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous |
+| POST | `/api/scan` | Run one cycle: non-blocking by default (triggers the `manual_scan` runtime task on the worker lane; progress streams in the status payload's `scan` field); `{"wait": true}` for synchronous. A request arriving while a cycle is in flight is **declined, not queued** |
 | GET | `/api/journal` | Trade history + stats, plus a `findings` map (`trade_id → [intelligence finding labels]`) so rows can be badged without a request each (V0.6.0) |
 | GET | `/api/learning` | Evidence weights + performance slices |
 | GET | `/api/config` | Effective config.yaml values (read-only) |
@@ -466,7 +466,7 @@ every shipped build**, and the `/api/marketdata/qa/*` endpoints return **404**
 | GET | `/api/guide` | Guided-onboarding state, measured feature-usage facts, and which walkthrough to offer next (V0.6.1). Progress lives in `settings.json` under a `guide` key, **not** localStorage, so a reinstall or a cleared webview profile does not greet a returning user as a beginner |
 | POST | `/api/guide/state` | Merge a patch (`completed` / `dismissed` union, `features` increment, `onboarded` / `reduce_motion` / `tips` replace, `forget` resets) and return the full state plus fresh suggestions. Deliberately forgiving — an unknown id, an unusable feature key or a garbage body is ignored rather than rejected, because this endpoint records that someone finished a tour and failing it would be a 4xx in the middle of a celebration |
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
-| GET/POST | `/api/backtest` | Backtest job (background thread, polled status) |
+| GET/POST | `/api/backtest` | Backtest job (the `backtest` runtime task on the worker lane, polled status). One slot, claimed under `_bt_lock`; a second POST while one runs returns the running job unchanged |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
 | GET | `/api/workspace` | Where the user was: tab, symbol, timeframe, indicators, extended hours, auto-follow, watchlist sort, ticket chart, recent symbols, saved layouts (V0.7.0). Persisted in `settings.json` under a `workspace` key — **not** localStorage, which is a cache a cleared profile silently discards, and which a second client cannot see at all |
 | POST | `/api/workspace` | Merge a **partial** patch and return the full document. Partial by design: a client that only knows about `symbol` must be able to say so without overwriting panel layout it has never heard of. Unusable values fall back to their default rather than 4xx-ing, because this records where someone was looking |
@@ -584,7 +584,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2205 tests as of this writing, all passing)
+# Tests (2217 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -701,7 +701,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2205 tests cover this
+   exercises the FastAPI layer via `TestClient` (2217 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

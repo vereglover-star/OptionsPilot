@@ -20,16 +20,29 @@ import pytest
 from optionspilot.core.models import Timeframe
 from optionspilot.notify import NotificationCenter
 from optionspilot.orchestrator import Orchestrator
-from optionspilot.services.runtime import BackgroundRuntime, TaskSpec
+from optionspilot.services.runtime import (
+    DEFAULT_MAX_WORKERS, BackgroundRuntime, TaskSpec)
 from optionspilot.ui.server import UIServer
 from tests.test_notify import CollectingNotifier
 from tests.test_orchestrator import CFG, NOW, FakeProvider, bullish_candles
 
 
 def live_worker_names() -> set[str]:
-    """Threads this application owns, ignoring pytest's and the interpreter's."""
+    """Threads this application owns, ignoring pytest's and the interpreter's.
+
+    Prefix matching makes this list load-bearing rather than cosmetic: a thread
+    whose name is not here is not merely unreported, it is *invisible to the
+    only leak test in the suite*. C5 found that out about `manual-scan`, and
+    `backtest` and `intelligence-refresh` were in exactly the same position —
+    two long-running daemon threads that could outlive a session without any
+    test noticing.
+
+    They are listed here even though V0.9.1-C6 removes both, deliberately: the
+    entry is what makes a regression visible. Reinstating either raw thread now
+    fails a test instead of quietly passing one.
+    """
     owned = ("background-runtime", "system-tray", "desktop-", "uvicorn",
-             "marketdata-")
+             "marketdata-", "backtest", "intelligence-refresh")
     return {t.name for t in threading.enumerate()
             if t.is_alive() and t.name.startswith(owned)}
 
@@ -417,3 +430,203 @@ class TestSchedulerShutdown:
             assert task["last_error"] == "nope"
         finally:
             runtime.stop()
+
+
+class TestBackgroundJobsAreRuntimeOwned:
+    """V0.9.1-C6: the last two application workloads the runtime could not see.
+
+    C3 put the scheduled scan on the worker lane and C5 brought the manual scan
+    with it. Two raw threads survived that work:
+
+        threading.Thread(target=self._run_backtest, ..., name="backtest")
+        threading.Thread(target=self.snapshot, ..., name="intelligence-refresh")
+
+    Neither is a race — `start_backtest` checks its slot and claims it inside
+    one `_bt_lock`, which is a real claim, unlike the check-then-act C5
+    removed. The defect is *ownership*: a backtest reads months of candles and
+    writes two report files, and while it ran the runtime could not pause it,
+    could not drain it at shutdown, could not report it, and — because
+    `live_worker_names()` matched five prefixes and neither of these — could
+    not even leak-detect it. "Backend healthy, nothing on screen, no test
+    failing" is this repository's most expensive recurring shape.
+
+    `intelligence-refresh` is the sharper case. `IntelligenceEngine` may import
+    `core` only (`test_architecture.py`), so it can never reach a runtime to
+    hand work to; a module that cannot own a thread's lifecycle should not be
+    starting one. It had no production caller at all, which is why nothing had
+    noticed.
+    """
+
+    @pytest.fixture
+    def blocking_backtest(self, server, monkeypatch):
+        entered = threading.Event()
+        release = threading.Event()
+        runs = []
+
+        def slow_backtest(symbol, days, min_confidence):
+            runs.append(symbol)
+            entered.set()
+            release.wait(20)
+
+        monkeypatch.setattr(server, "_run_backtest", slow_backtest)
+        yield server, entered, release, runs
+        release.set()
+
+    # ── the review focus, asserted rather than eyeballed ──────────────────
+
+    def test_the_ui_server_constructs_no_raw_threads_at_all(self, server):
+        """After C6 no workload in `ui/server.py` has an owner other than the
+        runtime, so the honest assertion is over the whole module rather than
+        one method.
+
+        Matched on the AST, not the source text: `request_scan`'s docstring
+        quotes the raw thread it replaced, and a text search breaks on the
+        explanation of the rule it is enforcing. `test_architecture.py` records
+        the same lesson.
+        """
+        import ast
+        import inspect
+
+        import optionspilot.ui.server as mod
+
+        tree = ast.parse(inspect.getsource(mod))
+        spawns = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Thread"
+        ]
+        assert not spawns, (
+            f"ui/server.py still constructs {len(spawns)} raw thread(s); "
+            "every background workload must be a runtime task")
+
+    def test_the_intelligence_layer_constructs_no_threads(self):
+        """It imports `core` only, so it cannot reach a runtime to hand work
+        to — which makes starting a thread it can neither pause, drain nor
+        report the one thing it must not do. The owner is the caller."""
+        import ast
+        import inspect
+
+        import optionspilot.intelligence.engine as mod
+
+        tree = ast.parse(inspect.getsource(mod))
+        spawns = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "Thread"
+        ]
+        assert not spawns, (
+            "intelligence/engine.py starts a thread whose lifecycle it has no "
+            "way to own")
+
+    # ── the backtest ─────────────────────────────────────────────────────
+
+    def test_a_backtest_runs_as_a_registered_runtime_task(self, server):
+        server.start_backtest("SPY", 5, None)
+        rows = {t["name"]: t for t in server.background.snapshot().tasks}
+        assert "backtest" in rows, (
+            f"the backtest is not a runtime task: {sorted(rows)}")
+        assert rows["backtest"]["lane"] == "worker"
+        assert settle(lambda: server.background.snapshot().running)
+
+    def test_a_backtest_is_drained_by_shutdown(self, blocking_backtest):
+        """It is the runtime's to abandon, and it is abandoned BY NAME."""
+        server, entered, release, _ = blocking_backtest
+        server.start_backtest("SPY", 5, None)
+        assert settle(lambda: entered.is_set()), "no backtest started"
+        abandoned = server.background.stop(timeout=0.3)
+        assert abandoned == ["backtest"], (
+            f"shutdown did not report the in-flight backtest: {abandoned!r}")
+
+    def test_a_backtest_leaves_no_thread_behind(self, server, monkeypatch):
+        monkeypatch.setattr(server, "_run_backtest", lambda *a: None)
+        baseline = live_worker_names()
+        server.start_backtest("SPY", 5, None)
+        assert settle(lambda: server.background.snapshot().running)
+        server.close()
+        assert settle(lambda: live_worker_names() == baseline), (
+            f"leaked {live_worker_names() - baseline}")
+
+    def test_pause_halts_a_queued_backtest(self, server, monkeypatch):
+        """The point of single ownership: pause reaches backtests too."""
+        ran = []
+        monkeypatch.setattr(server, "_run_backtest",
+                            lambda *a: ran.append(a[0]))
+        server.background.start()
+        server.background.pause()
+        server.start_backtest("SPY", 5, None)
+        time.sleep(0.3)
+        assert ran == [], "a backtest ran while the runtime was paused"
+        server.background.resume()
+        assert settle(lambda: bool(ran)), "resume did not release the backtest"
+
+    def test_the_backtest_carries_its_parameters_through_the_runtime(
+            self, server, monkeypatch):
+        """`TaskSpec.callback` takes no arguments, so the job's parameters have
+        to survive the hand-off. Getting this wrong would silently backtest the
+        wrong symbol — a plausible-looking report for a question nobody asked.
+        """
+        seen = []
+        monkeypatch.setattr(server, "_run_backtest", lambda *a: seen.append(a))
+        server.start_backtest("qqq", 40, 0.75)
+        assert settle(lambda: bool(seen))
+        assert seen[0] == ("QQQ", 40, 0.75)
+
+    def test_a_second_backtest_while_one_runs_is_refused(
+            self, blocking_backtest):
+        server, entered, release, runs = blocking_backtest
+        server.start_backtest("SPY", 5, None)
+        assert settle(lambda: entered.is_set())
+        for _ in range(5):
+            out = server.start_backtest("QQQ", 5, None)
+            assert out["state"] == "running"
+            assert out["symbol"] == "SPY", "the running job was overwritten"
+            time.sleep(0.05)
+        assert runs == ["SPY"], f"{len(runs)} backtests ran, expected 1"
+
+    def test_the_backtest_api_contract_is_unchanged(self, server, monkeypatch):
+        monkeypatch.setattr(server, "_run_backtest", lambda *a: None)
+        out = server.start_backtest("SPY", 5, None)
+        assert out["state"] == "running"
+        assert out["symbol"] == "SPY"
+        assert "started" in out
+
+    # ── the bound the new tasks push against (finding F-6) ───────────────
+
+    def test_the_pool_is_large_enough_for_every_task_the_server_registers(
+            self, server):
+        """The half of the bound argument that only the real server can make.
+
+        `test_runtime.py` proves the pool delivers `DEFAULT_MAX_WORKERS`
+        concurrent slots. Nothing proved the application stays inside them, and
+        C6 is where that stops being free: `market_monitor`, `manual_scan`,
+        `backtest` and `intelligence_refresh` are four worker tasks against a
+        bound that was two.
+
+        Exceeding it is invisible at runtime — no error, no log, no failed
+        task; the fourth job simply waits for a slot while its status says
+        "running". This is the assertion that turns adding a fifth worker task
+        into a decision rather than a surprise.
+        """
+        server.start_loop()
+        workers = [t["name"] for t in server.background.snapshot().tasks
+                   if t["lane"] == "worker"]
+        assert len(workers) <= DEFAULT_MAX_WORKERS, (
+            f"{len(workers)} worker tasks ({sorted(workers)}) against a pool "
+            f"bound of {DEFAULT_MAX_WORKERS}")
+
+    # ── the intelligence refresh ─────────────────────────────────────────
+
+    def test_an_intelligence_refresh_runs_as_a_registered_runtime_task(
+            self, server, monkeypatch):
+        forced = []
+        monkeypatch.setattr(server.services.intelligence, "snapshot",
+                            lambda *, force=False: forced.append(force))
+        server.refresh_intelligence()
+        rows = {t["name"]: t for t in server.background.snapshot().tasks}
+        assert "intelligence_refresh" in rows, (
+            f"the refresh is not a runtime task: {sorted(rows)}")
+        assert rows["intelligence_refresh"]["lane"] == "worker"
+        assert settle(lambda: forced == [True]), (
+            f"the refresh did not force a recompute: {forced}")

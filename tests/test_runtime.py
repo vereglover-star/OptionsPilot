@@ -5,7 +5,8 @@ import time
 
 import pytest
 
-from optionspilot.services.runtime import BackgroundRuntime, TaskSpec
+from optionspilot.services.runtime import (
+    DEFAULT_MAX_WORKERS, BackgroundRuntime, TaskSpec)
 
 #: How long to wait for a property that should hold almost immediately. These
 #: are not sleeps — every assertion below waits on an Event and returns the
@@ -281,11 +282,11 @@ class TestLanes:
             runtime.stop(timeout=SETTLE)
 
     def test_two_worker_tasks_overlap_within_the_bound(self):
-        """The default bound must be enough for the two tasks earmarked for it.
+        """The default bound must be enough for the tasks earmarked for it.
 
-        `market_monitor` and `symbol_metadata` share nothing and both block on
-        the network; serialising them would make the second one's interval its
-        own plus the first one's duration.
+        Independent worker tasks share nothing and block on the network or the
+        disk; serialising them would make the second one's interval its own
+        plus the first one's duration.
         """
         both = threading.Event()
         release = threading.Event()
@@ -305,6 +306,43 @@ class TestLanes:
         runtime.start()
         try:
             assert both.wait(SETTLE), "independent worker tasks ran head-of-line"
+        finally:
+            release.set()
+            runtime.stop(timeout=SETTLE)
+
+    def test_the_default_bound_admits_every_worker_task_the_app_registers(self):
+        """V0.9.1-C6: the pool really delivers the concurrency it advertises.
+
+        A bound below the number of registered worker tasks is not a throttle,
+        it is a task that silently does not start: a user pressing Run Backtest
+        during a scheduled scan would watch the job sit at "running" with
+        nothing happening until the scan finished.
+
+        Written against `DEFAULT_MAX_WORKERS` rather than a literal, so raising
+        the constant without proving the pool honours it fails here.
+        `test_runtime_lifecycle.py` asserts the other half — that the real
+        server does not register more worker tasks than this.
+        """
+        release = threading.Event()
+        inside = []
+        guard = threading.Lock()
+        everyone = threading.Event()
+
+        def slow():
+            with guard:
+                inside.append(1)
+                if len(inside) == DEFAULT_MAX_WORKERS:
+                    everyone.set()
+            release.wait(SETTLE * 2)
+
+        runtime = BackgroundRuntime(health_interval=60)
+        for name in range(DEFAULT_MAX_WORKERS):
+            runtime.register(TaskSpec(str(name), 30.0, slow, lane="worker"))
+        runtime.start()
+        try:
+            assert everyone.wait(SETTLE), (
+                f"only {len(inside)} of {DEFAULT_MAX_WORKERS} worker tasks got "
+                "a thread")
         finally:
             release.set()
             runtime.stop(timeout=SETTLE)

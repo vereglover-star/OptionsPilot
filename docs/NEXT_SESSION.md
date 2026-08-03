@@ -5,45 +5,46 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-02, on closing **V0.9.0 — the verification floor**.
+**Last updated:** 2026-08-03, mid **V0.9.1 — runtime & thread ownership**
+(C1…C6 committed).
 
 ## What to do next
 
-**Begin V0.9.1 — runtime & thread ownership.** Nothing is in progress; V0.9.0
-closed cleanly and `verify.ps1` is green across all 13 gates. Plan of record:
-the V0.9 Engineering Specification, Revision 2.
+**Continue V0.9.1 at C7.** Plan of record: the V0.9 Engineering Specification,
+Revision 2. Six commits are in; the runtime now owns every application
+background workload, and `ui/server.py` and `intelligence/engine.py` construct
+no threads at all (asserted on the AST, not on source text).
 
-V0.9.1 makes `BackgroundRuntime` genuinely the one lifecycle owner, so pause,
-resume, shutdown and health reporting describe reality instead of intent. Work
-lanes plus a worker pool so a long scan cannot starve a short periodic task;
-stray threads brought under the runtime; the dead `_loop`, the tracemalloc
-monitor and the startup HTTP poll deleted; a single-entry `exit()` guard; a
-`DesktopApplication` whose wiring is assertable without a GUI. It is sequenced
-**before** the V0.9.2 service extraction deliberately — a service that owns
-background work would otherwise be extracted against a broken ownership model
-and need redoing. 8–10 days, 11 commits.
+**Three things carried into C7.**
 
-**Three things to hold on to before writing any of it.**
+1. **F-1 is out of scope for this whole milestone, not just for one commit.**
+   `_maybe_send_summaries` runs outside the server lock on a worker thread
+   (`ui/server.py`, in `_background_cycle`). It is *orchestrator thread-safety*,
+   which `ROADMAP.md` names explicitly in V0.9.1's "Out of scope" list. The C5
+   report scheduled it into C6's review focus, which was wrong. It belongs to
+   V0.9.2.
+2. **The pool bound is derived, not chosen.** `DEFAULT_MAX_WORKERS` is 4
+   because `UIServer` registers four worker tasks. A fifth without raising it
+   does not error — the surplus job waits for a slot while its status says
+   "running". `test_the_pool_is_large_enough_for_every_task_the_server_registers`
+   is the guard.
+3. **Extend the soak in the same commit that changes what runs on a lane.**
+   Both real defects in C5 and the coverage gap in C6 were found by the soak,
+   and both needed it extended first. It now fails a run in which a backtest or
+   an intelligence refresh never actually executed — the C5 soak once passed a
+   full 30 minutes with `manual ran: 0`.
 
-1. **Write the failing test first**: a short coordinator task that must run on
-   schedule *during* a long worker task. That test is the bug statement. Then
-   lanes, then the conversions.
-2. **The exit criterion is a 30-minute soak, not a green suite.** Concurrency
-   defects are non-deterministic and this suite has passed over a guaranteed
-   deadlock before (V0.8.2 — the test double modelled timing but not threads).
-   Use `BackgroundRuntime`'s injected clock rather than sleeping.
-3. **Decide where `pip-audit` and Dependabot go.** They are named in V0.9.0's
-   own definition of done (finding H-4) and never received a commit — an
-   omission, not a deferral. Small and unblocked. Fold into the first commit or
-   run one standalone before starting.
+**Still unassigned, and still not a deferral:** `pip-audit` and Dependabot are
+named in V0.9.0's own definition of done (finding H-4) and have never received a
+commit. Small and unblocked.
 
-The standing execution protocol still applies: one planned commit at a time,
+The standing execution protocol applies: one planned commit at a time,
 re-validate every assumption against the live tree before implementing, and
 demonstrate each new gate failing as well as passing.
 
 ## What was completed most recently? (V0.9.0 — the verification floor)
 
-2065 -> **2205 tests** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
+2065 -> a **2158-test suite** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
 No feature, no trading-behaviour change, no new runtime dependency. Full detail:
 **`docs/CHANGELOG.md`**, entry `2026-08-02 — V0.9.0`.
 

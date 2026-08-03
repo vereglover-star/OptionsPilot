@@ -29,9 +29,10 @@ so.
 A worker task never runs concurrently with *itself*: if it is still in flight
 when its next interval comes round, the run is skipped and counted
 (``skipped``), rather than queued behind it. Different worker tasks do overlap
-with each other, up to the pool bound — `market_monitor` and `symbol_metadata`
-share nothing and both block on the network, so serialising them would silently
-turn the second one's interval into the first one's duration plus its own.
+with each other, up to the pool bound — a scheduled scan, a user's backtest and
+an intelligence refresh share nothing and all block on the network or the disk,
+so serialising them would silently turn one's interval into another's duration
+plus its own.
 
 Pause, resume and stop (V0.9.1-C4, Decision D-2)
 ------------------------------------------------
@@ -81,10 +82,18 @@ LANES = ("coordinator", "worker")
 
 #: Pool bound. Small on purpose: this is a scheduler for periodic housekeeping,
 #: not a job runner, and an unbounded pool would let a slow provider convert a
-#: scheduling problem into a thread-count problem. Two is the minimum that lets
-#: the two independent periodic tasks earmarked for the worker lane overlap;
-#: raise it deliberately when more tasks move, not pre-emptively.
-DEFAULT_MAX_WORKERS = 2
+#: scheduling problem into a thread-count problem.
+#:
+#: The number is *derived from the registered workload, not chosen*. V0.9.1-C6
+#: brought the last two application jobs onto the lane, so `UIServer` now
+#: registers four worker tasks — `market_monitor`, `manual_scan`, `backtest`
+#: and `intelligence_refresh`. A bound below that count is not a throttle: the
+#: surplus task waits for a slot with no error, no log and a status that still
+#: says "running", which is the silent-stall shape this milestone exists to
+#: remove. Raise it when a task moves onto the lane, not pre-emptively, and see
+#: `test_runtime_lifecycle.py::test_the_pool_is_large_enough_for_every_task_the_server_registers`
+#: — the assertion that keeps the two numbers from drifting apart.
+DEFAULT_MAX_WORKERS = 4
 
 #: Pool threads carry the coordinator's prefix so that
 #: `tests/test_runtime_lifecycle.py::live_worker_names` — which matches on

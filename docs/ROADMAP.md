@@ -205,16 +205,23 @@ each browser-verified.
 
 ## In Progress
 
-**Nothing.** V0.9.0 closed on 2026-08-02 with C9-3/C9-4 deliberately deferred
-(above). **V0.9.1 — Runtime & Thread Ownership is the next milestone** and has
-not started; its scope, commit sequence and acceptance criteria are in the V0.9
-Engineering Specification, Revision 2. See `NEXT_SESSION.md`.
+**V0.9.1 — Runtime & Thread Ownership**, six of eleven commits in. V0.9.0
+closed on 2026-08-02 with C9-3/C9-4 deliberately deferred (above). Scope, commit
+sequence and acceptance criteria are in the V0.9 Engineering Specification,
+Revision 2. See `NEXT_SESSION.md`.
+
+C1…C6 have made `BackgroundRuntime` the single owner of every application
+background workload: work lanes over a bounded pool (C2), the market scan (C3),
+honest pause/resume/shutdown (C4), manual scans (C5), and the backtest plus the
+intelligence refresh (C6). Remaining: the dead `_loop` and the startup HTTP
+poll deleted, a single-entry `exit()` guard, and a `DesktopApplication`
+assertable without a GUI.
 
 One item from V0.9.0's own definition of done was **omitted rather than
 deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never
-received a commit. It is small and unblocked — tracked in `TODO.md`, and the
-honest options are to fold it into V0.9.1's first commit or run it as a
-standalone one first.
+received a commit. It is small and unblocked — tracked in `TODO.md`, and it has
+now passed the point where it could be folded into V0.9.1's first commit, so it
+wants a standalone one.
 
 **V0.6.0, V0.6.1 and V0.7.0 are all built, verified and uncommitted, awaiting
 the user's review.** V0.7.0 (platform foundation) is the most recent: the
@@ -236,7 +243,7 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
-### V0.9.1 — Runtime & thread ownership (next)
+### V0.9.1 — Runtime & thread ownership (in progress, C1…C6 committed)
 
 Make `BackgroundRuntime` genuinely the one lifecycle owner, so pause, resume,
 shutdown and health reporting describe reality rather than intent. Scope: work
