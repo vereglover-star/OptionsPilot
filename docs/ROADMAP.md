@@ -274,7 +274,7 @@ that never happens again: **update it in the same commit that lands a row.**
 | C8 | ✅ | The dead `UIServer._loop` deleted — one scheduler only | `45fda53` |
 | C9 | ✅ | The tracemalloc monitor removed (drops `health.memory`) | `76d18d1` |
 | C10 | ✅ | Startup HTTP poll deleted — readiness from `uvicorn.Server.started` | `0b08ae3` |
-| C11 | ✅ | `DesktopApplication` — the desktop wiring, assertable without a GUI | *this commit* |
+| C11 | ✅ | `DesktopApplication` — the desktop wiring, assertable without a GUI | `3bc3731` |
 
 **All eleven commits are landed.** C7, C9 and C10 were confirmed with the user
 directly, the rest by their commit bodies. Keep this table current in the same
