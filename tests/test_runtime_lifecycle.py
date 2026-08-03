@@ -432,6 +432,117 @@ class TestSchedulerShutdown:
             runtime.stop()
 
 
+class TestThereIsOnlyOneSchedulingPath:
+    """V0.9.1-C8: the legacy `_loop` is gone, and nothing may grow back.
+
+    `UIServer._loop` was a second, complete scheduler — a `while not
+    self._stop.is_set()` loop that called `run_cycle_now()` and
+    `orch._maybe_send_summaries()` on its own cadence, kept "for embedders".
+    Nothing called it. Not `start_loop`, not a test, not a script; `_loop_thread`
+    was declared and never assigned, and `self._stop` was set by `stop_loop` and
+    read only inside `_loop` itself.
+
+    Deleting dead code is not the point — a dormant second scheduler over a
+    workload that PLACES TRADES is. `test_repeated_sessions_do_not_accumulate_
+    schedulers` exists because two schedulers over one task set run every cycle
+    twice, and `_loop` was one `Thread(target=self._loop)` away from being that
+    second one, with a docstring inviting exactly that call.
+
+    So these assert the property rather than the absence: every caller of
+    `run_cycle_now` is named, and each is either a runtime task callback or an
+    explicit user request. A new scheduling path fails here.
+    """
+
+    #: Callers of `run_cycle_now` in `ui/server.py`, and why each is legitimate.
+    #: `_background_cycle` is the `market_monitor` task; `_background_scan` is
+    #: the `manual_scan` task; `cycle`/`scan` are request handlers acting on a
+    #: user's explicit instruction. Nothing else may drive a cycle.
+    ALLOWED_CYCLE_CALLERS = {"_background_cycle", "_background_scan",
+                             "cycle", "scan"}
+
+    @staticmethod
+    def _callers_of(method: str) -> set[str]:
+        """Every function in `ui/server.py` whose own body calls `method`.
+
+        Each call is attributed to its INNERMOST enclosing function. A plain
+        `ast.walk` per function descends into nested definitions, so the route
+        handlers defined inside `create_app` made `create_app` itself look like
+        a caller — an enclosing scope blamed for what its children do, which
+        would have hidden a real new caller inside a name already in the
+        allow-list.
+        """
+        import ast
+        import inspect
+
+        import optionspilot.ui.server as mod
+
+        found = set()
+        scope: list[str] = []
+
+        class _Visitor(ast.NodeVisitor):
+            def visit_FunctionDef(self, node):
+                scope.append(node.name)
+                self.generic_visit(node)
+                scope.pop()
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Call(self, node):
+                if (isinstance(node.func, ast.Attribute)
+                        and node.func.attr == method and scope):
+                    found.add(scope[-1])
+                self.generic_visit(node)
+
+        _Visitor().visit(ast.parse(inspect.getsource(mod)))
+        return found
+
+    def test_only_the_runtime_and_a_user_request_can_drive_a_cycle(self):
+        callers = self._callers_of("run_cycle_now")
+        assert callers <= self.ALLOWED_CYCLE_CALLERS, (
+            f"unexpected caller(s) of run_cycle_now: "
+            f"{sorted(callers - self.ALLOWED_CYCLE_CALLERS)} — a cycle may only "
+            "be driven by a runtime task or an explicit user request")
+
+    def test_the_legacy_loop_is_gone_completely(self):
+        """Partial deletion is the failure mode worth guarding.
+
+        Leaving `_stop` behind would keep a `stop_loop()` that sets a flag
+        nothing reads — the kind of residue that reads as meaningful to the next
+        person and makes a second loop trivial to reintroduce.
+        """
+        from optionspilot.ui.server import UIServer
+
+        for leftover in ("_loop", "_loop_thread"):
+            assert not hasattr(UIServer, leftover), (
+                f"UIServer.{leftover} survived the C8 deletion")
+
+    def test_no_instance_attribute_of_the_legacy_loop_survives(self, server):
+        for leftover in ("_loop_thread", "_stop"):
+            assert not hasattr(server, leftover), (
+                f"the legacy loop's {leftover} survived on the instance")
+
+    def test_stopping_the_loop_still_stops_the_one_scheduler(self, server):
+        """`stop_loop` loses a line; it must not lose its job."""
+        server.start_loop()
+        assert settle(lambda: server.background.snapshot().running)
+        server.stop_loop()
+        assert settle(lambda: not server.background.snapshot().running)
+
+    def test_summaries_are_still_sent_once_per_cycle(self, server, monkeypatch):
+        """`_loop` was the only other caller of `_maybe_send_summaries`.
+
+        Deleting it must leave the scheduled path's call intact — a milestone
+        that silently stopped sending daily summaries would look exactly like
+        nothing happening.
+        """
+        sent = []
+        monkeypatch.setattr(server.orch, "_maybe_send_summaries",
+                            lambda now: sent.append(now))
+        monkeypatch.setattr(server, "run_cycle_now", lambda **kw: {})
+        server._background_cycle()
+        assert len(sent) == 1
+
+
 class TestBackgroundJobsAreRuntimeOwned:
     """V0.9.1-C6: the last two application workloads the runtime could not see.
 

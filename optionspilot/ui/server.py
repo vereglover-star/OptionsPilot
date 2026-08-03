@@ -136,8 +136,6 @@ class UIServer:
         self.lock = threading.RLock()
         self.last_summary: dict = {}
         self.equity_history: list[tuple[str, float]] = []
-        self._loop_thread: threading.Thread | None = None
-        self._stop = threading.Event()
         self._close_lock = threading.Lock()
         self._closed = False
         self.background = BackgroundRuntime(health_check=self._health_check)
@@ -276,7 +274,10 @@ class UIServer:
         self.background.start()
 
     def stop_loop(self) -> None:
-        self._stop.set()
+        # V0.9.1-C8: `self._stop.set()` used to precede this. That Event existed
+        # only for the deleted `_loop`; nothing else ever read it, so setting it
+        # stopped nothing. Stopping the runtime is the whole of stopping the
+        # loop, and now says so.
         self.background.stop()
 
     def close(self) -> None:
@@ -366,22 +367,20 @@ class UIServer:
             self._owns_memory_tracing = False
         self._health_memory_baseline = 0
 
-    def _loop(self) -> None:
-        """Legacy loop body retained for embedders; new starts use BackgroundRuntime."""
-        log.info("cycle loop started (scan every %ds while market open)",
-                 self.cfg.engine.scan_interval_seconds)
-        while not self._stop.is_set():
-            try:
-                now = utcnow()
-                if self.orch.market_open(now):
-                    self.run_cycle_now()
-                self.orch._maybe_send_summaries(now)
-            except Exception as exc:  # noqa: BLE001 — loop must survive
-                log.exception("ui cycle failed: %s", exc)
-            self._stop.wait(
-                self.cfg.engine.scan_interval_seconds
-                if self.orch.market_open(utcnow()) else 60
-            )
+    # V0.9.1-C8: `_loop` used to sit here — a complete second scheduler
+    # (`while not self._stop.is_set()`, calling `run_cycle_now` and
+    # `_maybe_send_summaries` on its own cadence) kept "for embedders". Nothing
+    # ever called it; `_loop_thread` was declared and never assigned, and
+    # `self._stop` was set by `stop_loop` and read only inside `_loop`.
+    #
+    # It is deleted rather than left dormant because two schedulers over one
+    # task set run every cycle twice, and `market_monitor` PLACES TRADES —
+    # `test_repeated_sessions_do_not_accumulate_schedulers` exists for that
+    # reason. A dead loop with a docstring inviting `Thread(target=self._loop)`
+    # is one call away from being the second scheduler that test forbids.
+    # `BackgroundRuntime` is the only path to a cycle;
+    # `TestThereIsOnlyOneSchedulingPath` names every caller of `run_cycle_now`
+    # and fails if a new one appears.
 
     def run_cycle_now(self, *, blocking: bool = True) -> dict:
         """One full cycle: parallel candle prefetch (no orchestrator lock, with

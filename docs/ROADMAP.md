@@ -210,14 +210,16 @@ closed on 2026-08-02 with C9-3/C9-4 deliberately deferred (above). Scope, commit
 sequence and acceptance criteria are in the V0.9 Engineering Specification,
 Revision 2. See `NEXT_SESSION.md`.
 
-C1…C7 have made `BackgroundRuntime` the single owner of every application
+C1…C8 have made `BackgroundRuntime` the single owner of every application
 background workload: work lanes over a bounded pool (C2), the market scan (C3),
 honest pause/resume/shutdown (C4), manual scans (C5), and the backtest plus the
 intelligence refresh (C6); C7 then made `_DesktopController.exit()` genuinely
 single-entry, which it was not — eight concurrent callers ran eight shutdowns
-and spawned eight successor processes on Restart. Remaining: the dead `_loop`
-deleted (C8), the startup HTTP poll and the tracemalloc monitor removed, and a
-`DesktopApplication` assertable without a GUI.
+and spawned eight successor processes on Restart; and C8 deleted the legacy
+`UIServer._loop`, a complete second scheduler that nothing called, leaving the
+runtime as the only path to a trading cycle. Remaining: the startup HTTP poll
+and the tracemalloc monitor removed, and a `DesktopApplication` assertable
+without a GUI.
 
 One item from V0.9.0's own definition of done was **omitted rather than
 deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never
@@ -245,7 +247,7 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
-### V0.9.1 — Runtime & thread ownership (in progress, C1…C6 committed)
+### V0.9.1 — Runtime & thread ownership (in progress, C1…C8 committed)
 
 Make `BackgroundRuntime` genuinely the one lifecycle owner, so pause, resume,
 shutdown and health reporting describe reality rather than intent. Scope: work

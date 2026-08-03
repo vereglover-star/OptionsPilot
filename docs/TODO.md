@@ -18,14 +18,15 @@ is. This file is the flat, actionable checklist version.
 - [ ] **Finish V0.9.1 — runtime & thread ownership.** In progress, and a
       blocking milestone: it must land before the V0.9.2 service extraction or
       every service owning background work gets extracted against a broken
-      ownership model. **C1…C7 committed** — lanes + bounded worker pool, the
+      ownership model. **C1…C8 committed** — lanes + bounded worker pool, the
       market scan, manual scans, the backtest and the intelligence refresh all
       runtime-owned; real pause/resume/shutdown semantics; `ui/server.py` and
       `intelligence/engine.py` construct no threads at all; `exit()` genuinely
-      single-entry. **Remaining for C8…C11:** the dead `_loop` deleted (C8), the
-      startup HTTP poll deleted, the tracemalloc monitor removed, a
-      GUI-free-assertable `DesktopApplication`. The exit criterion is a
-      30-minute soak, not a green suite.
+      single-entry; the legacy `_loop` deleted, so `BackgroundRuntime` is the
+      only path to a cycle. **Remaining for C9…C11:** the startup HTTP poll
+      deleted, the tracemalloc monitor removed, a GUI-free-assertable
+      `DesktopApplication`. The exit criterion is a 30-minute soak, not a green
+      suite.
 
 - [ ] **Add `pip-audit` and Dependabot.** Named in V0.9.0 finding H-4's
       definition of done and never given a commit — an **omission, not a
