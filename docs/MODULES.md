@@ -552,6 +552,18 @@ transport. Every service takes **injected, duck-typed** collaborators and return
 - `ui/desktop.py` — uvicorn thread + pywebview native window; single-
   instance guard (localhost port mutex); `--windowed` PyInstaller build has
   no console (see `core/logging_setup.py`'s `sys.stderr is None` check).
+  **`DesktopApplication` (V0.9.1-C11) owns the wiring**, with `launch()` a thin
+  adapter over it. Collaborators (`webview`, `uvicorn`, `create_app`,
+  `create_tray`, the instance lock, the port) are **injected**, defaulting to
+  lazily-imported real ones, so the composition is assertable without a GUI —
+  `acquire()` / `build()` / `shutdown()` are tested; `run()` is the blocking GUI
+  loop. This replaced 85 lines inside `launch()` marked `# pragma: no cover`,
+  which is where this file's worst defects historically lived (the tray once
+  received Uvicorn's transport object instead of the application server).
+  `_DesktopController` remains the lifecycle owner — **read its class docstring
+  before touching anything on the close path**; `exit()` is single-entry under
+  `_exit_lock` (C7), and readiness comes from `uvicorn.Server.started` rather
+  than an HTTP self-poll (C10).
 - CLI: `run | ui | serve | scan | status | journal | backtest | learn`.
   `_bootstrap()` returns `(config, runtime)` — every command applies
   `RuntimeSettings` before running.

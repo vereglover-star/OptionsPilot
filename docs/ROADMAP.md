@@ -210,7 +210,7 @@ closed on 2026-08-02 with C9-3/C9-4 deliberately deferred (above). Scope, commit
 sequence and acceptance criteria are in the V0.9 Engineering Specification,
 Revision 2. See `NEXT_SESSION.md`.
 
-C1…C10 have made `BackgroundRuntime` the single owner of every application
+C1…C11 have made `BackgroundRuntime` the single owner of every application
 background workload: work lanes over a bounded pool (C2), the market scan (C3),
 honest pause/resume/shutdown (C4), manual scans (C5), and the backtest plus the
 intelligence refresh (C6); C7 then made `_DesktopController.exit()` genuinely
@@ -220,8 +220,11 @@ and spawned eight successor processes on Restart; and C8 deleted the legacy
 runtime as the only path to a trading cycle; and C9 removed the tracemalloc
 monitor, which traced every allocation in a pandas/numpy process to feed one
 threshold rule and a `health.memory` payload block no client read; and C10
-replaced the launcher's HTTP self-poll with uvicorn's own readiness flag.
-Remaining: a `DesktopApplication` assertable without a GUI.
+replaced the launcher's HTTP self-poll with uvicorn's own readiness flag; and
+C11 extracted `DesktopApplication` from `launch()`, so the desktop wiring — the
+one place transport, application server, tray, controller, window, notifier and
+runtime are joined — is composed from injected collaborators and assertable
+without a GUI.
 
 One item from V0.9.0's own definition of done was **omitted rather than
 deferred**: `pip-audit` and Dependabot were named in finding H-4's DoD and never
@@ -270,12 +273,13 @@ that never happens again: **update it in the same commit that lands a row.**
 | C7 | ✅ | `_DesktopController.exit()` made genuinely single-entry | `9bd7f7c` |
 | C8 | ✅ | The dead `UIServer._loop` deleted — one scheduler only | `45fda53` |
 | C9 | ✅ | The tracemalloc monitor removed (drops `health.memory`) | `76d18d1` |
-| C10 | ✅ | Startup HTTP poll deleted — readiness from `uvicorn.Server.started` | *this commit* |
-| C11 | ⏳ | A `DesktopApplication` assertable without a GUI | — |
+| C10 | ✅ | Startup HTTP poll deleted — readiness from `uvicorn.Server.started` | `0b08ae3` |
+| C11 | ✅ | `DesktopApplication` — the desktop wiring, assertable without a GUI | *this commit* |
 
-**C1…C10 are confirmed** (C7, C9 and C10 by direct user confirmation, the rest
-by their commit bodies). C11 is the last remaining scope item, so its identity
-follows by elimination rather than by having been read from the specification.
+**All eleven commits are landed.** C7, C9 and C10 were confirmed with the user
+directly, the rest by their commit bodies. Keep this table current in the same
+commit that lands a row — it exists because two sessions had to stop and ask
+which commit came next.
 
 Make `BackgroundRuntime` genuinely the one lifecycle owner, so pause, resume,
 shutdown and health reporting describe reality rather than intent. Scope: work

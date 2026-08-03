@@ -565,6 +565,236 @@ def test_desktop_notifier_exposes_optional_adapter_symbol_without_notify_extra(
     importlib.reload(desktop_notify)
 
 
+class _FakeWebview:
+    """Enough of pywebview to compose against, with no GUI."""
+
+    def __init__(self, events):
+        self.windows = []
+        self.started_with = []
+        self._events = events
+        self.html_windows = []
+
+    def create_window(self, title, url=None, **kwargs):
+        self._events.append("window-created")
+        if url is None:                      # the "already running" notice
+            self.html_windows.append(kwargs.get("html", ""))
+
+            class _Plain:
+                pass
+            return _Plain()
+
+        class _EventHook:
+            def __init__(self):
+                self.handlers = []
+
+            def __iadd__(self, handler):
+                self.handlers.append(handler)
+                return self
+
+        window = _Window()
+        window.title = title
+        window.url = url
+        window.js_api = kwargs.get("js_api")
+        window.events = SimpleNamespace(closing=_EventHook())
+        self.windows.append(window)
+        return window
+
+    def start(self, callback=None):
+        self._events.append("gui-loop")
+        self.started_with.append(callback)
+        if callback:
+            callback()
+
+
+class _FakeTransport:
+    def __init__(self, _config):
+        self.should_exit = False
+        self.started = False
+
+    def run(self):
+        self.started = True
+
+
+class _WiringServer(_Server):
+    """An application server with the collaborators `build()` reaches for."""
+
+    def __init__(self, **prefs):
+        super().__init__(**prefs)
+        self.registered = []
+        self.action_handler = None
+        self.install_hook = None
+        self.background = SimpleNamespace(
+            snapshot=lambda: SimpleNamespace(paused=False),
+            register=self.registered.append)
+        self.orch = SimpleNamespace(notifier=SimpleNamespace(
+            set_action_handler=lambda h: setattr(self, "action_handler", h)))
+        self.updater = SimpleNamespace(
+            check_async=lambda: None,
+            set_install_hook=lambda h: setattr(self, "install_hook", h))
+
+
+def _application(events=None, *, tray=None, lock=object(), prefs=None,
+                 app_server=None):
+    """A `DesktopApplication` wired entirely to doubles."""
+    events = events if events is not None else []
+    server = app_server or _WiringServer(**(prefs or {}))
+    app = SimpleNamespace(state=SimpleNamespace(server=server))
+    fake_webview = _FakeWebview(events)
+    return desktop.DesktopApplication(
+        SimpleNamespace(), runtime=None, data_dir=None,
+        webview=fake_webview,
+        uvicorn=SimpleNamespace(Config=lambda *a, **k: object(),
+                                Server=_FakeTransport),
+        create_app=lambda *a, **k: app,
+        create_tray=lambda _icon: tray if tray is not None else NullTray(),
+        acquire_single_instance=lambda: (
+            SimpleNamespace(close=lambda: events.append("lock-closed"))
+            if lock is not None else None),
+        free_port=lambda: 17999,
+    ), server, fake_webview, events
+
+
+class TestDesktopApplicationWiring:
+    """V0.9.1-C11: the desktop composition, assertable without a GUI.
+
+    `launch()` was 85 lines carrying `# pragma: no cover - GUI entry point`,
+    which is an honest label and also the problem: it is the one place where
+    the tray, the controller, the transport, the window, the notifier and the
+    runtime are joined together, and none of it was assertable. The single test
+    that reached it drove the whole function through `sys.modules` patching and
+    could only observe side effects that happened to escape — every local
+    binding died with the frame.
+
+    That matters here more than it would elsewhere. The wiring is exactly where
+    this file's worst bugs have lived: the tray was once handed Uvicorn's
+    transport object instead of the application server, and `tray_started` was
+    once believed on the strength of a thread having been created. Both are
+    composition mistakes, and composition was the untested part.
+
+    `DesktopApplication` holds that composition as state. Collaborators are
+    injected — no `sys.modules` patching — and the result can be inspected
+    rather than inferred.
+    """
+
+    def test_the_tray_and_controller_get_the_application_server(self):
+        """The bug this file already carries a test for, now assertable
+        directly rather than through a side effect."""
+        app, server, _webview, _events = _application()
+        app.acquire()
+        app.build()
+        assert app.server is server
+        assert app.controller.server is server
+        assert app.controller.server is not app.transport
+
+    def test_the_window_is_bound_to_the_controller_both_ways(self):
+        app, _server, webview, _events = _application()
+        app.acquire()
+        app.build()
+        window = webview.windows[0]
+        assert app.controller.window is window
+        assert app.controller.on_closing in window.events.closing.handlers
+        assert window.js_api is not None
+        assert window.url == app.url == f"http://127.0.0.1:{app.port}"
+
+    def test_the_notifier_action_handler_is_the_controllers(self):
+        app, server, _webview, _events = _application()
+        app.acquire()
+        app.build()
+        assert server.action_handler == app.controller.handle_notification_action
+
+    def test_the_install_hook_stops_the_transport_and_closes_windows(self):
+        app, server, webview, _events = _application()
+        app.acquire()
+        app.build()
+        assert server.install_hook is not None
+        server.install_hook()
+        assert app.transport.should_exit is True
+        assert all(w.destroyed for w in webview.windows)
+
+    def test_the_tray_status_task_is_registered_only_when_the_tray_started(self):
+        """`tray_started` describes an observable end state (V0.8.2). A tray
+        that never appeared must not get a refresh task."""
+        class _DeadTray(NullTray):
+            def start(self):
+                return False
+
+        app, server, _w, _e = _application(tray=_DeadTray())
+        app.acquire()
+        app.build()
+        assert app.controller.tray_started is False
+        assert [t.name for t in server.registered] == []
+
+        class _LiveTray(NullTray):
+            def start(self):
+                self._lifecycle_state = "active"
+                return True
+
+        app2, server2, _w2, _e2 = _application(tray=_LiveTray())
+        app2.acquire()
+        app2.build()
+        assert app2.controller.tray_started is True
+        assert [t.name for t in server2.registered] == ["tray_status"]
+        assert server2.registered[0].policy == "essential"
+
+    def test_the_window_is_not_created_before_the_transport_is_ready(self):
+        """C10's guarantee, preserved through the refactor."""
+        app, _server, _webview, events = _application()
+        app.acquire()
+        app.build()
+        assert app.transport_ready is True
+        assert events.index("window-created") >= 0
+        assert app.transport.started is True
+
+    def test_a_second_instance_shows_a_notice_and_starts_nothing(self):
+        app, _server, webview, events = _application(lock=None)
+        assert app.acquire() is False
+        app.show_already_running()
+        assert webview.html_windows and "already running" in \
+            webview.html_windows[0].lower()
+        assert app.transport is None and app.server is None
+
+    def test_shutdown_runs_teardown_in_the_order_the_launcher_needs(self):
+        """`join_pending` before `exit`, and the instance lock released last —
+        the GUI loop can return while a deferred close worker is still stopping
+        the scheduler."""
+        app, server, _webview, events = _application()
+        app.acquire()
+        app.build()
+        order = []
+        app.controller.join_pending = lambda *a, **k: order.append("join")
+        app.controller.exit = lambda: order.append("exit")
+        app.shutdown()
+        assert order == ["join", "exit"]
+        assert app.transport.should_exit is True
+        assert events[-1] == "lock-closed"
+
+    def test_start_minimized_hides_only_when_the_tray_is_really_up(self):
+        class _LiveTray(NullTray):
+            def start(self):
+                self._lifecycle_state = "active"
+                return True
+
+        app, server, webview, _e = _application(
+            tray=_LiveTray(), prefs={"start_minimized_to_tray": True})
+        app.acquire()
+        app.build()
+        app.run()
+        assert server.visible == [False], "start-minimized did not hide to tray"
+
+    def test_launch_is_the_same_three_steps_and_keeps_its_signature(self):
+        """The module-level entry point must stay a thin adapter — and keep the
+        signature `__main__.cmd_ui` calls it with."""
+        import inspect
+
+        params = list(inspect.signature(desktop.launch).parameters)
+        assert params == ["config", "runtime", "data_dir"]
+
+        app, _server, _webview, events = _application()
+        app.launch()
+        assert "gui-loop" in events
+        assert events[-1] == "lock-closed"
+
+
 def _launch_harness(monkeypatch, transport_cls, events=None):
     """The minimum doubles `launch()` needs, shared by the C10 tests.
 

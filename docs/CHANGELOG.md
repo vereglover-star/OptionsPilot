@@ -4,6 +4,70 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-03 — V0.9.1: runtime & thread ownership
+
+*11 commits (`d92de20`…), 2026-08-02 → 2026-08-03. 2158 → 2243 tests (+85). No
+feature, no trading-behaviour change, no new runtime dependency. One deliberate
+API change: `/api/runtime` no longer carries `health.memory`.*
+
+`BackgroundRuntime` existed since V0.8 and did not own what it claimed to own.
+Pause, resume, shutdown and health reporting described *intent*; alongside them
+ran a raw thread per manual scan, a raw thread per backtest, a thread the
+intelligence engine started for itself, a complete second scheduler nobody
+called, and an `exit()` guard that two threads could both walk through. This
+milestone made the claim true.
+
+**The bug it started from.** One coordinator thread ran every task inline, so a
+market scan — a full watchlist fetch plus an option chain per symbol — froze
+every other task for its duration. The tray tooltip has a 10-second interval
+precisely so it stays current, and it was the most visible casualty. C1 stated
+that as a failing test before any fix existed; C2 added work lanes over a
+bounded pool, **inert by default** so activation is one `lane=` argument and
+rollback is deleting it; C3 moved the scan.
+
+**What ownership turned out to mean.** Each of the next four commits found the
+runtime lacked a concept, not just a caller. Pause could not be honest without
+`pause_pending`, because pause never interrupts work in flight and a UI that
+says "paused" the moment the request returns is describing itself (C4). A
+user-initiated task could not exist at all without `TaskSpec.on_demand`, since
+`register` deliberately makes every task immediately due — so registering a
+"manual scan" task would run a scan on every server construction (C5). And the
+pool bound stopped being a number and became a derivation: four registered
+worker tasks means four slots, because a bound one too small does not error, it
+leaves a job at "running" with nothing happening (C6).
+
+**Three races, all the same shape, all measured.** The manual-scan dispatch was
+`if not running and not locked: Thread(...).start()` — two concurrent requests
+both passed and the second ran a whole extra cycle (C5). `exit()` was `if
+self._exited: return` with nothing serialising it, and with eight concurrent
+callers **all eight ran the shutdown and Restart spawned eight successor
+processes**, unrejected because releasing the single-instance lock is the first
+thing a restart does (C7). Checking a slot and then claiming it is not claiming
+it; `MarketDataControl` had already shipped this exact shape.
+
+**Then the deletions.** The dead `_loop` — a second scheduler with a docstring
+inviting `Thread(target=self._loop)`, over a workload that places trades (C8).
+The tracemalloc monitor, which traced every allocation in a pandas/numpy process
+to feed one threshold rule and a payload block no client read (C9). The
+launcher's HTTP self-poll, which asked over the network a question the object in
+the same process answers (C10). And finally `launch()`'s 85 lines of
+`# pragma: no cover` wiring became `DesktopApplication`, whose composition is
+built from injected collaborators and asserted without a GUI (C11).
+
+**Verified** by a 30-minute soak rather than a green suite, because concurrency
+defects are not deterministic: 27,436 coordinator beats at a worst gap of 0.09 s
+against a 0.4 s scan, 2,594 scheduled scans, 207 manual scans, 300 backtests
+with 600 refused by the single slot, 300 intelligence refreshes, **zero
+overlapping anything**, 100 pause/resume cycles with no violations, bounded
+shutdown, no leaked threads. Plus 2,400 concurrent `exit()` calls and 150
+start/stop lifecycle cycles.
+
+**Two lessons worth carrying.** A soak that passes without exercising the
+feature is worse than one that fails — the C5 soak passed a full 30 minutes with
+`manual ran: 0`, and it now fails a run in which a path never executed. And a
+performance rationale written before measuring is a liability: C10's comment
+claimed the polled endpoint was expensive, and the benchmark said 0.02 ms.
+
 ## 2026-08-02 — V0.9.0: the verification floor
 
 *11 commits (`2707a01`…`e403da6`), 2026-07-30 → 2026-08-02. 2065 → 2158 tests

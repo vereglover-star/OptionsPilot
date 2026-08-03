@@ -15,18 +15,18 @@ is. This file is the flat, actionable checklist version.
       Authenticode verification. **C9-3/C9-4 deferred by business decision** —
       see "Deferred by user decision" below.
 
-- [ ] **Finish V0.9.1 — runtime & thread ownership.** In progress, and a
+- [x] **V0.9.1 — runtime & thread ownership.** In progress, and a
       blocking milestone: it must land before the V0.9.2 service extraction or
       every service owning background work gets extracted against a broken
-      ownership model. **C1…C10 committed** — lanes + bounded worker pool, the
+      ownership model. **C1…C11 committed** — lanes + bounded worker pool, the
       market scan, manual scans, the backtest and the intelligence refresh all
       runtime-owned; real pause/resume/shutdown semantics; `ui/server.py` and
       `intelligence/engine.py` construct no threads at all; `exit()` genuinely
       single-entry; the legacy `_loop` deleted, so `BackgroundRuntime` is the
       only path to a cycle; the tracemalloc monitor removed; the launcher's HTTP
-      self-poll replaced by uvicorn's readiness flag. **Remaining for C11:** a
-      GUI-free-assertable `DesktopApplication` (see `ROADMAP.md` ▸ V0.9.1 ▸
-      Commit map). The exit criterion is a 30-minute soak, not a green
+      self-poll replaced by uvicorn's readiness flag; `DesktopApplication` extracted
+      so the desktop wiring is assertable without a GUI. **All eleven commits
+      landed** (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
 - [ ] **Add `pip-audit` and Dependabot.** Named in V0.9.0 finding H-4's

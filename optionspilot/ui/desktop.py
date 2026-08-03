@@ -91,91 +91,210 @@ def _relaunch_command() -> list[str]:
     return [sys.executable, *sys.argv]
 
 
-def launch(config: AppConfig, runtime=None, data_dir=None) -> None:  # pragma: no cover - GUI entry point
-    import uvicorn
-    import webview
+_ALREADY_RUNNING_HTML = (
+    "<body style='background:#0d0d0d;color:#e6e8eb;font-family:system-ui;"
+    "display:grid;place-items:center;height:95vh'>"
+    "<div><h2>OptionsPilot is already running</h2>"
+    "<p>Close the other window first.</p></div></body>"
+)
 
-    from optionspilot.ui.server import create_app
 
-    instance_lock = _acquire_single_instance()
-    if instance_lock is None:
-        log.warning("another OptionsPilot instance is already running")
-        webview.create_window(
-            "OptionsPilot", html="<body style='background:#0d0d0d;color:#e6e8eb;"
-            "font-family:system-ui;display:grid;place-items:center;height:95vh'>"
-            "<div><h2>OptionsPilot is already running</h2>"
-            "<p>Close the other window first.</p></div></body>",
-            width=460, height=220,
+class DesktopApplication:
+    """The desktop composition, separated from the GUI loop that runs it.
+
+    V0.9.1-C11. This was 85 lines inside `launch()` under
+    ``# pragma: no cover - GUI entry point`` — an honest label and also the
+    problem. It is the one place the transport, the application server, the
+    tray, the controller, the window, the notifier and the background runtime
+    are joined, and none of it could be asserted: every binding was a local
+    that died with the frame, so a test could only observe whichever side
+    effects happened to escape into a double.
+
+    That is precisely where this file's worst defects have lived. The tray was
+    once handed **Uvicorn's transport object** instead of the application
+    server, and `tray_started` was once set from "a thread was created" rather
+    than "an icon exists" (V0.8.2), so the app hid itself into a tray that was
+    not there. Both are composition mistakes; composition was the untested
+    part.
+
+    So the wiring is now **state on an object** rather than locals in a
+    function, and every collaborator is **injected** — no `sys.modules`
+    patching to test it. The imports stay lazy for the real ones: `webview`
+    and `uvicorn` are heavy, and nothing but a desktop launch should pay for
+    them.
+
+    The split is deliberate about which half is testable:
+
+    ``acquire`` / ``build`` / ``shutdown``
+        Pure wiring. Assertable with doubles, and asserted.
+    ``run``
+        The GUI loop. Blocks until the user closes the window; there is
+        nothing to unit-test in `webview.start()` itself.
+    """
+
+    def __init__(self, config: AppConfig, runtime=None, data_dir=None, *,
+                 webview=None, uvicorn=None, create_app=None,
+                 create_tray=None, acquire_single_instance=None,
+                 free_port=None):
+        self.config = config
+        self.runtime = runtime
+        self.data_dir = data_dir
+        self._webview = webview
+        self._uvicorn = uvicorn
+        self._create_app = create_app
+        self._create_tray = create_tray
+        self._acquire_instance = acquire_single_instance or _acquire_single_instance
+        self._free_port = free_port or _free_port
+        #: Composition, populated by `acquire()` and `build()`. Public on
+        #: purpose: being able to look at what was wired is the point.
+        self.instance_lock = None
+        self.port: int | None = None
+        self.url: str | None = None
+        self.transport = None
+        self.server = None
+        self.tray = None
+        self.controller: _DesktopController | None = None
+        self.window = None
+        self.transport_ready = False
+
+    # ── lazily-resolved real collaborators ───────────────────────────────
+
+    @property
+    def webview(self):
+        if self._webview is None:
+            import webview
+            self._webview = webview
+        return self._webview
+
+    @property
+    def uvicorn(self):
+        if self._uvicorn is None:
+            import uvicorn
+            self._uvicorn = uvicorn
+        return self._uvicorn
+
+    @property
+    def tray_factory(self):
+        # Resolved on every read rather than captured at construction: a
+        # collaborator meant to be replaceable must be reached through the
+        # attribute, or a later reassignment is silently ignored — the seam
+        # `ServiceRegistry` already had to learn not to freeze.
+        return self._create_tray if self._create_tray is not None else create_tray
+
+    @property
+    def create_app(self):
+        if self._create_app is None:
+            # Imported at call time, not module import time: the UI server
+            # pulls in FastAPI, and a test that replaces `create_app` on the
+            # module must be able to.
+            from optionspilot.ui import server as ui_server
+            return ui_server.create_app
+        return self._create_app
+
+    # ── composition ──────────────────────────────────────────────────────
+
+    def acquire(self) -> bool:
+        """Claim the right to be the only running copy."""
+        self.instance_lock = self._acquire_instance()
+        if self.instance_lock is None:
+            log.warning("another OptionsPilot instance is already running")
+            return False
+        return True
+
+    def show_already_running(self) -> None:
+        self.webview.create_window("OptionsPilot",
+                                   html=_ALREADY_RUNNING_HTML,
+                                   width=460, height=220)
+        self.webview.start()
+
+    def build(self) -> None:
+        """Wire everything except the GUI loop."""
+        self.port = self._free_port()
+        self.url = f"http://127.0.0.1:{self.port}"
+        app = self.create_app(self.config, run_loop=True, runtime=self.runtime,
+                              data_dir=self.data_dir)
+        # Transport serving stays separate from application lifecycle
+        # ownership. The controller drives runtime/tray operations on
+        # UIServer; the Uvicorn Server only owns HTTP process shutdown.
+        self.transport = self.uvicorn.Server(self.uvicorn.Config(
+            app, host="127.0.0.1", port=self.port, log_level="warning"))
+        threading.Thread(target=self.transport.run, daemon=True,
+                         name="uvicorn").start()
+        self.server = app.state.server
+        self.server.updater.set_install_hook(self._on_install_launched)
+
+        self.transport_ready = _await_transport(self.transport)
+
+        self.tray = self.tray_factory(
+            Path(__file__).parent / "static" / "favicon.ico")
+        self.controller = _DesktopController(
+            None, self.server, self.tray,
+            release_instance_lock=self.instance_lock.close)
+        self.server.orch.notifier.set_action_handler(
+            self.controller.handle_notification_action)
+        self.window = self.webview.create_window(
+            "OptionsPilot — Paper Trading", self.url,
+            width=1280, height=860, min_size=(980, 640),
+            background_color="#0d0d0d",
+            js_api=_DesktopBridge(self.controller),
         )
-        webview.start()
-        return
+        self.controller.window = self.window
+        self.window.events.closing += self.controller.on_closing
+        self.tray.set_menu(self.controller.menu())
+        self.tray.set_status(TrayStatus("healthy", "OptionsPilot — Healthy"))
+        self.controller.tray_started = self.tray.start()
+        if self.controller.tray_started:
+            try:
+                self.server.background.register(
+                    TaskSpec("tray_status", 10, self.controller.refresh_tray,
+                             policy="essential"))
+            except ValueError:
+                pass
 
-    port = _free_port()
-    app = create_app(config, run_loop=True, runtime=runtime, data_dir=data_dir)
-    # Keep transport serving separate from application lifecycle ownership.
-    # The desktop controller drives runtime/tray operations on UIServer; the
-    # Uvicorn Server only owns HTTP process shutdown.
-    transport_server = uvicorn.Server(uvicorn.Config(
-        app, host="127.0.0.1", port=port, log_level="warning"
-    ))
-    threading.Thread(target=transport_server.run, daemon=True, name="uvicorn").start()
-    application_server = app.state.server
-
-    def _on_install_launched() -> None:
-        transport_server.should_exit = True
+    def _on_install_launched(self) -> None:
+        self.transport.should_exit = True
         try:
-            for w in list(webview.windows):
-                w.destroy()
+            for window in list(self.webview.windows):
+                window.destroy()
         except Exception:  # noqa: BLE001 - best-effort shutdown
             pass
 
-    application_server.updater.set_install_hook(_on_install_launched)
+    def run(self) -> None:
+        # `create_app` owns the effective settings object when the launcher was
+        # not passed one explicitly. Read that object so startup preferences
+        # work for both embedded and normal desktop launches.
+        prefs = self.server.runtime.runtime_prefs()
 
-    url = f"http://127.0.0.1:{port}"
-    _await_transport(transport_server)
+        def on_ready():
+            if prefs.get("start_minimized_to_tray") and \
+                    self.controller.tray_started:
+                self.controller.hide_to_tray()
 
-    tray = create_tray(Path(__file__).parent / "static" / "favicon.ico")
-    controller = _DesktopController(None, application_server, tray,
-                                    release_instance_lock=instance_lock.close)
-    application_server.orch.notifier.set_action_handler(
-        controller.handle_notification_action)
-    window = webview.create_window(
-        "OptionsPilot — Paper Trading", url,
-        width=1280, height=860, min_size=(980, 640),
-        background_color="#0d0d0d", js_api=_DesktopBridge(controller),
-    )
-    controller.window = window
-    window.events.closing += controller.on_closing
-    tray.set_menu(controller.menu())
-    tray.set_status(TrayStatus("healthy", "OptionsPilot — Healthy"))
-    controller.tray_started = tray.start()
-    if controller.tray_started:
-        try:
-            application_server.background.register(
-                TaskSpec("tray_status", 10, controller.refresh_tray,
-                         policy="essential"))
-        except ValueError:
-            pass
+        self.webview.start(on_ready)
 
-    # ``create_app`` owns the effective settings object when the launcher was
-    # not passed one explicitly. Read that object so startup preferences work
-    # for both embedded and normal desktop launches.
-    prefs = application_server.runtime.runtime_prefs()
-
-    def on_ready():
-        if prefs.get("start_minimized_to_tray") and controller.tray_started:
-            controller.hide_to_tray()
-
-    try:
-        webview.start(on_ready)
-    finally:
+    def shutdown(self) -> None:
         # The GUI loop can return while a deferred close worker is still
         # stopping the scheduler. Let it finish rather than racing the
         # interpreter's own teardown against a half-closed database.
-        controller.join_pending()
-        controller.exit()
-        transport_server.should_exit = True
-        instance_lock.close()
+        self.controller.join_pending()
+        self.controller.exit()
+        self.transport.should_exit = True
+        self.instance_lock.close()
+
+    def launch(self) -> None:
+        if not self.acquire():
+            self.show_already_running()
+            return
+        self.build()
+        try:
+            self.run()
+        finally:
+            self.shutdown()
+
+
+def launch(config: AppConfig, runtime=None, data_dir=None) -> None:
+    """Desktop entry point. A thin adapter over `DesktopApplication`."""
+    DesktopApplication(config, runtime, data_dir).launch()
 
 
 class _DesktopBridge:

@@ -3,11 +3,38 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-08-02, on closing **V0.9.0 — the verification floor**
-(branch `V3-ui`, committed `2707a01`…`e403da6`). 2065 → **2158 tests** (+93).
-Full detail: **`docs/CHANGELOG.md`**, `2026-08-02 — V0.9.0`.
+**Last updated:** 2026-08-03, on closing **V0.9.1 — runtime & thread
+ownership** (branch `V3-ui`, committed `d92de20`…). 2158 → **2243 tests** (+85).
+Full detail: **`docs/CHANGELOG.md`**, `2026-08-03 — V0.9.1`.
 
 ## Exact stopping point
+
+**V0.9.1 is closed. Nothing is in progress.** All eleven commits landed,
+`verify.ps1` is green across all 13 gates, coverage is **91.86%** over the 91
+ratchet, and the milestone's stated exit criterion — a **30-minute soak**, not a
+green suite — passed clean. Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.1
+▸ Commit map.
+
+`BackgroundRuntime` now owns what it claimed to own. Every application
+background workload is a registered task on a lane; `ui/server.py` and
+`intelligence/engine.py` construct no threads at all; the runtime is the only
+path to a trading cycle; `exit()` is single-entry; startup readiness comes from
+the transport; and `DesktopApplication` makes the desktop wiring assertable
+without a GUI. **No feature, no trading-behaviour change, no new dependency.**
+One deliberate API change: `/api/runtime` no longer carries `health.memory`.
+
+**Accepted as out of scope, and recorded so it is not re-litigated:** orchestrator
+thread-safety (finding F-1 — `_maybe_send_summaries` runs outside the server lock
+on a worker thread). `ROADMAP.md` names it in V0.9.1's own "Out of scope" list;
+it belongs to V0.9.2.
+
+**Still omitted rather than deferred:** `pip-audit` and Dependabot, from V0.9.0's
+finding H-4. It has now passed the point where it could fold into a V0.9.1
+commit and wants a standalone one.
+
+**Next: V0.9.2 — complete the service extraction**, pending user approval.
+
+## Previously: the exact stopping point at V0.9.0
 
 **V0.9.0 is closed. Nothing is in progress. `verify.ps1` is green across all 13
 gates** — full suite, ruff, HTML ids, docs consistency, API contract, `pip
@@ -43,11 +70,7 @@ Checksums yes, signature no.
 inside the deferral: `pip-audit` and Dependabot are named in finding H-4's
 definition of done and never received a commit. Small, unblocked, in `TODO.md`.
 
-**Next: V0.9.1 — runtime & thread ownership.** Not started. It is the blocking
-prerequisite for the V0.9.2 service extraction, because a service that owns
-background work would otherwise be extracted against a broken ownership model.
-See `NEXT_SESSION.md` for the three things to hold on to before writing any of
-it — chiefly that the exit criterion is a 30-minute soak, not a green suite.
+**V0.9.1 followed and is now closed** (see the top of this file).
 
 ## Previously: the exact stopping point at V0.8.2
 

@@ -5,30 +5,32 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-03, mid **V0.9.1 — runtime & thread ownership**
-(C1…C10 committed).
+**Last updated:** 2026-08-03, on closing **V0.9.1 — runtime & thread
+ownership** (C1…C11 committed).
 
 ## What to do next
 
-**Continue V0.9.1 at C11 — the last commit.** Plan of record: the V0.9
-Engineering Specification, Revision 2. Ten commits are in: the runtime owns
-every application background workload, `ui/server.py` and
-`intelligence/engine.py` construct no threads at all (asserted on the AST, not
-on source text), `_DesktopController.exit()` is genuinely single-entry, the
-legacy `UIServer._loop` is gone so `BackgroundRuntime` is the only path to a
-trading cycle, the tracemalloc monitor is removed, and the launcher takes its
-readiness from `uvicorn.Server.started` rather than polling itself over HTTP.
+**Begin V0.9.2 — complete the service extraction**, once the user approves. V0.9.1
+closed with all eleven commits landed, `verify.ps1` green across 13 gates, and a
+clean 30-minute soak. Plan of record: the V0.9 Engineering Specification,
+Revision 2.
 
-➡ **The commit map is now in `ROADMAP.md` ▸ V0.9.1 ▸ "Commit map".** Read it
-before starting anything. The per-commit plan lives in the Engineering
-Specification, Revision 2, which is *not* in this repository and which a session
-loses to context compaction — C7 and C9 both had to be confirmed with the user
-for that reason. The table is the fix, and it is only worth having if it is
-**updated in the same commit that lands a row.**
+`BackgroundRuntime` now genuinely owns what it claimed to own. Every application
+background workload is a registered task on a lane; `ui/server.py` and
+`intelligence/engine.py` construct **no threads at all** (asserted on the AST,
+not on source text); `BackgroundRuntime` is the only path to a trading cycle;
+`_DesktopController.exit()` is single-entry; the launcher takes readiness from
+`uvicorn.Server.started`; and `DesktopApplication` makes the desktop wiring
+assertable without a GUI.
 
-C11 — a `DesktopApplication` assertable without a GUI — is the last row.
+➡ **`ROADMAP.md` ▸ V0.9.1 ▸ "Commit map" is the per-commit table**, with hashes.
+The plan itself lives in the Engineering Specification, which is *not* in this
+repository and which a session loses to context compaction — C7, C9 and C10 all
+had to be confirmed with the user for that reason. **Build the same table for
+V0.9.2 before starting it**, and keep it current in the same commit that lands a
+row.
 
-**Three things carried forward.**
+**Three things carried into V0.9.2.**
 
 1. **F-1 is out of scope for this whole milestone, not just for one commit.**
    `_maybe_send_summaries` runs outside the server lock on a worker thread
@@ -55,7 +57,48 @@ The standing execution protocol applies: one planned commit at a time,
 re-validate every assumption against the live tree before implementing, and
 demonstrate each new gate failing as well as passing.
 
-## What was completed most recently? (V0.9.0 — the verification floor)
+## What was completed most recently? (V0.9.1 — runtime & thread ownership)
+
+2158 -> a **2243-test suite** (+85). **Committed**, 11 commits `d92de20`…`0b08ae3`
+plus C11. No feature, no trading-behaviour change, no new runtime dependency.
+**One deliberate API change:** `/api/runtime` no longer carries `health.memory`.
+Full detail: **`docs/CHANGELOG.md`**, entry `2026-08-03 — V0.9.1`.
+
+**The one thing to understand.** `BackgroundRuntime` existed since V0.8 and did
+not own what it claimed to. Alongside it ran a raw thread per manual scan, a raw
+thread per backtest, a thread `intelligence/` started for itself, a complete
+second scheduler nobody called, and an `exit()` guard two threads could both walk
+through. Pause, resume, shutdown and health reporting described *intent*.
+
+> ### ⚠ Five things here are load-bearing
+>
+> 1. **The `coordinator` lane is the default, deliberately.** Until a task opts
+>    in, the worker path is never entered and no pool thread is created. That
+>    inertness is the rollback story: reverting an activated task is deleting one
+>    `lane=` argument.
+> 2. **`DEFAULT_MAX_WORKERS` is derived, not chosen.** It is 4 because `UIServer`
+>    registers four worker tasks. A fifth without raising it does not error — the
+>    surplus job waits for a slot while its status still says "running".
+> 3. **Pause never interrupts work in flight** (Decision D-2), so
+>    `RuntimeSnapshot.pause_pending` exists and the tray says "Pausing". A client
+>    that shows "paused" the moment the request returns is describing itself.
+> 4. **`TaskSpec.on_demand` is what lets user-initiated work be a runtime task.**
+>    `register` makes every task immediately due by design, so without it,
+>    registering a "manual scan" task would run a scan on every construction.
+> 5. **Insufficient evidence about your own change is a first-class answer.**
+>    C10's comment claimed the polled endpoint was expensive; the benchmark said
+>    0.02 ms. The comment was corrected rather than the measurement ignored.
+
+**The three races, all the same shape, all measured:** manual-scan dispatch
+(two requests, two cycles); `exit()` (**8 of 8 concurrent callers ran the
+shutdown, and Restart spawned 8 successor processes**); and the pre-existing
+`MarketDataControl` shape they both echoed. Checking a slot and then claiming it
+is not claiming it.
+
+**Verified by a 30-minute soak, not a green suite** — concurrency defects are
+not deterministic and this suite has passed over a guaranteed deadlock before.
+
+## What was completed before that? (V0.9.0 — the verification floor)
 
 2065 -> a **2158-test suite** (+93). **Committed**, 11 commits `2707a01`…`e403da6`.
 No feature, no trading-behaviour change, no new runtime dependency. Full detail:
