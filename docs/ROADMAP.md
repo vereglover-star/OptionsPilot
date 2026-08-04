@@ -278,7 +278,7 @@ the same commit that lands a row.**
 |---|---|---|---|---|
 | C1 | ✅ | The service error hierarchy — H-7's types, before anything raises them | S | `cefe4da` |
 | C2 | ✅ | Extract `ChartService` — smallest first, establishes the pattern | L | `74de6b2` |
-| C3 | ⏳ | Extract `MarketDataService` — deliberately lock-free | XL | — |
+| C3 | ✅ | Extract `MarketDataService` (shipped as `MarketDataAdminService`) — deliberately lock-free | XL | pending |
 | C4 | ⏳ | Extract `TradingService` — orders, chain, account, scan lifecycle | XL | — |
 | C5 | ⏳ | Extract `BacktestService` — job slot as a runtime task | L | — |
 | C6 | ⏳ | Move `ui/guide.py` → `services/guide.py` | M | — |

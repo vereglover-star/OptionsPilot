@@ -30,20 +30,41 @@ is. This file is the flat, actionable checklist version.
       suite.
 
 - [ ] **V0.9.2 — complete the service extraction.** In progress. **C1** (the
-      service error hierarchy, H-7's types) and **C2** (`ChartService` — the
-      chart payload out of `ui/server.py`, which lost 122 lines) are committed;
-      **C3 (`MarketDataService`) is next**, and must *not* acquire `self.lock`.
+      service error hierarchy, H-7's types), **C2** (`ChartService`) and **C3**
+      (`MarketDataAdminService` — diagnostics, report, replay and the twelve
+      control-centre calls) are committed; `ui/server.py` is down from 1,892 to
+      1,728 lines. **C4 (`TradingService`) is next** — the highest-consequence
+      extraction, and its lock scope must be identical to before.
       Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.2 ▸ Commit map. C2–C5
       are **mechanical moves** — `tests/test_ui_server.py` must keep passing
       unchanged, because editing it destroys the evidence that the move changed
       nothing.
 
-- [ ] **`scripts/guide_check.py` check "tour: the spotlight ring appears" is
-      flaky.** Failed once during V0.9.2-C2's `verify.ps1` run and passed
-      135/135 on two immediate re-runs, against a diff that touches no frontend
-      file. Almost certainly an animation/timing race in the assertion rather
-      than a product defect — but a gate that fails at random trains people to
-      re-run it, which is how a real failure gets waved through.
+- [ ] **Two browser checks are flaky, and both cost a real investigation.** A
+      gate that fails at random trains people to re-run it, which is how a real
+      failure eventually gets waved through. Both were observed flipping at an
+      *identical* code state.
+
+      1. `scripts/guide_check.py` — "tour: the spotlight ring appears". Failed
+         once during V0.9.2-C2's `verify.ps1`, then passed 135/135 twice.
+         Presumed animation/timing race; mechanism not yet identified.
+      2. `scripts/chart_check.py` — "drawings RENDER on every timeframe".
+         Failed twice during V0.9.2-C3, then passed at the same commit. **The
+         mechanism is identifiable from the check itself:** it draws a trend on
+         **1m** whose two anchors are minutes apart, then asserts on **1d**
+         that they resolve more than **5 pixels** apart. On a 300-day 1d chart
+         those two timestamps are essentially one instant, so the assertion
+         rides a knife edge whose position depends on how many bars the *live*
+         provider returned that minute. It is the right thing to assert
+         (V3.2.1's bug was `chX()` returning 0 off-bar) with a threshold that
+         is only accidentally satisfied. Anchor the trend at a time separation
+         that is meaningful on the coarsest timeframe tested, or assert
+         finiteness on 1d and non-degeneracy only where the span supports it.
+
+      Cost so far: C3's investigation included a full stash-and-bisect against
+      the previous commit, which produced a **wrong** conclusion (that C3 had
+      caused it) because the runs were time-ordered against live network data
+      rather than interleaved.
 
 - [ ] **Make the packaged-build gate reach the desktop launch path.** The
       windowed-exe startup crash (uvicorn's formatter reading

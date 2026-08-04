@@ -15,7 +15,7 @@ and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
 `browser_check.py` green.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2285 tests run against canned
+against its real API with a real key — all 2323 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -554,8 +554,8 @@ because releasing the single-instance lock is the first thing a restart does.
 Commit map for the per-commit table with hashes. **The per-commit sequence is tabulated in `ROADMAP.md` ▸ V0.9.1
 ▸ Commit map** — keep it current in the same commit that lands a row.
 
-**V0.9.2 is in progress: C1 (the service error hierarchy) and C2
-(`ChartService`) are landed; C3 (`MarketDataService`) is next.** The per-commit
+**V0.9.2 is in progress: C1 (the service error hierarchy), C2 (`ChartService`)
+and C3 (`MarketDataAdminService`) are landed; C4 (`TradingService`) is next.** The per-commit
 table with hashes is `ROADMAP.md` ▸ V0.9.2 ▸ Commit map — keep it current in the
 same commit that lands a row. Then V0.9.3 (a real API v1). Scope detail: the
 V0.9 Engineering Specification, Revision 2, and `ROADMAP.md`.
@@ -566,7 +566,7 @@ by business decision — see `ROADMAP.md` ▸ Deferred.
 
 ## Test count
 
-**2285 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2323 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 

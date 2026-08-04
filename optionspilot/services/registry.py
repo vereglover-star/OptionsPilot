@@ -23,6 +23,7 @@ from optionspilot.config.runtime import MAX_WATCHLIST
 from optionspilot.host import current_host
 from optionspilot.services.charts import ChartService
 from optionspilot.services.intelligence import IntelligenceService
+from optionspilot.services.marketdata import MarketDataAdminService
 from optionspilot.services.notifications import NotificationService
 from optionspilot.services.portfolio import PortfolioService
 from optionspilot.services.viewmodels import HostView
@@ -35,7 +36,7 @@ class ServiceRegistry:
 
     def __init__(self, *, orchestrator, runtime, config, lock, directory,
                  trades, verify_symbol, on_symbols_added=None, host=None,
-                 log=None, window_days=None, clock=None):
+                 log=None, window_days=None, clock=None, replay=None):
         self._orch = orchestrator
         self._runtime = runtime
         self._cfg = config
@@ -71,6 +72,17 @@ class ServiceRegistry:
             # holding its own clock answers from a different one than the app
             # around it.
             clock=clock,
+        )
+        self.marketdata = MarketDataAdminService(
+            provider=lambda: orchestrator.provider,
+            # `getattr`, because an orchestrator built over an injected
+            # provider double has no control plane at all — and resolving it
+            # per call is what lets a test attach one afterwards.
+            control=lambda: getattr(orchestrator, "marketdata", None),
+            # `data.replay.replay`. Injected rather than imported: it reaches
+            # the provider registry and the adapters, and this layer's value is
+            # that it does not need them.
+            replay=replay,
         )
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)

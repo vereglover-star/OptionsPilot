@@ -49,6 +49,7 @@ serializer, and it would need no Python object from any other package.
 
 from optionspilot.services.charts import ChartService
 from optionspilot.services.intelligence import IntelligenceService
+from optionspilot.services.marketdata import MarketDataAdminService
 from optionspilot.services.notifications import (
     CATALOGUE, NotificationService, NotificationView,
 )
@@ -77,7 +78,7 @@ from optionspilot.services.workspace import WorkspaceService
 
 __all__ = [
     "ServiceRegistry",
-    "ChartService",
+    "ChartService", "MarketDataAdminService",
     "IntelligenceService", "NotificationService", "PortfolioService",
     "WatchlistService", "WorkspaceService",
     "CATALOGUE", "NotificationView",

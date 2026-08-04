@@ -4,6 +4,46 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C3: the market-data console leaves the transport
+
+*Second of four extractions. 2285 → 2323 tests (+38).*
+
+Diagnostics, the text report, trace replay and the twelve Settings ▸ Market data
+control calls move to `services/marketdata.py::MarketDataAdminService`.
+`ui/server.py` drops from 1,788 to 1,728 lines; every method name survives as a
+delegation, because the routes, the QA endpoints and the browser suite all call
+them. `tests/test_ui_server.py` and `tests/test_marketdata_control.py` are both
+unchanged.
+
+**Not named `MarketDataService`.** The specification calls it that, but
+`data/service.py::MarketDataService` — the tier ladder — has owned the name
+since V0.5.2. Two identically-named classes in one codebase is a permanent tax
+on every import line and every search, so this one is named for what it does.
+
+**It takes no lock, and C3's stated constraint was to preserve that rather than
+"fix" it.** Everything here touches the provider stack, which is thread-safe and
+independent of the orchestrator's mutable state. Taking the lock would let a
+running scan block the settings page — precisely when a user is most likely to
+be looking at it, since the reason they opened it is usually that data is not
+arriving.
+
+**The twelve delegations were the real risk.** Each was two lines differing only
+in which `MarketDataControl` method it named, so a copy-paste naming the wrong
+one is easy to write and invisible to review — a settings page that resets the
+provider order when asked to test a connection, with a green suite. They now go
+through one `_delegate(name, *args)` dispatcher (each name appears exactly once)
+and are pinned by a parametrised table asserting method *and* arguments against
+a recording double. A further test asserts the table is **complete**, so a
+thirteenth delegation added without a row fails rather than going unchecked.
+
+**One import, one injection, and the difference is the layering rule.**
+`data/report.py` is imported: it is pure stdlib, and the whole reason it exists
+is that the JSON export, the dashboard and the text report render one payload,
+so a second renderer must not be substitutable. `data/replay.py` is injected: it
+reaches the provider registry, the adapters and the quality checks, and
+importing it would drag the market-data stack into a layer whose value is that
+it does not need one. `SERVICE_DATA_MODULES` gains `report` and nothing else.
+
 ## 2026-08-03 — V0.9.2-C2: the chart payload leaves the transport
 
 *First of four extractions. 2270 → 2285 tests (+15).*

@@ -65,14 +65,24 @@ ALLOWED: dict[str, set[str]] = {
     "services": {"core", "config", "host", "intelligence", "analysis", "data"},
 }
 
-# The only modules of `data/` a service may import. Both are pure functions over
-# a DataFrame that happen to live in the market-data package: `validate_candles`
-# (the non-finite-bar sanitizer) and `sessions.labels` (an ET session labeller).
+# The only modules of `data/` a service may import. All three are PURE — no
+# socket, no key, no quota, no provider construction — and each is imported
+# rather than injected for the same reason: it is the single renderer or
+# validator of something, and a second one must not be substitutable.
+#
+#   base      `validate_candles`, the non-finite-bar sanitizer
+#   sessions  `labels`, an ET session labeller
+#   report    `render`, the ONE diagnostics renderer the JSON export, the
+#             dashboard and the text report all share (stdlib-only)
+#
 # Everything else in `data/` opens sockets, holds a key, spends a quota or
-# constructs a provider — and a service must RECEIVE a provider, injected and
-# duck-typed, never import one. Without this bound, adding `data` to the
-# allow-list above would have handed `services/` the whole market-data stack.
-SERVICE_DATA_MODULES = {"base", "sessions"}
+# constructs a provider — and a service must RECEIVE those, injected and
+# duck-typed, never import them. `data/replay.py` is the worked example: it
+# reaches the registry, the adapters and the quality checks, so
+# `MarketDataAdminService` takes `replay` as a constructor argument instead.
+# Without this bound, `data` in the allow-list above would have handed
+# `services/` the whole market-data stack.
+SERVICE_DATA_MODULES = {"base", "sessions", "report"}
 
 # Composition roots — allowed to import any subpackage. Still constrained by the
 # explicit negative invariants below (a root must not import "up").

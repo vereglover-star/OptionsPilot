@@ -517,6 +517,16 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   handed down rather than re-declared, so the default history window keeps one
   owner. The one service that returns a `dict` instead of a view model, because
   the payload spreads the market-data layer's own `as_meta()` keys.
+- `marketdata.py` — `MarketDataAdminService`: the diagnostics payload, its text
+  rendering, trace replay, and the twelve Settings ▸ Market data control calls
+  (V0.9.2-C3). **Not** `MarketDataService` — `data/service.py` has owned that
+  name since V0.5.2, and two identically-named classes is a permanent cost to
+  every import line. Takes no lock, deliberately: a running scan must not be
+  able to block the settings page. The renderer (`data/report.py`, pure stdlib)
+  is *imported* so a second one cannot be substituted; the replay engine
+  (`data/replay.py`, which reaches the registry and the adapters) is *injected*.
+  The twelve delegations go through one `_delegate(name, *args)` dispatcher, so
+  each control method name appears exactly once.
 - `intelligence.py` — `payload()` and `summary()`, the projections of one
   snapshot. `PERIOD_LIMITS` and `SUMMARY_METRICS` live here.
 - `notifications.py` — `CATALOGUE` (13 kinds; severity + a `pushable` flag

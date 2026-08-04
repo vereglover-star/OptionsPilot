@@ -37,7 +37,6 @@ from optionspilot.core.logging_setup import get_logger, uvicorn_logging_kwargs
 from optionspilot.core.models import OptionRight, Timeframe, utcnow
 from optionspilot.core.paths import AppPaths
 from optionspilot.data import replay as mdreplay
-from optionspilot.data import report as mdreport
 from optionspilot.data import symbols as symdir
 from optionspilot.data.presets import PRESETS
 from optionspilot.engine.scorer import DEFAULT_WEIGHTS
@@ -234,6 +233,10 @@ class UIServer:
             # frozen seam the whole UI suite relies on, and handing over the
             # function object would capture the real clock forever.
             clock=lambda: utcnow(),
+            # The replay engine, handed down rather than imported: it reaches
+            # the provider registry and the adapters, which `services/` must
+            # not depend on.
+            replay=mdreplay.replay,
         )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
@@ -527,131 +530,68 @@ class UIServer:
             symbol, timeframe, start=start, end=end,
             extended_hours=extended_hours)
 
-    def marketdata_diagnostics(self, traces: int = 25) -> dict:
-        """Provider health + cache stats + recent request traces.
+    # ── market data console (V0.9.2-C3) ──────────────────────────────────────
+    #
+    # Every method below delegates to `services/marketdata.py`. They keep their
+    # names because the routes, `tests/test_ui_server.py` and the browser suite
+    # all call them; the logic — diagnostics, the text report, replay and the
+    # twelve control-centre calls — lives in the service.
+    #
+    # None of these take `self.lock`, and that is a decision rather than an
+    # omission. They touch the provider stack, which is thread-safe and
+    # independent of the orchestrator's mutable state. Taking the lock would
+    # mean a running scan could block the settings page, which is precisely
+    # when a user is most likely to be looking at it.
 
-        Provider-only, like `candles_payload` — no orchestrator state, so no
-        lock is taken and asking for diagnostics can never contend with (or be
-        blocked by) a running scan. Returns `{"available": False}` rather than
-        erroring when the injected provider predates this architecture, so the
-        endpoint is safe to call against any build."""
-        health = getattr(self.orch.provider, "health", None)
-        diagnostics = getattr(self.orch.provider, "diagnostics", None)
-        if health is None or diagnostics is None:
-            return {"available": False,
-                    "reason": "this provider does not expose diagnostics"}
-        payload = health()
-        payload["available"] = True
-        payload["traces"] = diagnostics.recent(max(0, min(traces, 200)))
-        payload["version"] = __version__
-        return payload
+    def marketdata_diagnostics(self, traces: int = 25) -> dict:
+        return self.services.marketdata.diagnostics(traces)
 
     def marketdata_report(self, traces: int = 25) -> str:
-        """The same diagnostics rendered as plain text for a bug report.
-
-        Rendering happens in `data/report.py` over the *same* payload the JSON
-        export and the dashboard use, so the three can never disagree about a
-        number."""
-        return mdreport.render(self.marketdata_diagnostics(traces),
-                               traces=traces,
-                               title=f"OptionsPilot v{__version__} — market "
-                                     f"data diagnostics")
+        return self.services.marketdata.report(traces)
 
     def marketdata_replay(self, trace_id: int) -> dict:
-        """Re-run a recorded request and poll every provider directly.
-
-        This spends real upstream requests, so it is a POST triggered by an
-        explicit click on the diagnostics page — never anything the chart or a
-        background timer can reach.
-        """
-        service = getattr(self.orch.provider, "service", None)
-        diagnostics = getattr(self.orch.provider, "diagnostics", None)
-        if service is None or diagnostics is None:
-            return {"error": "this provider does not support replay"}
-        trace = diagnostics.find(trace_id)
-        if trace is None:
-            return {"error": f"no trace {trace_id} in the ring "
-                             f"(it holds the most recent requests only)"}
-        return mdreplay.replay(service, trace).as_dict()
-
-    # ── market data control centre (Settings ▸ Market Data) ──────────────────
-    #
-    # Every method here delegates to `data/control.py`. That is the whole
-    # design: the UI layer decides HTTP status codes and nothing else, so the
-    # control-centre logic is testable without a web server and cannot acquire
-    # a second implementation inside a route handler.
-    #
-    # None of these take `self.lock`. They touch the provider stack, which is
-    # thread-safe and independent of the orchestrator's mutable state — the
-    # same reasoning as `candles_payload` and `marketdata_diagnostics`. Taking
-    # the lock would mean a running scan could block the settings page, which
-    # is precisely when a user is most likely to be looking at it.
+        return self.services.marketdata.replay(trace_id)
 
     @property
     def marketdata(self):
-        """The control plane, or None when the provider is not the real stack.
-
-        A test (or an embedding) that injects a `MarketDataProvider` double has
-        no registry to administer. Returning None rather than raising lets the
-        endpoints answer "not available for this provider" the same way the
-        diagnostics endpoint already does, instead of 500ing.
-        """
-        return getattr(self.orch, "marketdata", None)
-
-    def _no_control(self) -> dict:
-        return {"available": False,
-                "reason": "this provider does not expose market-data controls"}
+        """The control plane, or None. Reached directly by the QA routes."""
+        return self.services.marketdata.control
 
     def marketdata_dashboard(self) -> dict:
-        control = self.marketdata
-        return control.dashboard() if control else self._no_control()
+        return self.services.marketdata.dashboard()
 
     def marketdata_set_key(self, name: str, api_key: str) -> dict:
-        control = self.marketdata
-        return (control.set_api_key(name, api_key) if control
-                else self._no_control())
+        return self.services.marketdata.set_key(name, api_key)
 
     def marketdata_remove_key(self, name: str) -> dict:
-        control = self.marketdata
-        return control.remove_api_key(name) if control else self._no_control()
+        return self.services.marketdata.remove_key(name)
 
     def marketdata_set_enabled(self, name: str, enabled: bool) -> dict:
-        control = self.marketdata
-        return (control.set_enabled(name, enabled) if control
-                else self._no_control())
+        return self.services.marketdata.set_enabled(name, enabled)
 
     def marketdata_move(self, name: str, direction: str) -> dict:
-        control = self.marketdata
-        return control.move(name, direction) if control else self._no_control()
+        return self.services.marketdata.move(name, direction)
 
     def marketdata_set_order(self, order: list[str]) -> dict:
-        control = self.marketdata
-        return control.set_order(order) if control else self._no_control()
+        return self.services.marketdata.set_order(order)
 
     def marketdata_reset_order(self) -> dict:
-        control = self.marketdata
-        return control.reset_order() if control else self._no_control()
+        return self.services.marketdata.reset_order()
 
     def marketdata_set_ordering_mode(self, mode: str) -> dict:
-        control = self.marketdata
-        return (control.set_ordering_mode(mode) if control
-                else self._no_control())
+        return self.services.marketdata.set_ordering_mode(mode)
 
     def marketdata_test(self, name: str) -> dict:
-        control = self.marketdata
-        return control.test_connection(name) if control else self._no_control()
+        return self.services.marketdata.test_connection(name)
 
     def marketdata_maintenance(self, action: str) -> dict:
-        control = self.marketdata
-        return control.start_maintenance(action) if control else self._no_control()
+        return self.services.marketdata.maintenance(action)
 
     def marketdata_maintenance_status(self) -> dict:
-        control = self.marketdata
-        return control.maintenance_status() if control else self._no_control()
+        return self.services.marketdata.maintenance_status()
 
     def marketdata_maintenance_cancel(self) -> dict:
-        control = self.marketdata
-        return control.cancel_maintenance() if control else self._no_control()
+        return self.services.marketdata.maintenance_cancel()
 
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 

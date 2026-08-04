@@ -5,19 +5,21 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-03, on landing **V0.9.2-C2** (ChartService).
+**Last updated:** 2026-08-04, on landing **V0.9.2-C3** (MarketDataAdminService).
 
 ## What to do next
 
-**Continue V0.9.2 at C3 — extract `MarketDataService`** (XL). ➡ **`ROADMAP.md` ▸
+**Continue V0.9.2 at C4 — extract `TradingService`** (XL: orders, chain, account, scan lifecycle). It is the **highest-consequence extraction of the milestone** — its lock scope must be identical to before, unlike C2 and C3 which legitimately take no lock at all. ➡ **`ROADMAP.md` ▸
 V0.9.2 ▸ "Commit map" is the per-commit table**, with hashes and status; it is
 the repository's own record of the sequence, built precisely so a lost
 specification can no longer stall a session. Keep it current in the same commit
 that lands a row.
 
-C1 (the error hierarchy) and C2 (ChartService) are landed. **C3's stated
-constraint is that it must NOT acquire `self.lock`** — that is a documented
-decision being preserved, not an oversight to fix.
+C1 (the error hierarchy), C2 (ChartService) and C3 (MarketDataAdminService)
+are landed. C3's constraint — that it must NOT acquire `self.lock` — was a
+documented decision preserved, not an oversight fixed. **C4 is the opposite
+case:** it genuinely needs the lock, and the requirement is that the scope is
+unchanged.
 
 **The pattern C2 established, which C3–C5 follow.** Collaborators are injected
 and duck-typed; a provider arrives as a *callable* so a later swap is not frozen
