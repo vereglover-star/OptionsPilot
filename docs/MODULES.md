@@ -527,6 +527,17 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   (`data/replay.py`, which reaches the registry and the adapters) is *injected*.
   The twelve delegations go through one `_delegate(name, *args)` dispatcher, so
   each control method name appears exactly once.
+- `trading.py` — `TradingService`: the manual order path, `chain_payload`,
+  `account_metrics`, and the scan cycle with its `scan_state` / `last_summary` /
+  `equity_history` (V0.9.2-C4). **Two locks, two jobs**: the orchestrator
+  `RLock` is *injected* (shared with the server — a second one would serialise
+  against nothing), and `cycle_lock` is a plain `Lock` this service owns, which
+  serialises whole cycles so a scheduled scan and a manual one cannot
+  interleave. `fetch_watchlist_candles` and `order.to_dict()` run OUTSIDE the
+  orchestrator lock, deliberately; `tests/test_trading_service.py` asserts each
+  boundary with `RLock._is_owned()` rather than by reading the code. Imports the
+  order vocabulary only — never `broker.registry`, which holds the live-broker
+  stubs.
 - `intelligence.py` — `payload()` and `summary()`, the projections of one
   snapshot. `PERIOD_LIMITS` and `SUMMARY_METRICS` live here.
 - `notifications.py` — `CATALOGUE` (13 kinds; severity + a `pushable` flag

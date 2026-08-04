@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -26,15 +26,13 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from optionspilot import __version__
-from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
 from optionspilot.backtest import Backtester
 from optionspilot.broker.base import BrokerError
-from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.coach import CoachProfile, build_dashboard
 from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger, uvicorn_logging_kwargs
-from optionspilot.core.models import OptionRight, Timeframe, utcnow
+from optionspilot.core.models import Timeframe, utcnow
 from optionspilot.core.paths import AppPaths
 from optionspilot.data import replay as mdreplay
 from optionspilot.data import symbols as symdir
@@ -50,6 +48,7 @@ from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
 from optionspilot.services import IdempotencyStore, ServiceRegistry
 from optionspilot.services.runtime import BackgroundRuntime, RuntimeSnapshot, TaskSpec
+from optionspilot.services import trading as trading_service
 from optionspilot.host import current_host
 from optionspilot.services import intelligence as intel_view
 from optionspilot.services import sync as sync_boundaries
@@ -82,7 +81,9 @@ def _experience_dict(rec) -> dict:
 
 ET = ZoneInfo("America/New_York")
 STATIC_DIR = Path(__file__).parent / "static"
-MAX_EQUITY_POINTS = 2000
+#: Re-exported from the service that owns it (V0.9.2-C4), so the cap is
+#: one fact rather than two that drift.
+MAX_EQUITY_POINTS = trading_service.MAX_EQUITY_POINTS
 
 #: The runtime task a user's "Scan now" request triggers (V0.9.1-C5). It is
 #: `on_demand`, so the interval is never used to schedule it — the value exists
@@ -129,8 +130,6 @@ class UIServer:
             data_dir / "settings.json", baseline=config
         )
         self.lock = threading.RLock()
-        self.last_summary: dict = {}
-        self.equity_history: list[tuple[str, float]] = []
         self._close_lock = threading.Lock()
         self._closed = False
         self.background = BackgroundRuntime(health_check=self._health_check)
@@ -145,12 +144,12 @@ class UIServer:
         # one atomic fact — a slot claimed with nobody's parameters behind it
         # would run the previous request's symbol.
         self._bt_pending: tuple[str, int, float | None] | None = None
-        # Scan pipeline: candle fetching runs OUTSIDE self.lock (it only
-        # touches the thread-safe provider), so status reads and the UI stay
-        # responsive during a scan. _cycle_lock serializes whole cycles so the
-        # background loop and a manual scan can never interleave.
-        self._cycle_lock = threading.Lock()
-        self.scan_state: dict = {"running": False, "done": 0, "total": 0}
+        # The scan pipeline, the cycle lock and the scan/summary/equity state
+        # moved to `services/trading.py` in V0.9.2-C4. They are still reachable
+        # under their old names through the properties below, because the
+        # status payload, the WebSocket push and `tests/test_runtime_lifecycle`
+        # all read them.
+        #
         # Registered at construction, not in `start_loop`: a manual scan must
         # work on a server started with `run_loop=False`, where no scheduled
         # task is ever registered. The interval is nominal — the task only ever
@@ -237,6 +236,10 @@ class UIServer:
             # the provider registry and the adapters, which `services/` must
             # not depend on.
             replay=mdreplay.replay,
+            # Read per cycle, not captured: a watchlist edited between scans
+            # must take effect on the next one.
+            watchlist_symbols=lambda: list(self.cfg.data.watchlist),
+            tz=ET,
         )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
@@ -367,59 +370,42 @@ class UIServer:
     # `TestThereIsOnlyOneSchedulingPath` names every caller of `run_cycle_now`
     # and fails if a new one appears.
 
+    # ── the scan cycle, owned by services/trading.py (V0.9.2-C4) ─────────────
+    #
+    # The state below is read by `status_payload`, the WebSocket push and
+    # `tests/test_runtime_lifecycle`, so it keeps its old names here and
+    # forwards. `run_cycle_now` stays a method rather than becoming a bare
+    # attribute because the runtime task callbacks call it and a test
+    # monkeypatches it.
+
+    @property
+    def scan_state(self) -> dict:
+        return self.services.trading.scan_state
+
+    @property
+    def last_summary(self) -> dict:
+        return self.services.trading.last_summary
+
+    @property
+    def equity_history(self) -> list[tuple[str, float]]:
+        return self.services.trading.equity_history
+
+    @equity_history.setter
+    def equity_history(self, value) -> None:
+        # Settable because the equity cap is asserted by seeding it directly.
+        self.services.trading.equity_history = list(value)
+
+    @property
+    def _cycle_lock(self):
+        """Serialises whole cycles, so the scheduled scan and a manual one can
+        never interleave. A different object from `self.lock`, deliberately."""
+        return self.services.trading.cycle_lock
+
     def run_cycle_now(self, *, blocking: bool = True) -> dict:
-        """One full cycle: parallel candle prefetch (no orchestrator lock, with
-        live progress for the UI), then the stateful cycle under the lock.
-
-        ``blocking=False`` declines rather than waits when a cycle is already
-        in flight, returning ``{}``. That preserves the pre-V0.9.1-C5 manual
-        scan behaviour exactly: `request_scan` used to test
-        ``_cycle_lock.locked()`` and skip, so a request arriving during a
-        scheduled scan produced nothing rather than a second cycle immediately
-        afterwards. The synchronous ``/api/scan {"wait": true}`` path keeps the
-        default and still blocks.
-        """
-        if not self._cycle_lock.acquire(blocking=blocking):
-            log.info("scan request declined: a cycle is already running")
-            return {}
-        try:
-            return self._run_cycle_locked()
-        finally:
-            self._cycle_lock.release()
-
-    def _run_cycle_locked(self) -> dict:
-        """The cycle body. `_cycle_lock` is held by the caller.
-
-        Split out of `run_cycle_now` unchanged when that method gained the
-        non-blocking option — the algorithm, the lock order and the progress
-        bookkeeping are byte-for-byte what they were.
-        """
-        symbols = list(self.cfg.data.watchlist)
-        self.scan_state = {"running": True, "done": 0, "total": len(symbols)}
-        try:
-            candles = self.orch.fetch_watchlist_candles(
-                symbols, on_symbol=self._on_symbol_fetched)
-            with self.lock:
-                summary = self.orch.run_cycle(candles=candles)
-                self.last_summary = summary
-                equity = self.orch.broker.get_account().equity
-                self.equity_history.append((summary["ts"], equity))
-                del self.equity_history[:-MAX_EQUITY_POINTS]
-                return summary
-        finally:
-            self.scan_state = {"running": False,
-                               "done": len(symbols), "total": len(symbols)}
-
-    def _on_symbol_fetched(self, symbol: str, frames: dict) -> None:
-        """Progressive scan feedback: as each symbol's candles land, publish
-        its fresh quote so watchlist prices tick in while the scan runs."""
-        quote = self.orch._quote_snapshot(frames)
-        with self.lock:
-            state = dict(self.scan_state)
-            state["done"] = state.get("done", 0) + 1
-            self.scan_state = state
-            if quote:
-                self.last_summary.setdefault("quotes", {})[symbol] = quote
+        """One full cycle. See `services/trading.py::TradingService.run_cycle`
+        for the lock discipline: the candle prefetch runs outside the
+        orchestrator lock, the stateful cycle inside it."""
+        return self.services.trading.run_cycle(blocking=blocking)
 
     def request_scan(self) -> dict:
         """Non-blocking manual scan: ask the runtime to run a cycle and return
@@ -596,85 +582,13 @@ class UIServer:
     # ── manual trading (Human Mode order flow) ───────────────────────────────
 
     def chain_payload(self, symbol: str, expiration: str = "") -> dict:
-
-        symbol = symbol.upper()
-        with self.lock:
-            provider = self.orch.provider
-            expirations = [e.isoformat() for e in provider.get_expirations(symbol)]
-            if not expirations:
-                return {"symbol": symbol, "expirations": [], "chain": []}
-            exp = expiration or expirations[0]
-            spot = provider.get_quote(symbol).last
-            today = utcnow().date()
-            chain = provider.get_option_chain(symbol, date.fromisoformat(exp))
-            rows = []
-            for c in chain:
-                if c.delta == 0.0:
-                    c = enrich_greeks(c, spot, today)
-                rows.append({
-                    "strike": c.strike, "right": c.right.value,
-                    "bid": c.bid, "ask": c.ask, "mid": round(c.mid, 2),
-                    "delta": round(c.delta, 3), "iv": round(c.implied_volatility, 4),
-                    "volume": c.volume, "open_interest": c.open_interest,
-                    "liquidity": liquidity_score(c),
-                    "dte": c.dte(today),
-                })
-            return {"symbol": symbol, "spot": spot, "expiration": exp,
-                    "expirations": expirations, "chain": rows}
+        return self.services.trading.chain_payload(symbol, expiration)
 
     def place_order(self, payload: dict) -> dict:
-
-        kind = OrderKind(str(payload.get("kind", "market")))
-        tif = TIF(str(payload.get("tif", "day")))
-        side = str(payload.get("side", "buy_to_open"))
-        symbol = str(payload.get("symbol", "")).upper()
-        expiration = date.fromisoformat(str(payload.get("expiration")))
-        strike = float(payload.get("strike"))
-        right = OptionRight(str(payload.get("right")))
-        quantity = int(payload.get("quantity", 1))
-
-        with self.lock:
-            provider = self.orch.provider
-            chain = provider.get_option_chain(symbol, expiration)
-            contract = next(
-                (c for c in chain
-                 if c.strike == strike and c.right is right), None)
-            if contract is None:
-                raise ValueError(
-                    f"no {right.value} @ {strike} for {symbol} {expiration}")
-            try:
-                spot = provider.get_quote(symbol).last
-            except Exception:  # noqa: BLE001 — spot is advisory for buys
-                spot = 0.0
-            if side == "buy_to_open" and kind is OrderKind.MARKET:
-                # immediate fills never reach OrderManager.evaluate()'s
-                # fill-time risk callback — preflight them here so manual
-                # entries can't bypass the circuit breaker / entry limits
-                decision = self.orch.approve_manual_entry(
-                    contract, quantity, utcnow(), premium=contract.ask)
-                if not decision.approved:
-                    raise BrokerError(decision.veto)
-            order, event = self.orch.orders.place(
-                kind=kind, side=side, contract=contract, quantity=quantity,
-                ts=utcnow(), tif=tif,
-                limit_price=float(payload.get("limit_price") or 0),
-                stop_level=float(payload.get("stop_level") or 0),
-                trail=float(payload.get("trail") or 0),
-                trail_pct=float(payload.get("trail_pct") or 0),
-                spot=spot,
-            )
-            if (event and event["event"] == "filled"
-                    and side == "buy_to_open"):
-                # track immediately so fast round trips still get coached,
-                # and count the entry against the daily trade limit
-                self.orch.register_manual_entry(contract.symbol,
-                                                entry_ts=utcnow())
-        return {"order": order.to_dict(),
-                "event": event["event"] if event else "working"}
+        return self.services.trading.place_order(payload)
 
     def account_metrics(self) -> dict:
-        return self.services.portfolio.performance(
-            utcnow().astimezone(ET)).to_dict()
+        return self.services.trading.account_metrics()
 
     # ── watchlist management ─────────────────────────────────────────────────
 

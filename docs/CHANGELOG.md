@@ -4,6 +4,54 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C4: the trading surface leaves the transport
+
+*Third of four extractions, and the highest-consequence one. 2323 → 2346 tests
+(+23).*
+
+The manual order path, the option chain it is assembled from, the account
+metrics and the whole scan cycle move to `services/trading.py::TradingService`.
+`ui/server.py` drops from 1,728 to 1,642 lines — 250 below where the milestone
+started. `tests/test_ui_server.py` and `tests/test_runtime_lifecycle.py` are
+both unchanged.
+
+**The lock scope is asserted, not reviewed.** C2 and C3 legitimately took no
+lock; here it is real, and the specification's review focus is that the scope is
+identical to before. `threading.RLock` exposes `_is_owned()`, so an instrumented
+collaborator can record whether the lock was held at the instant the real code
+reached it. The tests pin every step:
+
+  * `place_order` — chain lookup, quote, risk approval and `orders.place` are
+    all **inside**; `order.to_dict()` is **outside**. That last one was one line
+    of indentation away from being lost and nothing had ever checked it:
+    serialising a response is not orchestrator state, and holding the lock
+    across it would make a waiting scan queue behind JSON.
+  * `run_cycle` — `fetch_watchlist_candles` is **outside**, which is the
+    documented reason a scan does not freeze the UI (it only touches the
+    thread-safe provider), and `run_cycle` plus the equity/summary bookkeeping
+    are **inside**.
+
+**The two locks stay two objects.** The injected `RLock` guards orchestrator
+state; `cycle_lock` (a plain `Lock`, genuinely owned by this service)
+serialises whole cycles so a scheduled scan and a manual one cannot interleave.
+Making the service build its own orchestrator lock was demonstrated, and it
+collapses the entire scope assertion — `orders.place` runs holding a lock
+nothing else respects.
+
+**It does not become a second gatekeeper.** `RiskManager` is still the only
+entry gate and `OrderManager` the only execution path. The preflight approval
+for an immediate market buy moved with the code because such a fill never
+reaches `OrderManager.evaluate()`'s fill-time risk callback — removing it was
+demonstrated, and manual entries then bypass the circuit breaker silently.
+
+**A new architecture guard, and it is the one that matters most here.**
+`services` may now import `broker`, bounded to `broker.base` and
+`broker.orders` — the order *vocabulary*. `broker/registry.py`, which holds the
+Alpaca/Tradier/Webull/IBKR stubs, is permanently excluded: this is a
+paper-trading-only system by design, and a reusable application layer that
+cannot import the registry is one in which no future host can construct a live
+adapter by accident.
+
 ## 2026-08-04 — V0.9.2-C3: the market-data console leaves the transport
 
 *Second of four extractions. 2285 → 2323 tests (+38).*

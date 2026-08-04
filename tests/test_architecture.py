@@ -62,8 +62,28 @@ ALLOWED: dict[str, set[str]] = {
     # supply different ones and quietly break the parity it promises. `data` is
     # narrower than it looks and is bounded by
     # `test_services_reach_only_the_pure_data_helpers` below.
-    "services": {"core", "config", "host", "intelligence", "analysis", "data"},
+    # V0.9.2-C4 adds `broker`, bounded by
+    # `test_services_reach_only_the_order_vocabulary` below. `TradingService`
+    # needs the order VOCABULARY — `OrderKind`, `TIF`, `BrokerError` — to turn
+    # a client payload into an order. It still routes every execution through
+    # the injected orchestrator's `OrderManager` and every entry through
+    # `approve_manual_entry`, so it is a caller, not a second gatekeeper.
+    "services": {"core", "config", "host", "intelligence", "analysis", "data",
+                 "broker"},
 }
+
+# The only modules of `broker/` a service may import, and this bound carries
+# more weight than the `data` one below it.
+#
+# `broker/registry.py` holds the Alpaca/Tradier/Webull/IBKR entries — named
+# stubs that raise `BrokerError` because **this is a paper-trading-only system
+# by design** (see CLAUDE.md, "The one rule that overrides everything else").
+# Keeping it out of the reusable application layer means no service can ever
+# construct a live adapter, and a future mobile backend importing `services/`
+# cannot acquire one by accident. `broker/paper.py` and `broker/positions.py`
+# are excluded for the ordinary reason: a service must RECEIVE a broker,
+# injected, never build one.
+SERVICE_BROKER_MODULES = {"base", "orders"}
 
 # The only modules of `data/` a service may import. All three are PURE — no
 # socket, no key, no quota, no provider construction — and each is imported
@@ -223,6 +243,47 @@ def test_services_have_no_transport_dependency():
             offenders.append(f"{py.name} imports {sorted(bad)}")
     assert not offenders, \
         "services/ must stay transport-free:\n  " + "\n  ".join(offenders)
+
+
+def _service_submodule_imports(package: str) -> list[str]:
+    """Every `optionspilot.<package>.<module>` reached from `services/`.
+
+    Both spellings resolve to the same thing: `from optionspilot.x import y`
+    names the module in the alias, `from optionspilot.x.y import z` in
+    `node.module`. Handling only one leaves a hole exactly where the tidiest
+    import style sits.
+    """
+    found: list[str] = []
+    for py in (PKG / "services").rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8-sig"), filename=str(py))
+        for node in ast.walk(tree):
+            names: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.extend(f"{node.module}.{a.name}" for a in node.names)
+            elif isinstance(node, ast.Import):
+                names.extend(a.name for a in node.names)
+            for name in names:
+                parts = name.split(".")
+                if parts[:2] == ["optionspilot", package] and len(parts) >= 3:
+                    found.append(f"{py.name}:{node.lineno}:{parts[2]}")
+    return found
+
+
+def test_services_never_reach_a_broker_implementation():
+    """A service may name an order kind. It may not reach a broker.
+
+    The load-bearing exclusion is `broker/registry.py`, which holds the
+    live-broker stubs. This project is paper-trading-only by design, and a
+    reusable application layer that cannot import the registry is a layer in
+    which no future host can construct a live adapter by accident.
+    """
+    offenders = [entry for entry in _service_submodule_imports("broker")
+                 if entry.rsplit(":", 1)[1] not in SERVICE_BROKER_MODULES]
+    assert not offenders, (
+        "services/ may import only "
+        + ", ".join(f"broker.{m}" for m in sorted(SERVICE_BROKER_MODULES))
+        + " (never broker.registry — this is a paper-trading-only system):\n  "
+        + "\n  ".join(offenders))
 
 
 def test_services_reach_only_the_pure_data_helpers():

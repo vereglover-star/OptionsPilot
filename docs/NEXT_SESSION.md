@@ -5,7 +5,7 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-04, on landing **V0.9.2-C3** (MarketDataAdminService).
+**Last updated:** 2026-08-04, on landing **V0.9.2-C4** (TradingService).
 
 ## What to do next
 

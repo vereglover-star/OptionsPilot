@@ -26,6 +26,7 @@ from optionspilot.services.intelligence import IntelligenceService
 from optionspilot.services.marketdata import MarketDataAdminService
 from optionspilot.services.notifications import NotificationService
 from optionspilot.services.portfolio import PortfolioService
+from optionspilot.services.trading import TradingService
 from optionspilot.services.viewmodels import HostView
 from optionspilot.services.watchlist import WatchlistService
 from optionspilot.services.workspace import WorkspaceService
@@ -36,7 +37,8 @@ class ServiceRegistry:
 
     def __init__(self, *, orchestrator, runtime, config, lock, directory,
                  trades, verify_symbol, on_symbols_added=None, host=None,
-                 log=None, window_days=None, clock=None, replay=None):
+                 log=None, window_days=None, clock=None, replay=None,
+                 watchlist_symbols=None, tz=None):
         self._orch = orchestrator
         self._runtime = runtime
         self._cfg = config
@@ -83,6 +85,19 @@ class ServiceRegistry:
             # the provider registry and the adapters, and this layer's value is
             # that it does not need them.
             replay=replay,
+        )
+        self.trading = TradingService(
+            orchestrator=orchestrator,
+            # THE SERVER'S lock, not a new one. C4's whole review focus is that
+            # the scope is unchanged, and two lock objects would mean the
+            # orchestrator was reachable from two threads each holding "a" lock.
+            lock=lock,
+            portfolio=self.portfolio,
+            # Read per cycle, so a watchlist edited between scans takes effect
+            # on the next one rather than at construction.
+            watchlist=watchlist_symbols or (lambda: list(config.data.watchlist)),
+            clock=clock,
+            tz=tz,
         )
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)

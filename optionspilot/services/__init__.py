@@ -73,12 +73,13 @@ from optionspilot.services.viewmodels import (
     AccountView, HostView, PerformanceView, PnLWindowsView, PositionView,
     ViewModel, WatchlistEditView, WatchlistView, WorkspaceView,
 )
+from optionspilot.services.trading import TradingService
 from optionspilot.services.watchlist import WatchlistService
 from optionspilot.services.workspace import WorkspaceService
 
 __all__ = [
     "ServiceRegistry",
-    "ChartService", "MarketDataAdminService",
+    "ChartService", "MarketDataAdminService", "TradingService",
     "IntelligenceService", "NotificationService", "PortfolioService",
     "WatchlistService", "WorkspaceService",
     "CATALOGUE", "NotificationView",

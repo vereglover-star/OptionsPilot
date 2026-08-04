@@ -31,10 +31,10 @@ is. This file is the flat, actionable checklist version.
 
 - [ ] **V0.9.2 — complete the service extraction.** In progress. **C1** (the
       service error hierarchy, H-7's types), **C2** (`ChartService`) and **C3**
-      (`MarketDataAdminService` — diagnostics, report, replay and the twelve
-      control-centre calls) are committed; `ui/server.py` is down from 1,892 to
-      1,728 lines. **C4 (`TradingService`) is next** — the highest-consequence
-      extraction, and its lock scope must be identical to before.
+      (`MarketDataAdminService`) and **C4** (`TradingService` — the manual order
+      path, the chain, account metrics and the scan cycle) are committed;
+      `ui/server.py` is down from 1,892 to 1,642 lines. **C5
+      (`BacktestService`) is next.**
       Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.2 ▸ Commit map. C2–C5
       are **mechanical moves** — `tests/test_ui_server.py` must keep passing
       unchanged, because editing it destroys the evidence that the move changed
