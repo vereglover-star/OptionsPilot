@@ -29,42 +29,43 @@ is. This file is the flat, actionable checklist version.
       landed** (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
-- [ ] **V0.9.2 — complete the service extraction.** In progress. **C1** (the
-      service error hierarchy, H-7's types), **C2** (`ChartService`) and **C3**
-      (`MarketDataAdminService`), **C4** (`TradingService`) and **C5**
-      (`BacktestService`) are committed — **all four extractions done**;
-      `ui/server.py` is down from 1,892 to 1,604 lines. **C6 (move
-      `ui/guide.py` into `services/`) is next.**
-      Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.2 ▸ Commit map. C2–C5
-      are **mechanical moves** — `tests/test_ui_server.py` must keep passing
-      unchanged, because editing it destroys the evidence that the move changed
-      nothing.
+- [ ] **V0.9.2 — complete the service extraction.** In progress. **C1**–**C8**
+      committed: the error hierarchy, all four extractions (`ChartService`,
+      `MarketDataAdminService`, `TradingService`, `BacktestService`), the guide
+      moved into `services/`, services raising `ServiceError`, and the
+      transport mapping it to a status. `ui/server.py` is down from 1,892 to
+      ~1,600 lines and finding H-7 is closed. Per-commit table with hashes:
+      `ROADMAP.md` ▸ V0.9.2 ▸ Commit map.
 
-- [ ] **Two browser checks are flaky, and both cost a real investigation.** A
-      gate that fails at random trains people to re-run it, which is how a real
-      failure eventually gets waved through. Both were observed flipping at an
-      *identical* code state.
+- [ ] **`scripts/chart_check.py` fetches from LIVE providers, and it is the
+      only browser gate that does.** Fresh temp data dir per run, but real
+      network — so a failure can have nothing to do with the diff, and a bisect
+      against it is unsound. Two checks have now failed and then passed at an
+      *identical* commit:
 
-      1. `scripts/guide_check.py` — "tour: the spotlight ring appears". Failed
-         once during V0.9.2-C2's `verify.ps1`, then passed 135/135 twice.
-         Presumed animation/timing race; mechanism not yet identified.
-      2. `scripts/chart_check.py` — "drawings RENDER on every timeframe".
-         Failed twice during V0.9.2-C3, then passed at the same commit. **The
-         mechanism is identifiable from the check itself:** it draws a trend on
-         **1m** whose two anchors are minutes apart, then asserts on **1d**
-         that they resolve more than **5 pixels** apart. On a 300-day 1d chart
-         those two timestamps are essentially one instant, so the assertion
-         rides a knife edge whose position depends on how many bars the *live*
-         provider returned that minute. It is the right thing to assert
-         (V3.2.1's bug was `chX()` returning 0 off-bar) with a threshold that
-         is only accidentally satisfied. Anchor the trend at a time separation
-         that is meaningful on the coarsest timeframe tested, or assert
-         finiteness on 1d and non-degeneracy only where the span supports it.
+      1. "hung backend -> bounded-timeout error overlay ... then auto-recovers"
+         (V0.9.2-C8). Its recovery half needs a real `/api/candles` for COST 1d
+         to succeed inside 15 s.
+      2. "drawings RENDER on every timeframe" (V0.9.2-C3). **The mechanism is
+         identifiable from the check itself:** it draws a trend on **1m** whose
+         two anchors are minutes apart, then asserts on **1d** that they
+         resolve more than **5 pixels** apart. On a 300-day daily chart those
+         timestamps are essentially one instant, so the assertion rides a knife
+         edge whose position depends on how many bars the live provider
+         returned that minute. It is the right thing to assert (V3.2.1's bug
+         was `chX()` returning 0 off-bar) with a threshold that is only
+         accidentally satisfied.
 
-      Cost so far: C3's investigation included a full stash-and-bisect against
-      the previous commit, which produced a **wrong** conclusion (that C3 had
-      caused it) because the runs were time-ordered against live network data
-      rather than interleaved.
+      The fix worth doing is a recorded-fixture mode for the whole script.
+      Cost so far: C3's investigation included a stash-and-bisect that produced
+      a **wrong** conclusion (that C3 had caused it), because the runs were
+      time-ordered against live data rather than interleaved. The correct first
+      move on this gate is to re-run the *same* state.
+
+- [ ] **`scripts/guide_check.py` — "tour: the spotlight ring appears" is
+      flaky.** Failed once during V0.9.2-C2's `verify.ps1`, then passed 135/135
+      twice. Presumed animation/timing race; mechanism not yet identified.
+      Unlike the chart script, this one is offline, so the cause is local.
 
 - [ ] **Make the packaged-build gate reach the desktop launch path.** The
       windowed-exe startup crash (uvicorn's formatter reading

@@ -48,6 +48,7 @@ from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
 from optionspilot.services import IdempotencyStore, ServiceRegistry
 from optionspilot.services.errors import ServiceError
+from optionspilot.ui.errors import status_for
 from optionspilot.services.runtime import BackgroundRuntime, RuntimeSnapshot, TaskSpec
 from optionspilot.services import trading as trading_service
 from optionspilot.host import current_host
@@ -826,6 +827,19 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     server = UIServer(config, orchestrator, runtime, data_dir)
     app = FastAPI(title="OptionsPilot", version=__version__)
     app.state.server = server
+
+    @app.exception_handler(ServiceError)
+    def _service_error(request, exc: ServiceError):
+        """Every legacy route's classified failure, mapped in ONE place.
+
+        V0.9.2-C8. Before this, each route decided its own status from its own
+        `except` tuple, which is how a client's unparseable timeframe came back
+        as a 502. The shape stays `{"error": "<message>"}` because that is what
+        `index.html` reads — `/api/v1/*` gets the full envelope. Only the
+        status is newly correct.
+        """
+        return JSONResponse({"error": exc.message},
+                            status_code=status_for(exc.code))
     @app.on_event("shutdown")
     def _shutdown():
         server.close()
@@ -871,6 +885,11 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
         try:
             return server.candles_payload(symbol, tf, start=start, end=end,
                                           extended_hours=ext)
+        except ServiceError:
+            # The client's own mistake (an unparseable timeframe). Let the
+            # app-wide handler give it a 4xx instead of blaming an upstream —
+            # a 502 here sent users to check their internet over a typo.
+            raise
         except Exception as exc:  # noqa: BLE001 — surface as a clean 502
             log.error("candles fetch failed: %s", exc)
             return JSONResponse({"error": f"candles unavailable: {exc}"},
@@ -1180,6 +1199,8 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
     def chain_view(symbol: str, expiration: str = ""):
         try:
             return server.chain_payload(symbol, expiration)
+        except ServiceError:
+            raise
         except Exception as exc:  # noqa: BLE001 — surface as a clean 502
             log.error("chain fetch failed: %s", exc)
             return JSONResponse({"error": f"chain unavailable: {exc}"},
@@ -1198,12 +1219,10 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
         try:
             return server.place_order(payload)
-        except (ServiceError, ValueError, KeyError, TypeError,
-                BrokerError) as exc:
-            # `ServiceError` first, and mapped to the SAME status the builtins
-            # already produced. C7 changes what services RAISE; C8 changes
-            # what the transport does with it. Splitting them keeps this
-            # commit a pure type change with no behavioural diff.
+        except (ValueError, KeyError, TypeError, BrokerError) as exc:
+            # `ServiceError` is no longer listed: the app-wide handler maps it
+            # from its code. What remains catches the builtins that can still
+            # arrive from layers below the service.
             return JSONResponse({"error": str(exc)}, status_code=422)
 
     @app.post("/api/orders/cancel")

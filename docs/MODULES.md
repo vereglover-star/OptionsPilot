@@ -527,6 +527,11 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   (`data/replay.py`, which reaches the registry and the adapters) is *injected*.
   The twelve delegations go through one `_delegate(name, *args)` dispatcher, so
   each control method name appears exactly once.
+- `ui/errors.py` — `STATUS_FOR_CODE`, the ONE place a service error code
+  becomes an HTTP status (V0.9.2-C8). Total over `ERROR_CODES` in both
+  directions. In `ui/` rather than `services/` because a `ServiceError` carries
+  no status by design. `unavailable_provider` is 503, not 502 — the app works,
+  its upstream does not.
 - `backtest.py` — `BacktestService`: the single job slot (V0.9.2-C5). The
   claim, the parameter stash and the job record are written in ONE critical
   section, because `TaskSpec.callback` takes no arguments and a slot claimed

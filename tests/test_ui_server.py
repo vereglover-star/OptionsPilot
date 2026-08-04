@@ -238,13 +238,29 @@ class TestCandlesAPI:
         assert seen["ext"] is False
         assert "session" not in d["candles"][0]
 
-    def test_unknown_symbol_is_clean_error(self, client):
-        r = client.get("/api/candles?symbol=ZZZZ&tf=5m")
-        # fake provider raises KeyError for unknown timeframes only; unknown
-        # symbol returns the same frames — force an error via bad timeframe
+    def test_a_bad_timeframe_is_the_clients_error_not_an_upstream_failure(
+            self, client):
+        """V0.9.2-C8 changed this from 502 to 422, deliberately.
+
+        `tf=7m` is a timeframe this application does not have. It used to
+        answer **502 "candles unavailable"** — finding H-7 pointing the other
+        way, a client's typo dressed as an upstream failure, which sends a user
+        to check their internet connection over a bad query string. The service
+        now raises `ValidationError` (V0.9.2-C7) and the transport maps its
+        code (V0.9.2-C8).
+        """
         r = client.get("/api/candles?symbol=SPY&tf=7m")
-        assert r.status_code == 502
-        assert "unavailable" in r.json()["error"]
+        assert r.status_code == 422
+        assert "7m" in r.json()["error"]
+
+    def test_an_unknown_symbol_still_serves_the_fake_frames(self, client):
+        """Unchanged, and kept separate: the old test conflated the two.
+
+        The fake provider returns the same frames for any symbol, so this
+        asserts only that an unknown symbol is not itself an error — the
+        timeframe case above is what actually exercised the failure path.
+        """
+        assert client.get("/api/candles?symbol=ZZZZ&tf=5m").status_code == 200
 
     def test_malformed_provider_bars_never_500_the_endpoint(self, client):
         # A provider that skips validate_candles (or a future regression in

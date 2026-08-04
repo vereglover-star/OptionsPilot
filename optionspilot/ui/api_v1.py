@@ -22,6 +22,10 @@ from optionspilot.services.contracts import (
 from optionspilot.services import intelligence as intel_view
 from optionspilot.services import LocalSyncProvider
 from optionspilot.services import sync as sync_boundaries
+from optionspilot.services.errors import ServiceError
+from optionspilot.ui.errors import (
+    UNCLASSIFIED_MESSAGE, UNCLASSIFIED_STATUS, status_for,
+)
 
 
 SERVER_CAPABILITIES = frozenset({
@@ -58,16 +62,33 @@ def _fail(request: Request, code: str, message: str, status: int = 400,
     )
 
 
+def _service_fail(request: Request, exc) -> JSONResponse:
+    """A classified failure: the service said what was wrong and why."""
+    return _fail(request, exc.code, exc.message, status_for(exc.code),
+                 exc.details)
+
+
+def _unclassified_fail(request: Request, exc: Exception) -> JSONResponse:
+    """Anything else, which is by definition a defect in this application.
+
+    V0.9.2-C8 removed the two clauses above this one — `except ValueError`
+    became 422 and `except KeyError` became 404 — because `ValueError` is what
+    `int("x")` raises and `KeyError` is what a dict typo raises, so an internal
+    bug was reported to the user as their mistake and the traceback was thrown
+    away. The type is kept in `details` for a bug report; the message says
+    nothing about internals.
+    """
+    return _fail(request, "internal_error", UNCLASSIFIED_MESSAGE,
+                 UNCLASSIFIED_STATUS, {"type": type(exc).__name__})
+
+
 def _safe(request: Request, fn, *args, **kwargs):
     try:
         return _ok(request, fn(*args, **kwargs))
-    except ValueError as exc:
-        return _fail(request, "validation_error", str(exc), 422)
-    except KeyError as exc:
-        return _fail(request, "not_found", str(exc), 404)
+    except ServiceError as exc:
+        return _service_fail(request, exc)
     except Exception as exc:  # noqa: BLE001 - transport boundary
-        return _fail(request, "internal_error", "The request could not be completed.",
-                     500, {"type": type(exc).__name__})
+        return _unclassified_fail(request, exc)
 
 
 def _mutation(request: Request, server, operation: str, fn):
@@ -77,13 +98,10 @@ def _mutation(request: Request, server, operation: str, fn):
             "X-Idempotency-Key")
         data, replayed = server.idempotency.execute(operation, key, fn)
         return _ok(request, data, idempotency_replayed=replayed)
-    except ValueError as exc:
-        return _fail(request, "validation_error", str(exc), 422)
-    except KeyError as exc:
-        return _fail(request, "not_found", str(exc), 404)
+    except ServiceError as exc:
+        return _service_fail(request, exc)
     except Exception as exc:  # noqa: BLE001 - transport boundary
-        return _fail(request, "internal_error", "The request could not be completed.",
-                     500, {"type": type(exc).__name__})
+        return _unclassified_fail(request, exc)
 
 
 def register_v1_routes(app: FastAPI, server) -> None:

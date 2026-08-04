@@ -4,6 +4,41 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C8: one place turns a failure into a status
+
+*2365 → 2390 tests (+25). Finding H-7 closed.*
+
+New `optionspilot/ui/errors.py` holds `STATUS_FOR_CODE` — one status per
+declared error code, total in **both** directions and asserted so. It lives in
+`ui/` because `ServiceError` carries no status by design: `NotFound` is a
+statement about the domain, and that it becomes 404 over HTTP is the
+transport's decision. A CLI would map the same codes to exit statuses.
+
+**Two behaviour changes, both deliberate.**
+
+*An unclassified exception is now a 500.* `ui/api_v1.py` inferred a status from
+the builtin type — `except ValueError` became 422, `except KeyError` became
+404 — so an internal defect reached the user as *their* mistake, and the
+traceback that would have found it was discarded because the handler believed
+it understood the failure. Both clauses are gone. A `KeyError` from a
+dict-lookup bug used to answer **404 not found**, which is worse than an honest
+500 precisely because it looks actionable and the user acts on it.
+
+*A client's unparseable timeframe is a 422, not a 502.*
+`/api/candles?tf=7m` answered "candles unavailable" with a 502 — H-7 pointing
+the other way, a typo dressed as an upstream failure that sends a user to check
+their internet connection. `tests/test_ui_server.py` had enshrined the 502; that
+assertion is now 422 and the old test, which conflated an unknown symbol with a
+bad timeframe, was split into the two things it was actually checking.
+
+**Two response shapes, on purpose.** `/api/v1/*` returns the full
+`error_envelope` (code, message, details, request id). The legacy routes keep
+`{"error": "<message>"}` through one app-wide exception handler, because that is
+the shape `index.html` reads and this commit is about statuses, not a frontend
+rewrite. Both take their status from the same table. `unavailable_provider` maps
+to **503, not 502**: the app is reachable and working, an upstream it depends on
+is not, and a 502 would point a bug report at the wrong system.
+
 ## 2026-08-04 — V0.9.2-C7: services state why they refused
 
 *2363 → 2365 tests (+2). No behavioural change — deliberately.*
