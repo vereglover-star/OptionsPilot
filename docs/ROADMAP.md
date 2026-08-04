@@ -252,7 +252,51 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
-### V0.9.1 — Runtime & thread ownership (in progress)
+### V0.9.2 — Complete the service extraction (in progress)
+
+Finding C-5: application logic still resident in the transport layer. V0.7.0
+built `services/` and moved the *presentation* decisions there; `ui/server.py`
+is still 1,892 lines and still owns charts, market data, trading, backtests and
+the guide. This milestone finishes that move and gives the application a real
+error taxonomy, so a client can tell an internal defect from its own bad
+request — finding H-7, where `except KeyError` at the transport turns an
+internal dict-lookup bug into a **404 not found** shown to the user.
+
+Estimate 11–13 days, 12 commits. Sequenced after V0.9.1 deliberately: a service
+that owns background work extracted against a broken ownership model would have
+needed redoing.
+
+#### Commit map — the repository's own record of the sequence
+
+The per-commit plan lives in the V0.9 Engineering Specification, Revision 2,
+which is **not** in this repository. Three times so far a session has had to
+stop and ask which commit came next, because the specification was lost to
+context compaction and nothing here recorded the mapping. **Update this table in
+the same commit that lands a row.**
+
+| Commit | Status | Description | Size | Hash |
+|---|---|---|---|---|
+| C1 | ⏳ | The service error hierarchy — H-7's types, before anything raises them | S | — |
+| C2 | ⏳ | Extract `ChartService` — smallest first, establishes the pattern | L | — |
+| C3 | ⏳ | Extract `MarketDataService` — deliberately lock-free | XL | — |
+| C4 | ⏳ | Extract `TradingService` — orders, chain, account, scan lifecycle | XL | — |
+| C5 | ⏳ | Extract `BacktestService` — job slot as a runtime task | L | — |
+| C6 | ⏳ | Move `ui/guide.py` → `services/guide.py` | M | — |
+| C7 | ⏳ | Raise `ServiceError` from every service (H-7 applied) | L | — |
+| C8 | ⏳ | Map `ServiceError` at the transport boundary | M | — |
+| C9 | ⏳ | Per-key idempotency locking with request fingerprints (N-1, N-2) | M | — |
+| C10 | ⏳ | Enforce a `ui/server.py` size ceiling | S | — |
+| C11 | ⏳ | Assert the registry is constructible without FastAPI | M | — |
+| C12 | ⏳ | Document the completed application layer | M | — |
+
+**Review focus, per the specification, worth repeating here** because it is what
+makes C2–C5 safe: they are **mechanical moves**. `tests/test_ui_server.py` must
+pass *unchanged* — editing it to accommodate a refactor destroys the evidence
+that the refactor changed nothing. Locks are passed in, never created; C3 must
+**not** acquire `self.lock`, preserving a documented decision; C4 is the
+highest-consequence extraction and its lock scope must be identical to before.
+
+### V0.9.1 — Runtime & thread ownership (complete)
 
 #### Commit map — the repository's own record of the sequence
 
