@@ -307,7 +307,7 @@ the same commit that lands a row.**
 | C9 | ✅ | Per-key idempotency locking with request fingerprints (N-1, N-2) | M | `12a3809` |
 | C10 | ✅ | Enforce a `ui/server.py` size ceiling | S | `4bb94b5` |
 | C11 | ✅ | Assert the registry is constructible without FastAPI | M | `0151504` |
-| C12 | ✅ | Document the completed application layer | M | pending |
+| C12 | ✅ | Document the completed application layer | M | `a2a1c8c` |
 
 **Review focus, per the specification, worth repeating here** because it is what
 makes C2–C5 safe: they are **mechanical moves**. `tests/test_ui_server.py` must
