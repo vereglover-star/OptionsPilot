@@ -51,7 +51,7 @@ not *told what to do*.
 | `scripts/verify.ps1` | Run every automated check — the pre-commit gate |
 | `scripts/docs.ps1` | Documentation consistency only (part of `verify.ps1`) |
 | `scripts/build.ps1` | Build the Windows exe (tests run first, always) |
-| `scripts/release.ps1` | Full release-readiness check + report |
+| `scripts/release.ps1 X.Y.Z` | Ship a release, end to end: preflight, bump, verify, commit, tag, push, watch the GitHub build (`-DryRun` to rehearse) |
 | `scripts/clean.ps1` | Remove `__pycache__`/`.pytest_cache`/`*.egg-info` clutter |
 
 Full detail on each: `docs/CONTRIBUTING.md`. Release process: `docs/RELEASE_CHECKLIST.md`.

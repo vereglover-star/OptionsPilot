@@ -625,7 +625,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2414 tests as of this writing, all passing)
+# Tests (2493 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -660,14 +660,42 @@ background runtime) — are already off the pump and may call these directly.
 `BaseException`, so the lifecycle code's `except Exception` cannot swallow it) if
 this is violated.
 
-**Release pipeline (V0.4.5).** Releases are automated by GitHub Actions:
-`.github/workflows/ci.yml` (push/PR: pytest + selftest + doc/id checks, reusable)
-and `.github/workflows/release.yml` (on a `v*` tag: reuse CI → verify tag ==
-`__version__` → `scripts/build.ps1` → `scripts/package_release.ps1` →
-`OptionsPilot-vX.Y.Z.zip` → GitHub Release). The version has a **single source of
-truth** — `optionspilot/__init__.py::__version__`; `pyproject.toml` derives it
-via `[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`, so
-`scripts/bump_version.py` edits one line. Full guide: `docs/RELEASE.md`.
+**Release pipeline (V0.4.5, automated end-to-end since the release-automation
+commit).** Shipping a release is **one command**:
+
+```powershell
+.\scripts\release.ps1 0.9.3          # add -DryRun to rehearse it, changing nothing
+```
+
+Six phases: preflight (clean tree, no half-finished merge/rebase, right branch,
+not behind upstream, version moves forward, tag free locally **and** on the
+remote, CHANGELOG section exists) → bump → `check_docs.py` + full `verify.ps1`
+→ commit + annotated tag → push branch then tag → watch
+`.github/workflows/release.yml` and report the Release URL and artifacts, or the
+exact failing job/step. **Anything failing before the push rolls the repository
+back to exactly where it started**; after the push the rollback is disarmed on
+purpose, because undoing published history is not a script's decision.
+
+CI is unchanged: `.github/workflows/ci.yml` (push/PR: ruff + pytest + selftest +
+doc/id/contract checks, reusable) and `.github/workflows/release.yml` (on a `v*`
+tag: reuse CI → verify tag == `__version__` → `build.ps1` →
+`package_release.ps1` → `build_installer.ps1` → SHA256SUMS → GitHub Release).
+
+The version has a **single source of truth** —
+`optionspilot/__init__.py::__version__`; `pyproject.toml` derives it via
+`[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`, and
+the UI, installer, zip name, tag and release notes all derive from it too. The
+one place that holds a second *literal* copy is `docs/PROJECT_STATUS.md`'s
+"Current version" line (enforced by `check_docs.py`, and it drifted for four
+releases before that). Both are written by `scripts/bump_version.py` from one
+table, `scripts/lib/release_support.py::LOCATIONS`.
+
+**If you touch the release path**, two rules are enforced by
+`tests/test_release_automation.py`: `release.ps1` invokes **no git command
+itself** (all of it goes through `scripts/lib/ReleaseGit.ps1`), and every
+decision with an edge case lives in `scripts/lib/release_support.py` where
+pytest can reach it. Full guide: `docs/RELEASE.md`; the operational short
+version and what deliberately stayed manual: `docs/RELEASE_CHECKLIST.md`.
 
 **Windows installer (V0.4.6).** A `v*` tag also builds and publishes
 `OptionsPilot-Setup-vX.Y.Z.exe` (Inno Setup, `installer/OptionsPilot.iss`,
@@ -742,7 +770,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2414 tests cover this
+   exercises the FastAPI layer via `TestClient` (2493 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

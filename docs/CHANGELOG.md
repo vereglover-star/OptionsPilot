@@ -4,6 +4,128 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — Release automation: one command, six phases, automatic rollback
+
+*2414 → 2493 tests (+79). One real defect found in existing tooling.*
+
+Releasing OptionsPilot took six hand-typed commands across two systems: bump,
+verify, commit, tag, push branch, push tags, then open a browser and watch. The
+old `scripts/release.ps1` ran the gates and then **printed the remaining
+commands for a human to type**, on the stated principle that pushing and tagging
+have a hard-to-reverse footprint and should stay manual.
+
+The footprint argument was right and the conclusion was wrong. Six hand-typed
+commands are not safer than one — they are less reproducible, and they put the
+irreversible steps *after* the point where a tired human has already decided the
+release is fine. What actually makes the footprint safe is that nothing
+irreversible happens until everything reversible has been proven. So:
+
+```powershell
+.\scripts\release.ps1 0.9.3
+```
+
+**Eleven preflight checks, before anything is touched.** Clean working tree —
+`git status`, `git diff` **and** the staged index, because `git status` has
+printed "clean" in this repository while `git diff --stat` showed real changes.
+No half-finished merge, rebase, cherry-pick, revert or bisect (committing on top
+of one produces a commit nobody intended, and tagging publishes it). On the
+configured release branch. Not behind upstream. Version strictly newer —
+compared numerically, so `0.9.10` correctly beats `0.9.9`. Existing version
+literals still agree with each other. Tag free **locally and on the remote**,
+which doubles as proof the remote is reachable before spending six minutes
+verifying. And `docs/CHANGELOG.md` has a section naming the version, using the
+same rule `release_notes.py` uses to pick the published body — so the gate
+predicts what will actually be published rather than approximating it.
+
+**Then bump, verify, commit, tag, push, monitor.** The bump writes every
+location holding a *literal* copy of the version, from one table
+(`release_support.py::LOCATIONS`). Today that is `optionspilot/__init__.py` and
+`docs/PROJECT_STATUS.md`'s "Current version" line — the copy that announced
+`0.5.0` while the code was `0.8.2`, through four releases. Everything else
+derives: pyproject's dynamic metadata, the in-app display, the installer's
+`AppVersion`, the zip filename, the tag, the release notes. Those are listed in
+a second table and *printed* during the release, because "no duplicated version
+logic" is easy to assert and hard to believe. A location whose pattern stops
+matching is a hard error, never a silent skip — the tolerant behaviour ships a
+half-bumped release, which is the exact thing this exists to prevent.
+
+Monitoring watches `release.yml` to completion and prints the Release URL, the
+workflow URL and every artifact with its size; on failure, the failed job, the
+failed step and its number, the exact reason, both URLs, and the tail of the
+failing job's log when a token is available. It deliberately does **not**
+require the GitHub CLI: `gh` is not installed on the machine that cuts these
+releases, and a monitor that degraded to "go and look at the Actions tab"
+precisely there would not be a monitor. It also slows its own polling from 15s
+to 75s when running anonymously, because the unauthenticated API allows 60
+requests an hour and a 60-minute watch at 15s is 240 of them — an anonymous run
+would have reported a rate limit as a failed release.
+
+**Rollback is per-step, registered at the moment each step succeeds**, and
+unwinds in reverse. A failure in verification therefore does not try to delete a
+tag that was never created. An undo that itself throws is reported and the
+unwind continues, because a half-restored tree with no explanation is the worst
+available outcome. After the branch push the stack is *disarmed*: undoing
+published history means a force-push, which this project forbids and which no
+script should choose on a person's behalf. If the tag push fails after the
+branch push succeeded, the script says exactly that and prints the one command
+to retry.
+
+`-DryRun` performs every check against the real repository, the real remote and
+the real tag namespace, prints what it would do including the commit message,
+and modifies nothing. `-SkipVerify` is accepted **only** with `-DryRun` — a real
+release does not get to skip its own gate.
+
+**Architecture.** `scripts/release.ps1` decides the order of things and makes
+**no git call itself**; all of it goes through `scripts/lib/ReleaseGit.ps1`,
+which is what makes "does a release ever push before it verifies" answerable by
+reading one short file. Alongside it: `ReleaseConfig.ps1` (the fixed choices in
+one place), `ReleaseLog.ps1`, `ReleaseRollback.ps1`, `ReleaseVersion.ps1`,
+`ReleaseGitHub.ps1`, and `release_support.py` — every decision with an edge case,
+in a language pytest can reach. `scripts/bump_version.py` survives as a thin CLI
+over the same table.
+
+**One real defect, in tooling that predates this work.**
+`scripts/_common.ps1::Ensure-Environment` sets `$ErrorActionPreference = "Stop"`,
+and under that setting PowerShell 5.1 turns any line a native process writes to
+stderr into a **terminating** error — but only when the host's stderr is
+redirected, which a CI log, a `*> file` capture and any non-interactive runner
+all do. `pip` exits 0 and writes "a new release of pip is available" to stderr.
+So the function threw on a completely successful install, and it threw for every
+caller: `test.ps1`, `verify.ps1`, `build.ps1` and `release.ps1` all start there.
+Interactively it never reproduced, which is why it survived. The exit code is
+the only honest signal a native process gives, and the function already
+consulted it; dropping to `Continue` for the duration of the call is what makes
+that consultation reachable. The same hazard is handled once in
+`ReleaseGit.ps1` — `git push` writes *all* of its progress to stderr.
+
+Two more PowerShell 5.1 hazards, documented where they are handled.
+Multi-line commit and tag messages go to git through a **file** (`-F`), never
+`-m`: 5.1 re-quotes native arguments on the way to `CreateProcess` and mangles
+embedded newlines and quotes doing it, and a release commit message is not
+something this project amends afterwards. And rollback actions are plain
+scriptblocks over `$script:` state rather than `.GetNewClosure()` closures — a
+closure is bound into a fresh dynamic module, and a dynamic module cannot see
+functions dot-sourced into the calling script, so the undo would have failed
+with "not recognized" at the exact moment it was needed.
+
+**Verification.** 79 new tests in `tests/test_release_automation.py`: the
+behavioural half against the Python module (version locations, sync idempotency
+and its failure modes, numeric semver ordering, every remote-URL form, the
+changelog gate agreeing with the notes extractor, and the failure-report logic —
+including that a `test` job failing while `build` is *skipped* names the test
+job, the cause, rather than the skipped consequence). The structural half pins
+what pytest cannot execute: phase order, an undo registered for every mutation,
+no `--force` or `--no-verify` anywhere, `-SkipVerify` unreachable without
+`-DryRun`, TLS 1.2 forced, and the tag prefix matching what `release.yml`
+triggers on. Separately, the git layer and the rollback stack were exercised
+against a throwaway repository with a real remote — 29 checks covering
+mid-merge detection, multi-line messages, annotated tags, a successful push, a
+*rejected* push, and rollback in both its success and partial-failure paths.
+
+`docs/RELEASE.md` is rewritten around the one command; `RELEASE_CHECKLIST.md`
+is now the short operational version and the record of what deliberately stayed
+manual — writing the CHANGELOG entry, and smoke-testing the built exe by hand.
+
 ## 2026-08-04 — V0.9.2-C12: documenting the completed application layer
 
 *V0.9.2 closes here. 1,892 → 1,629 lines in `ui/server.py`; 2,247 → 2414 tests

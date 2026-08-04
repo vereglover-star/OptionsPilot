@@ -301,6 +301,42 @@ see "Known traps"). The raw command still works identically:
 - Before rebuilding the exe, run the full test suite first — don't waste a
   multi-minute PyInstaller build on code that fails its own tests.
 
+## How releases are made
+
+**One command.** Do not hand-type `git tag` or `git push` for a release.
+
+```powershell
+.\scripts\release.ps1 0.9.3 -DryRun   # every check, modifies nothing
+.\scripts\release.ps1 0.9.3           # release
+```
+
+Preflight → version bump → `check_docs.py` + `verify.ps1` → `Release vX.Y.Z`
+commit + annotated tag → push → watch `release.yml` and report the Release URL
+and artifacts, or the exact failing job and step. Anything failing **before the
+push** rolls the repository back to exactly where it started; after the push
+the rollback is disarmed deliberately, because undoing published history means
+a force-push. Full guide: `docs/RELEASE.md`.
+
+Two things the script will not do for you, both deliberate:
+- **Write the `docs/CHANGELOG.md` entry.** Preflight *refuses* to release
+  without a `## ` section naming the version, because that section becomes the
+  published release notes. What it says is a judgement, not a computation.
+- **Smoke-test the built exe.** Nothing in CI launches the packaged pywebview
+  window or exercises the PyInstaller-specific paths.
+
+If you add anything that holds a literal copy of the version, add a row to
+`scripts/lib/release_support.py::LOCATIONS` — that table is the single place
+the release knows what to write, and a location whose pattern stops matching is
+a hard error rather than a silent skip. Everything else (pyproject, the UI
+display, the installer, the zip name, the tag, the release notes) derives from
+`optionspilot.__version__` and must stay that way.
+
+If you change the release path itself: `scripts/release.ps1` must make **no git
+call of its own** (they all live in `scripts/lib/ReleaseGit.ps1`), and any
+decision with an edge case belongs in `scripts/lib/release_support.py` where
+pytest can reach it. `tests/test_release_automation.py` enforces both, plus
+phase order, rollback registration, and the absence of `--force`/`--no-verify`.
+
 ## How commits should be written
 
 Follow the existing style exactly — look at `git log` for real examples.
@@ -766,6 +802,28 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   stdio is absent must be tested with stdio removed.** The packaged `selftest`
   gate missed it too — it proves lazy imports resolve, it never touches the
   desktop launch path.
+- **`$ErrorActionPreference = "Stop"` makes a native program's stderr FATAL —
+  but only when the host's stderr is redirected.** PowerShell 5.1 wraps each
+  stderr line from a native process in a `NativeCommandError`, and under "Stop"
+  that terminates. `scripts/_common.ps1` sets "Stop" for every wrapper script,
+  and `pip` exits 0 while writing "a new release of pip is available" to
+  stderr — so `Ensure-Environment` threw on a completely successful install,
+  taking `test.ps1`, `verify.ps1`, `build.ps1` and `release.ps1` with it. It
+  never reproduced interactively, because an interactive console does not
+  redirect stderr; it fires in CI, under `*> file`, and in any non-interactive
+  runner. `git push` writes *all* of its progress to stderr, which is why
+  `ReleaseGit.ps1` wraps every git call the same way. **The exit code is the
+  only honest signal a native process gives** — drop to `Continue` around the
+  call and consult `$LASTEXITCODE`.
+- **Never pass a multi-line message to a native program with `-m`.** PowerShell
+  5.1 re-quotes native arguments on the way to `CreateProcess` and mangles
+  embedded newlines and quotes doing it. Commit and tag messages go through a
+  temp file and `-F` (UTF-8 **without** a BOM — a BOM becomes the first three
+  characters of the subject line). Related: `.GetNewClosure()` binds a
+  scriptblock into a fresh dynamic module, and a dynamic module cannot see
+  functions that were dot-sourced into the calling script — so a rollback
+  action written as a closure fails with "not recognized" at exactly the moment
+  it is needed. Use a plain scriptblock over `$script:` state.
 - PyInstaller only bundles what it can see in literal `import` statements.
   A lazy `importlib.import_module("...")` (added for startup speed in
   `f1bae42`) silently dropped yfinance from every exe built afterwards —

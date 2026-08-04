@@ -9,6 +9,26 @@ and prose descriptions of what shipped, see `CHANGELOG.md`.
 
 ## Completed
 
+### Release automation (2026-08-04)
+
+Shipping a release is now **one command**: `.\scripts\release.ps1 <version>`.
+Preflight (clean tree, no half-finished merge/rebase, correct release branch,
+not behind upstream, version moves forward, tag free locally *and* on the
+remote, CHANGELOG section present) → version bump across every location holding
+a literal copy → `check_docs.py` and the full `verify.ps1` → `Release vX.Y.Z`
+commit and an annotated tag → push → watch `release.yml` to completion and
+report the Release URL and its artifacts, or the exact failing job and step.
+Anything failing before the push restores the repository to exactly where it
+started. `-DryRun` rehearses all of it and modifies nothing.
+
+Scope-adjacent, not a feature: no trading-behaviour change and no new runtime
+dependency. The helper library lives in `scripts/lib/`, with every decision that
+has an edge case in `release_support.py` so pytest can reach it. It also fixed a
+real defect in `scripts/_common.ps1` that broke **every** wrapper script
+(`test`, `verify`, `build`, `release`) whenever the host's stderr was
+redirected. 2414 → 2493 tests. Guide: `RELEASE.md`; short version:
+`RELEASE_CHECKLIST.md`.
+
 ### V0.9.0 — Verification floor (2026-08-02, committed `2707a01`…`e403da6`)
 
 The milestone that makes the rest of V0.9 trustworthy. Every milestone after it

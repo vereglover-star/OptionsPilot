@@ -1,40 +1,85 @@
-"""Set the project version at its single source of truth.
+"""Set the project version at every location that holds a literal copy.
 
     python scripts/bump_version.py 0.5.0
+    python scripts/bump_version.py 0.5.0 --dry-run
+    python scripts/bump_version.py --check
 
-The version lives ONLY in optionspilot/__init__.py (__version__). pyproject.toml
-derives it dynamically (`[tool.setuptools.dynamic] version = {attr = ...}`), the
-app UI reads `optionspilot.__version__`, and packaging + the GitHub Release tag
-derive from the same place — so this script edits exactly one line in one file.
+The version's single source of truth is `optionspilot/__init__.py`
+(`__version__`). `pyproject.toml` derives it dynamically, the app UI reads
+`optionspilot.__version__`, and the installer, the zip name, the git tag and the
+GitHub Release all derive from the same place — so almost nothing needs writing.
 
-Normally invoked via scripts/release.ps1 -Version X.Y.Z. Refuses anything that
-isn't a plain X.Y.Z (no pre-release suffixes) - if this project ever needs those,
-extend the regex deliberately rather than loosening it by accident.
+"Almost" is the point. `docs/PROJECT_STATUS.md` states the current version in
+prose, `scripts/check_docs.py` fails when that prose disagrees, and for four
+releases it did — the document announced 0.5.0 while the code was 0.8.2. The
+authoritative list of what is a literal copy and what merely derives lives in
+`scripts/lib/release_support.py::LOCATIONS` / `DERIVED`, in one table, so that
+adding a location is a deliberate edit in one place rather than a habit spread
+across a script, a checker and a checklist.
+
+Normally invoked by `scripts/release.ps1 X.Y.Z`, which bumps, verifies, commits,
+tags, pushes and then watches the GitHub release build. Run it directly when you
+want the bump without the release.
+
+Refuses anything that isn't a plain X.Y.Z (no pre-release suffixes) — if this
+project ever needs those, extend `release_support.VERSION_RE` deliberately
+rather than loosening it by accident.
 """
-import re
+
+import importlib.util
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+# scripts/ is not a package, so the shared module is loaded by path. Done with
+# importlib rather than a sys.path insert so every import in this file stays at
+# the top of it (ruff E402).
+#
+# The sys.modules registration is load-bearing, not tidiness: @dataclass
+# resolves a field's type through `sys.modules[cls.__module__]`, so a module
+# executed without being registered raises AttributeError on its first
+# dataclass. Registering before exec_module is the documented order.
+_SPEC = importlib.util.spec_from_file_location(
+    "release_support", ROOT / "scripts" / "lib" / "release_support.py")
+support = importlib.util.module_from_spec(_SPEC)
+sys.modules[_SPEC.name] = support
+_SPEC.loader.exec_module(support)
 
 
-def main() -> int:
-    if len(sys.argv) != 2 or not VERSION_RE.match(sys.argv[1]):
-        print("usage: python scripts/bump_version.py X.Y.Z")
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    dry_run = "--dry-run" in args
+    positional = [a for a in args if not a.startswith("--")]
+
+    if "--check" in args:
+        problems = support.check(ROOT)
+        if problems:
+            print(f"FAIL: {len(problems)} version location(s) disagree:")
+            for problem in problems:
+                print(f"  - {problem}")
+            return 1
+        print(f"OK: every version literal reads {support.read_version(ROOT)}.")
+        return 0
+
+    if len(positional) != 1 or not support.VERSION_RE.match(positional[0]):
+        print("usage: python scripts/bump_version.py X.Y.Z [--dry-run]")
+        print("       python scripts/bump_version.py --check")
         return 1
-    new = sys.argv[1]
 
-    init = ROOT / "optionspilot" / "__init__.py"
-    i_text = init.read_text(encoding="utf-8")
-    i_new, n = re.subn(r'__version__\s*=\s*"[^"]+"', f'__version__ = "{new}"', i_text)
-    if n != 1:
-        print("FAIL: could not find __version__ in optionspilot/__init__.py")
+    report = support.sync(ROOT, positional[0], dry_run=dry_run)
+    verb = "would set" if dry_run else "set"
+    for path in report["changed"]:
+        print(f"OK: {verb} version to {report['version']} in {path}")
+    for path in report["unchanged"]:
+        print(f"OK: {path} already reads {report['version']}")
+    for problem in report["errors"]:
+        print(f"FAIL: {problem}")
+    if report["errors"]:
         return 1
-
-    init.write_text(i_new, encoding="utf-8")
-    print(f"OK: version set to {new} in optionspilot/__init__.py "
-          f"(pyproject.toml derives it dynamically)")
+    print("OK: every other consumer derives the version "
+          "(pyproject, UI, installer, zip name, tag, release notes) - "
+          "run `python scripts/lib/release_support.py locations` to see how.")
     return 0
 
 

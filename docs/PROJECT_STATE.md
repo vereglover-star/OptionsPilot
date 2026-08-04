@@ -9,8 +9,42 @@ Full detail: **`docs/CHANGELOG.md`**, `2026-08-03 — V0.9.1`.
 
 ## Exact stopping point
 
-**V0.9.2 is closed. Nothing is in progress.** All twelve commits landed and
-`verify.ps1` is green across all 13 gates at **2414 tests**. `ui/server.py`
+**V0.9.2 is closed, release automation is done, and nothing is in progress.**
+`verify.ps1` is green across all 13 gates at **2493 tests**.
+
+### Release automation (2026-08-04, standalone — not V0.9.3)
+
+Shipping a release is one command, `.\scripts\release.ps1 <version>`: preflight
+(eleven read-only checks against the real repository and the real remote) →
+version bump across every location holding a literal copy → `check_docs.py` and
+the full `verify.ps1` → `Release vX.Y.Z` commit and an annotated tag → push
+branch then tag → watch `.github/workflows/release.yml` and report the Release
+URL and its artifacts, or the failed job, step, reason and URLs. Anything
+failing before the push restores the repository to exactly where it started;
+after the push the rollback is disarmed on purpose. `-DryRun` runs every check
+and modifies nothing.
+
+`scripts/release.ps1` makes **no git call itself** — all of it goes through
+`scripts/lib/ReleaseGit.ps1` — and every decision with an edge case lives in
+`scripts/lib/release_support.py` where pytest can reach it. Both rules are
+enforced by `tests/test_release_automation.py` (79 tests). The git and rollback
+layer was additionally exercised against a throwaway repository with a real
+remote: 29 checks including a rejected push and a partially-failing rollback.
+
+It also found a real defect in tooling that predates it:
+`scripts/_common.ps1::Ensure-Environment` threw on a *successful* `pip install`
+whenever the host's stderr was redirected, because `$ErrorActionPreference =
+"Stop"` turns native stderr into a terminating error in PowerShell 5.1 and pip
+writes its upgrade notice there. That broke `test.ps1`, `verify.ps1`,
+`build.ps1` and `release.ps1` alike, and never reproduced interactively.
+
+**Open follow-up:** `ReleaseBranch` in `scripts/lib/ReleaseConfig.ps1` is
+`V3-ui`, because `v0.9.2` was tagged from the head of `V3-ui` and `main` is 57
+commits behind. Set it to `main` when that branch merges.
+
+### V0.9.2 (closed 2026-08-04)
+
+`ui/server.py`
 went from 1,892 lines to **1,629**: it is now a transport that decides status
 codes and response shapes, and every application decision lives in
 `optionspilot/services/`.

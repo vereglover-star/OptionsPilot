@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace); the V3 product-quality sprint and the V0.5–V0.7 milestones
-are on branch `feature/v0.7`. **2414 tests, 100% passing.** See
+are on branch `feature/v0.7`. **2493 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -309,8 +309,11 @@ optionspilot/
 scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  (see docs/CONTRIBUTING.md), build_exe.ps1, soak.py,
                  make_icon.py, fetch_symbols.py
+  release.ps1    one-command release: preflight, bump, verify, commit, tag,
+                 push, then watch the GitHub build (see docs/RELEASE.md)
+  lib/           helper library behind release.ps1
 docs/            see "Documentation" below
-tests/           pytest suite (2414 tests)
+tests/           pytest suite (2493 tests)
 ```
 
 ## Documentation

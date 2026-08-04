@@ -38,14 +38,16 @@ python -m venv .venv
 | `scripts/verify.ps1` | Run every automated check in one command — tests, HTML id references, doc consistency, `pip check`, and a headless-browser smoke check |
 | `scripts/docs.ps1` | Documentation consistency only (also runs as part of `verify.ps1`) |
 | `scripts/build.ps1` | Build the Windows exe — refuses to run on a red test suite unless `-SkipTests` is passed |
-| `scripts/release.ps1` | Full release-readiness pipeline + report (see `docs/RELEASE_CHECKLIST.md`) |
+| `scripts/release.ps1 X.Y.Z` | Ship a release in one command: preflight, version bump, verify, commit, annotated tag, push, then watch the GitHub build. `-DryRun` runs every check and modifies nothing (see `docs/RELEASE.md`) |
 | `scripts/clean.ps1` | Remove `__pycache__`/`.pytest_cache`/`*.egg-info` clutter (`-Dist` also removes PyInstaller output) |
 
 Each has one clear responsibility and composes with the others rather than
 duplicating logic (`verify.ps1` calls `test.ps1`; `build.ps1` calls
 `test.ps1` then the existing `scripts/build_exe.ps1`; `release.ps1` calls
-`verify.ps1` then `build.ps1`). All of them are safe to re-run — the
-environment bootstrap they share (`scripts/_common.ps1`) is idempotent.
+`check_docs.py` then `verify.ps1`, and leaves the exe build to CI). All of them
+are safe to re-run — the environment bootstrap they share
+(`scripts/_common.ps1`) is idempotent. `release.ps1`'s own helpers live in
+`scripts/lib/`, for the same reason: one responsibility per file.
 
 ## Coding conventions
 
@@ -240,9 +242,12 @@ sounding implemented, or vice versa.
   avoid"). This is a smoke check (does every tab load cleanly?), not deep
   per-flow regression coverage — see `TODO.md` for the remaining
   opportunity to extend it.
-- **`scripts/bump_version.py`** — keeps `pyproject.toml` and
-  `optionspilot/__init__.py`'s version strings from drifting apart, the
-  same class of bug `check_docs.py` guards against for test counts.
+- **`scripts/bump_version.py`** — writes the version to every location that
+  holds a literal copy, from the one table in
+  `scripts/lib/release_support.py::LOCATIONS`. Everything else derives it from
+  `optionspilot.__version__`. Normally invoked by `release.ps1`; `--check`
+  verifies the copies agree, the same class of bug `check_docs.py` guards
+  against for test counts.
 - **The `dev.ps1`/`test.ps1`/`verify.ps1`/`docs.ps1`/`build.ps1`/
   `release.ps1`/`clean.ps1` orchestration layer** itself, plus two new
   optional `pyproject.toml` extras (`build` = `pyinstaller`, `browser` =

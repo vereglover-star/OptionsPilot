@@ -1,9 +1,20 @@
 # RELEASE.md — CI/CD & release pipeline (Professional Release Pipeline 1.0)
 
-How OptionsPilot is built, tested, packaged, and published. A version tag now
+How OptionsPilot is built, tested, packaged, and published. A version tag
 produces a full GitHub Release: the professional **Windows installer**
-(`OptionsPilot-Setup-vX.Y.Z.exe`) **and** the portable zip
-(`OptionsPilot-vX.Y.Z.zip`). Installer specifics live in `docs/INSTALLER.md`.
+(`OptionsPilot-Setup-vX.Y.Z.exe`), the portable zip (`OptionsPilot-vX.Y.Z.zip`)
+and a `SHA256SUMS` manifest. Installer specifics live in `docs/INSTALLER.md`.
+
+## Releasing is one command
+
+```powershell
+.\scripts\release.ps1 0.9.3
+```
+
+That is the whole process. No manual `git` and no manual GitHub steps are
+required afterwards unless the script reports an unrecoverable error.
+
+Run it with `-DryRun` first — see "The dry run" below.
 
 ## Overview
 
@@ -16,12 +27,25 @@ produces a full GitHub Release: the professional **Windows installer**
                                  · optionspilot selftest
                                  · check_html_ids + check_docs
 
+ .\scripts\release.ps1 X.Y.Z ─▶  (local)                          the tag
+   1 preflight                     · clean tree, no merge/rebase in progress,
+                                     right branch, not behind, version moves
+                                     forward, tag free locally AND on origin,
+                                     CHANGELOG section exists
+   2 bump                          · scripts/bump_version.py X.Y.Z
+   3 verify                        · scripts/check_docs.py, then verify.ps1
+   4 commit + tag                  · "Release vX.Y.Z", annotated tag
+   5 push                          · branch, then tag
+   6 monitor                ──────▶ watches release.yml below
+
  git tag vX.Y.Z    ──────────▶  release.yml
-   git push --tags               ├─ test  (reuses ci.yml — no drift)
+   (pushed by the script)        ├─ test  (reuses ci.yml — no drift)
                                  └─ build (needs: test)            GitHub Release
                                     · verify tag == __version__      vX.Y.Z
                                     · scripts/build.ps1  (PyInstaller + selftest gate)
                                     · scripts/package_release.ps1  ─▶ OptionsPilot-vX.Y.Z.zip
+                                    · scripts/build_installer.ps1  ─▶ OptionsPilot-Setup-vX.Y.Z.exe
+                                    · SHA256SUMS over both
                                     · scripts/release_notes.py     ─▶ notes from CHANGELOG
                                     · gh release create + upload
 ```
@@ -41,10 +65,31 @@ The version lives in **one place**: `optionspilot/__init__.py` (`__version__`).
 - `pyproject.toml` derives it dynamically:
   `[tool.setuptools.dynamic] version = {attr = "optionspilot.__version__"}`.
 - The app UI reads `optionspilot.__version__` (surfaced at `/api/status`).
-- The GitHub Release name/tag and the artifact filename derive from it.
-- `scripts/bump_version.py X.Y.Z` edits that one line.
+- The installer's `AppVersion` and setup filename come from
+  `scripts/build_installer.ps1 → ISCC /DMyAppVersion=`.
+- The portable zip's filename comes from `scripts/package_release.ps1`.
+- The GitHub Release name/tag and the release notes derive from it.
 - `scripts/check_docs.py` fails if `pyproject.toml` ever hardcodes a second copy,
   and `release.yml` fails fast if the pushed tag ≠ `__version__`.
+
+**One place in the *code*, and exactly one copy in the *documentation*.**
+`docs/PROJECT_STATUS.md` states the current version in prose, and that copy is
+enforced by `check_docs.py::check_documented_version` — which is how it was
+caught announcing `0.5.0` while the code was `0.8.2`, through four releases.
+
+The authoritative list of which files hold a literal copy and which merely
+derive one is a single table, `scripts/lib/release_support.py::LOCATIONS` and
+`DERIVED`. Print it any time:
+
+```powershell
+python scripts/lib/release_support.py locations
+```
+
+`scripts/bump_version.py X.Y.Z` writes every literal from that table (and
+`--check` verifies they all agree). Adding a new location means adding a row
+there, in one place — and a location whose pattern stops matching is a hard
+**error**, never a silent skip, because the tolerant behaviour would ship a
+release whose code says one version and whose docs say another.
 
 ## Artifacts
 
@@ -79,33 +124,119 @@ channel, so mark experimental tags as prereleases on GitHub.
 
 ## How to publish a release
 
-1. **Bump the version** and update the changelog:
-   ```
-   python scripts/bump_version.py 0.5.0
-   # edit docs/CHANGELOG.md: retitle the top [Uncommitted] section to a dated 0.5.0 entry
-   ```
-2. **Verify locally** (optional but recommended — the same gates CI runs, plus
-   the browser check CI skips):
-   ```
-   .\scripts\verify.ps1
-   .\scripts\build.ps1            # optional: prove the exe builds + packaged selftest passes
-   .\scripts\package_release.ps1  # optional: produce the zip locally
-   ```
-3. **Commit, tag, push:**
-   ```
-   git add -A
-   git commit -m "Release v0.5.0: <summary>"
-   git tag v0.5.0
-   git push origin main --tags
-   ```
-4. **GitHub Actions does the rest**: `release.yml` runs the tests, builds the
-   exe, packages the zip, compiles the installer, and creates the **GitHub
-   Release `v0.5.0`** with **both** `OptionsPilot-Setup-v0.5.0.exe` and
-   `OptionsPilot-v0.5.0.zip` attached and notes drawn from `docs/CHANGELOG.md`.
-   Watch it under the repo's **Actions** tab.
+### Before you start
 
-`scripts/release.ps1 -Version 0.5.0` still works as the local dry run (verify +
-build + a printed checklist); it never tags or publishes. The tag is the trigger.
+Two things are content, not mechanics, and the script will not invent either:
+
+1. **`docs/CHANGELOG.md` has a section naming the new version.** The release's
+   published notes are the first `## ` heading that mentions it
+   (`scripts/release_notes.py`). Preflight refuses to release without one —
+   the alternative is a GitHub Release whose body is a one-line stub.
+2. **The rest of the doc checklist in `CONTRIBUTING.md` is done** —
+   `PROJECT_STATE.md`, `PROJECT_STATUS.md`, `NEXT_SESSION.md`, `TODO.md`,
+   `ROADMAP.md` should already reflect reality.
+
+Commit both. The working tree must be clean when the release starts.
+
+### The dry run
+
+```powershell
+.\scripts\release.ps1 0.9.3 -DryRun
+```
+
+Runs **every** check for real — against the real repository, the real remote
+and the real tag namespace — and prints exactly what it would do, including the
+commit message it would use. It modifies nothing, anywhere. Add `-SkipVerify`
+(accepted **only** with `-DryRun`) to turn a ~6-minute rehearsal into a
+~10-second one when you only want the preflight verdict.
+
+### The release
+
+```powershell
+.\scripts\release.ps1 0.9.3
+```
+
+Six phases. Everything before phase 5 is reversible and is reversed
+automatically on any failure:
+
+| # | Phase | What it does | On failure |
+|---|---|---|---|
+| 1 | **Preflight** | clean tree (`status`, `diff` **and** the staged index); no merge/rebase/cherry-pick/revert/bisect in progress; on the configured release branch; not behind upstream; version strictly newer; existing version literals agree; tag free locally **and** on `origin`; CHANGELOG section exists | aborts; nothing was modified |
+| 2 | **Bump** | writes the version to every literal location | rolled back |
+| 3 | **Verify** | `scripts/check_docs.py`, then the full `scripts/verify.ps1` | rolled back |
+| 4 | **Commit + tag** | `Release vX.Y.Z`, staging only the bumped paths, plus an **annotated** `vX.Y.Z` tag | rolled back |
+| 5 | **Push** | branch, then tag — the tag triggers the build | see below |
+| 6 | **Monitor** | watches `release.yml` to completion | reports the failing step |
+
+On success phase 6 prints the **Release URL**, the **workflow URL** and every
+**artifact** with its size. On failure it prints the failed job, the failed
+step and number, the exact reason, the workflow URL and the job URL — plus the
+tail of the failing job's log if a token is available (see "Monitoring" below).
+
+### Useful flags
+
+| Flag | Effect |
+|---|---|
+| `-DryRun` | validate everything, modify nothing |
+| `-Branch <name>` | release from a different branch, once |
+| `-SkipBrowser` | passed through to `verify.ps1` (skips the six browser suites) |
+| `-SkipVerify` | **dry run only** — skip the verification phase |
+| `-NoMonitor` | push and stop; don't watch the build |
+| `-AllowMissingChangelog` | release with a stub release-notes body |
+| `-TimeoutMinutes <n>` | how long to watch before giving up (default 60) |
+
+### Rollback
+
+Anything that fails **before the push** restores the repository to exactly
+where it started: the version bump is reverted, the release commit is reset
+away, the tag is deleted. Each mutating step registers its own undo at the
+moment it succeeds and the stack unwinds in reverse, so a failure in phase 3
+does not try to delete a tag that phase 4 never created. If an undo itself
+fails it is reported and the unwind continues — a half-restored tree with no
+explanation is the worst possible outcome.
+
+**After the branch push the rollback is disarmed**, deliberately. Undoing a
+published commit or tag means rewriting published history, which this project's
+standing rules forbid and which a script must never choose on someone's behalf.
+If the *tag* push fails after the branch push succeeded, the script says so and
+prints the one command to retry.
+
+### Configuration
+
+`scripts/lib/ReleaseConfig.ps1` holds the fixed choices in one place: the
+release branch, the remote, the tag prefix, the workflow filename and the
+polling/timeout values. **`ReleaseBranch` is the one most likely to need
+changing** — it is `V3-ui` because that is where releases are actually cut
+today (`v0.9.2` points at the head of `V3-ui`, which is well ahead of `main`).
+Set it to `main` when that branch merges.
+
+### Monitoring, and the GitHub token
+
+Monitoring uses `api.github.com` directly and **does not require the GitHub
+CLI** — `gh` is not installed on the machine that cuts these releases, and a
+monitor that degraded to "go and look at the Actions tab" precisely there would
+not be a monitor.
+
+Reading a public repository's runs needs no credentials. Setting `$env:GH_TOKEN`
+(or `GITHUB_TOKEN`, or being logged into `gh`) gets you two things:
+
+- **Faster polling.** The anonymous API allows 60 requests/hour; a 60-minute
+  watch at the configured 15s interval would be 240 of them, so an anonymous
+  run automatically slows to 75s to stay inside the budget.
+- **The failing job's log tail**, printed under the failure report.
+
+### Re-running a failed release
+
+If the build fails, the tag is already public. Fix the cause, commit it, then
+remove the tag and release again:
+
+```powershell
+git push --delete origin v0.9.3
+git tag -d v0.9.3
+.\scripts\release.ps1 0.9.3
+```
+
+The script prints these three lines for you when a build fails.
 
 ## How to trigger each pipeline
 
@@ -113,10 +244,22 @@ build + a printed checklist); it never tags or publishes. The tag is the trigger
 |---|---|---|
 | **CI** | push to any branch, or open/update a PR | `git push` / open a PR |
 | **CI (manual reuse)** | called by release.yml | automatic on a tag |
-| **Release / tag build** | push a `v*` tag | `git tag v0.5.0 && git push origin --tags` |
+| **Release** | a `v*` tag reaching `origin` | `.\scripts\release.ps1 X.Y.Z` |
 
-To re-run a failed release without changing code, delete and re-push the tag:
-`git push --delete origin v0.5.0 && git tag -d v0.5.0 && git tag v0.5.0 && git push origin --tags`.
+## What is still manual, and why
+
+Only two things, and neither is mechanical:
+
+- **Writing the CHANGELOG entry.** It is a judgement about what to say.
+  Preflight enforces that one *exists*; it cannot write it.
+- **Smoke-testing the built exe by hand.** The browser suites drive the
+  FastAPI/frontend stack in serve mode; they do not launch the packaged
+  pywebview window or exercise the PyInstaller-specific paths (single-instance
+  guard, windowed-mode logging, tray, icon). Download the published installer
+  and run it once.
+
+Everything else that used to be manual — the bump, the doc copy, the commit,
+the tag, both pushes, and watching the build — is now the one command.
 
 ## Installer (Professional Windows Installer 1.0)
 
@@ -138,6 +281,60 @@ Authenticode code signing** — the setup and app exe are unsigned, so SmartScre
 warns on first run. A `SignTool` hook is stubbed in the `.iss`; wire it once a
 certificate is available. Optional wizard bitmaps can be added for extra polish
 (see `docs/INSTALLER.md` "Missing / optional assets").
+
+## The release automation itself
+
+```
+scripts/release.ps1              the orchestrator: phase order, and nothing else
+scripts/lib/
+  ReleaseConfig.ps1              the fixed choices, in one place
+  ReleaseLog.ps1                 phases, verdicts, the WOULD voice of a dry run
+  ReleaseRollback.ps1            the undo stack
+  ReleaseGit.ps1                 every git call the pipeline makes, and its undo
+  ReleaseVersion.ps1             version + changelog, bridging to Python
+  ReleaseGitHub.ps1              the API client and the workflow watcher
+  release_support.py             the decisions, in a language pytest can reach
+scripts/bump_version.py          the standalone bump, a thin CLI over the above
+```
+
+Two rules hold this together, and `tests/test_release_automation.py` asserts
+both:
+
+**`release.ps1` makes no git call itself.** All of it goes through
+`ReleaseGit.ps1`. That is what makes "does a release ever push before it
+verifies" answerable by reading one short file rather than grepping a long one.
+
+**PowerShell orchestrates; Python decides.** Anything with an edge case —
+which files hold a version, whether `0.9.10` is newer than `0.9.9`, which
+owner/repo a remote URL points at, which job and step a failed run failed at —
+lives in `release_support.py`, because a release path made entirely of shell is
+a release path with no tests. The structural properties that *can't* be
+executed from pytest are pinned by greps instead: verification before the tag,
+the tag before the push, an undo registered for every mutation, no `--force` or
+`--no-verify` anywhere in the pipeline, and `-SkipVerify` unreachable without
+`-DryRun`.
+
+Three PowerShell 5.1 hazards are handled once, and documented at the point they
+are handled, because each one produced a failure that looked like something
+else:
+
+- **Native stderr under `$ErrorActionPreference = "Stop"`** becomes a
+  *terminating* error when the host's stderr is redirected — which a CI log, a
+  `*> file` capture and any non-interactive runner all do. `git push` writes all
+  of its progress to stderr, and so does pip's "a new release of pip is
+  available" notice. `Invoke-GitCapture` / `Invoke-GitStream` (and
+  `Ensure-Environment` in `_common.ps1`) drop to `Continue` and decide from
+  `$LASTEXITCODE`, which is the only honest signal a native process gives.
+- **Multi-line messages never go through `git -m`.** PowerShell 5.1 re-quotes
+  native arguments on the way to `CreateProcess` and mangles embedded newlines
+  and quotes doing it. Commit and tag messages are written to a temp file and
+  passed with `-F`, UTF-8 with no BOM (a BOM would become the first three
+  characters of the subject line).
+- **Rollback actions are plain scriptblocks over `$script:` state, not
+  closures.** `.GetNewClosure()` binds a block into a fresh dynamic module, and
+  a dynamic module cannot see functions dot-sourced into the calling script —
+  so the undo would fail with "not recognized" at the exact moment it was
+  needed.
 
 ## Maintaining the workflows
 

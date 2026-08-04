@@ -5,16 +5,37 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-04, on closing **V0.9.2 — complete the service extraction** (C1…C12).
+**Last updated:** 2026-08-04, on completing **release automation** (a standalone
+change, after closing **V0.9.2 — complete the service extraction**, C1…C12).
 
 ## What to do next
 
-**V0.9.2 is closed.** All twelve commits landed; `verify.ps1` green across 13
-gates at 2414 tests. The next milestone is **V0.9.3 — a real API v1**. Scope
+**V0.9.2 is closed and release automation is done.** `verify.ps1` green across
+13 gates at 2493 tests. The next milestone is **V0.9.3 — a real API v1**. Scope
 detail lives in the V0.9 Engineering Specification, Revision 2, which is *not*
 in this repository — so **build the commit map in `ROADMAP.md` before starting**,
 exactly as V0.9.1 and V0.9.2 did. That table is the only reason a lost
 specification stopped stalling sessions.
+
+## Releasing is now one command
+
+```powershell
+.\scripts\release.ps1 0.9.3 -DryRun   # rehearse: every check, nothing modified
+.\scripts\release.ps1 0.9.3           # release
+```
+
+Preflight → bump → `check_docs.py` + `verify.ps1` → commit + annotated tag →
+push → watch `release.yml` and report the Release URL and artifacts (or the
+exact failing step). Anything failing before the push rolls the repository back
+to where it started. **Do not hand-type `git tag` / `git push` for a release
+any more** — and note the two things the script deliberately will not do for
+you: write the `docs/CHANGELOG.md` entry (preflight *refuses* to release
+without one) and smoke-test the built exe. Guide: `docs/RELEASE.md`.
+
+One thing to know before the first real run: the release branch is configured
+in `scripts/lib/ReleaseConfig.ps1` and is set to **`V3-ui`**, because that is
+where releases are actually cut today (`v0.9.2` points at the head of `V3-ui`,
+which is well ahead of `main`). Change it to `main` when that branch merges.
 
 ## What V0.9.2 delivered
 

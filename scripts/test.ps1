@@ -19,6 +19,11 @@ param(
 )
 . "$PSScriptRoot\_common.ps1"
 
+# This script RUNS other programs and reports their exit codes, so a native
+# process writing to stderr must not terminate it. See the "runner scripts and
+# stderr" note at the top of _common.ps1 for why this line exists.
+$ErrorActionPreference = "Continue"
+
 $python = Ensure-Environment -Extras @("dev", "ui")
 
 Write-Step "Running pytest $($PytestArgs -join ' ')"

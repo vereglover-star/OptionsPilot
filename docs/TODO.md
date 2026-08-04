@@ -42,6 +42,24 @@ is. This file is the flat, actionable checklist version.
       `ROADMAP.md` ▸ V0.9.2 ▸ Commit map; reasoning:
       `docs/reports/V0.9.2.md`.
 
+- [x] **Release automation — one command.** Done 2026-08-04.
+      `.\scripts\release.ps1 <version>` runs preflight (clean tree, no
+      half-finished merge/rebase, right branch, not behind, version moves
+      forward, tag free locally *and* on the remote, CHANGELOG section present)
+      → bump → `check_docs.py` + `verify.ps1` → commit + annotated tag → push →
+      watch `release.yml` and report the Release URL and artifacts, or the exact
+      failing job/step. Automatic rollback for anything failing before the push;
+      `-DryRun` rehearses it all. Helper library in `scripts/lib/`; 79 tests in
+      `tests/test_release_automation.py`. Also fixed a real defect in
+      `scripts/_common.ps1` that broke every wrapper script under redirected
+      stderr. 2414 → **2493** tests. Guide: `RELEASE.md`.
+
+- [ ] **Set `ReleaseBranch` back to `main`** in
+      `scripts/lib/ReleaseConfig.ps1` once `V3-ui` merges. It is `V3-ui` today
+      because that is where `v0.9.2` was actually tagged from, and defaulting to
+      the repository's nominal default branch would have made the very first
+      release abort on a branch check that was wrong.
+
 - [ ] **`scripts/chart_check.py` fetches from LIVE providers, and it is the
       only browser gate that does.** Fresh temp data dir per run, but real
       network — so a failure can have nothing to do with the diff, and a bisect

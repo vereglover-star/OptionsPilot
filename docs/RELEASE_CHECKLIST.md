@@ -1,102 +1,100 @@
 # RELEASE_CHECKLIST.md — the exact process for shipping a release
 
-> **As of V0.4.5, releases are automated by GitHub Actions.** The authoritative
-> guide is **`docs/RELEASE.md`** (CI/CD, single-source versioning, artifacts,
-> installer prep). The short version: `python scripts/bump_version.py X.Y.Z`,
-> finalize the CHANGELOG, commit, then `git tag vX.Y.Z && git push origin main
-> --tags` — `.github/workflows/release.yml` builds, packages
-> `OptionsPilot-vX.Y.Z.zip`, and creates the GitHub Release. This checklist
-> remains the **local dry-run** (`scripts/release.ps1`) and the human-approval
-> reference below.
+> **The checklist is now a script.** Everything that used to be a numbered
+> manual step — bump, verify, commit, tag, push, watch the build — is
+> `scripts/release.ps1`. The authoritative reference is **`docs/RELEASE.md`**
+> (phases, flags, rollback, configuration, monitoring). This file is the short
+> operational version and the record of what deliberately stayed human.
 
-This document is built around `scripts/release.ps1`, which runs the same
-readiness gates locally and prints a PASS/FAIL report except the
-explicitly-marked manual steps.
-
-## The one-command version
+## The whole process
 
 ```powershell
-.\scripts\release.ps1 -Version 0.2.0
+.\scripts\release.ps1 0.9.3 -DryRun   # rehearse: every check, no changes
+.\scripts\release.ps1 0.9.3           # release
 ```
 
-This runs steps 1–6 below automatically and prints a PASS/FAIL report
-plus the exact remaining commands to run yourself. If you don't want a new
-version number yet, omit `-Version`. If you don't want the exe rebuilt
-yet (e.g. you're just checking release-readiness), add `-SkipBuild`.
+There is no step 3. No manual `git` and no manual GitHub action is required
+afterwards unless the script reports an unrecoverable error.
 
-## What `release.ps1` automates
+## What to do before running it
 
-1. **Git state check** — confirms the working tree is clean (`git status`
-   **and** `git diff --stat`, both — see `AI_CONTEXT.md` "Common mistakes
-   to avoid" for why both matter). Fails loudly if there's anything
-   uncommitted.
-2. **Version bump** (only if `-Version` is passed) — `scripts/bump_version.py`
-   updates `pyproject.toml` and `optionspilot/__init__.py` together, so
-   they can never drift out of sync.
-3. **Full verification** (`scripts/verify.ps1`) — the complete automated
-   gate:
-   - Full pytest suite (100% must pass).
-   - Static HTML `$("id")` reference check on `static/index.html`.
-   - Documentation consistency check (cross-references resolve, test
-     counts agree, version is in sync).
-   - `pip check` (no broken/conflicting dependencies).
-   - Headless-browser smoke check across every tab (zero console errors) —
-     if the `[browser]` extra is installed.
-4. **Executable build** (unless `-SkipBuild`) — `scripts/build.ps1`, which
-   refuses to run on a red test suite and wraps the existing
-   `scripts/build_exe.ps1` (data backup/restore, running-instance guard,
-   unchanged).
-5. **Release-readiness report** — every step above as PASS/FAIL, with a
-   final verdict.
-6. **Printed next steps** — the exact manual commands for the steps below,
-   pre-filled with the version number if one was given.
+- [ ] **Write the `docs/CHANGELOG.md` entry** for the new version — a `## `
+      heading that names it. This is the release notes GitHub will publish
+      (`scripts/release_notes.py` extracts it). Preflight refuses to release
+      without one; it cannot write it, because what to say is a judgement.
+- [ ] **Finish the documentation checklist** in `CONTRIBUTING.md`
+      "Documentation requirements" — `PROJECT_STATE.md`, `PROJECT_STATUS.md`,
+      `NEXT_SESSION.md`, `TODO.md`, `ROADMAP.md` should already reflect reality.
+      (The release itself rewrites `PROJECT_STATUS.md`'s version line; the rest
+      is yours.)
+- [ ] **Commit both.** The working tree must be clean when the release starts.
+- [ ] Optionally `$env:GH_TOKEN = "..."` — not required, but it speeds up the
+      build monitoring and makes a failure report include the failing job's log.
 
-## What stays manual (by design — see "Why these stay manual" below)
+## What the script does, and what it refuses
 
-- [ ] **Review `docs/CHANGELOG.md`** — confirm there's a dated entry
-      (or `[Uncommitted]` section, renamed to a real date) covering
-      everything in this release. `release.ps1` does not write this for
-      you; it's a judgment call about what to say, not a mechanical check.
-- [ ] **Review the other doc-update checklist** in `CONTRIBUTING.md`
-      "Documentation requirements" if you haven't already this session —
-      `PROJECT_STATE.md`, `PROJECT_STATUS.md`, `NEXT_SESSION.md`,
-      `TODO.md`, `ROADMAP.md`/`ROADMAP-V2.md` should all reflect reality
-      before you tag.
-- [ ] **`git add -A; git commit -m "..."`** — following the convention in
-      `CONTRIBUTING.md` "Commit message conventions."
-- [ ] **`git tag v<version>`** (only if you bumped the version).
-- [ ] **`git push origin main --tags`**.
-- [ ] **`gh release create v<version> dist\OptionsPilot -F docs\CHANGELOG.md`**
-      (or your platform's equivalent) — attaches the built exe and uses the
-      changelog as release notes. Requires the GitHub CLI, and a GitHub
-      remote is already configured (`origin` → the project's repo).
-- [ ] **Smoke-test the actual built exe** once, by hand, in a real window —
-      `dist\OptionsPilot\OptionsPilot.exe` — before calling a release done.
-      The automated browser check in step 3 exercises the FastAPI/frontend
-      stack in serve mode; it does not launch the packaged pywebview
-      window or exercise the PyInstaller-specific code paths
-      (single-instance guard, windowed-mode logging, icon).
+Full detail in `docs/RELEASE.md`. In brief, it will not proceed unless:
 
-## Why these stay manual
+- the working tree is clean (`git status`, `git diff` **and** the staged index
+  are all consulted — `git status` has printed "clean" in this repository while
+  `git diff --stat` showed real changes; see `AI_CONTEXT.md` "Common mistakes")
+- no merge, rebase, cherry-pick, revert or bisect is half-finished
+- you are on the configured release branch (`ReleaseConfig.ps1`, or `-Branch`)
+- the branch is not behind its upstream
+- the new version is strictly newer than the current one
+- the existing version literals all still agree with each other
+- the tag does not exist **locally or on the remote**
+- `docs/CHANGELOG.md` has a section for the version
 
-Per this project's standing safety rules: pushing code, creating a public
-release, and tagging are all actions with an external, hard-to-reverse
-footprint (a force-push or a bad tag is a pain to unwind once someone else
-has pulled it). `release.ps1` deliberately stops short of them — it earns
-trust by proving everything *automatable* is green, then hands you the
-exact commands rather than running them itself. This mirrors the same
-judgment call already made in `scripts/build_exe.ps1` (the *decision* to
-rebuild the exe is a human one, made deliberately last, not automated) and
-in `CLAUDE.md`'s git safety protocol more broadly.
+and it will not commit, tag or push unless `scripts/check_docs.py` and the full
+`scripts/verify.ps1` are both green against the bumped tree.
 
-## First real release checklist (when it happens)
+Anything that fails before the push is **rolled back automatically** — bump
+reverted, commit reset, tag deleted. After the push the rollback is disarmed on
+purpose: undoing published history is not a decision a script gets to make.
 
-The above is process, not history — there's no prior release to point to
-for "how did we actually do it last time." When the first real release
-ships, add a dated entry here (or a footnote) recording anything this
-checklist got wrong or missed, the same way `CHANGELOG.md` tracks feature
-history. Don't let this document drift the way `README.md` and `CLAUDE.md`
-were found to have drifted in earlier sessions (see `AI_CONTEXT.md`) —
-`scripts/docs.ps1` checks cross-references and test counts, but nothing
-mechanically checks that this checklist still matches how a release
-actually gets made; that's a judgment call for whoever runs it.
+## What stays manual — and why
+
+Only two things, and neither is mechanical:
+
+- [ ] **The CHANGELOG entry** (above). A judgement about what to say, not a
+      check that can be computed.
+- [ ] **Smoke-test the published build once, by hand.** Download the installer
+      from the Release the script just pointed you at, install it, and launch
+      it. The six browser suites drive the FastAPI/frontend stack in serve
+      mode; nothing in CI launches the packaged pywebview window or exercises
+      the PyInstaller-specific paths — the single-instance guard, windowed-mode
+      logging (where `sys.stdout is sys.stderr is None`), the tray icon, the
+      icon itself. Every one of those has produced a real shipped bug.
+
+## Why the rest stopped being manual
+
+The previous version of this document argued that pushing, tagging and
+publishing "have an external, hard-to-reverse footprint" and should therefore
+stay human. The footprint argument was right; the conclusion was not. Six
+hand-typed commands do not make a release safer than one — they make it *less*
+reproducible, and they put the irreversible steps (`git tag`, `git push`) after
+the point where a tired human has already decided the release is fine.
+
+What actually makes the footprint safe is that nothing irreversible happens
+until every reversible thing has been proven: eleven preflight checks against
+the real repository and the real remote, a full verification suite against the
+bumped tree, and an automatic rollback for every step before the push. That is
+a stronger guarantee than the honour system it replaced, and it is the same
+judgement `build.ps1` already made when it refused to invoke PyInstaller on a
+red suite.
+
+The parts that genuinely need a human — deciding what the release *says*, and
+looking at the thing that shipped — are still above, and are now the only
+things on this list.
+
+## Testing the release path itself
+
+`tests/test_release_automation.py` covers the decidable half (version
+locations, semver ordering, remote-URL parsing, failure-report extraction) and
+pins the structural half (phase order, rollback registration, no `--force`, no
+`--no-verify`, `-SkipVerify` unreachable outside a dry run).
+
+To exercise `release.yml` end-to-end without publishing anything real, push a
+throwaway pre-release tag on a branch (e.g. `v0.0.0-test`), then delete the tag
+and the Release it creates.
