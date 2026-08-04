@@ -561,6 +561,11 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   second catalogue: `tab` and indicator names are frontend vocabulary and are
   checked for type and length only; `timeframe` IS validated against
   `core.models.Timeframe` because it is handed back to `/api/candles`.
+- `idempotency.py` — `IdempotencyStore` plus `fingerprint()`. One lock per
+  `(operation, key)`, reference-counted and dropped at zero (V0.9.2-C9, N-1);
+  a stored request fingerprint so reusing a key for a *different* body raises
+  `Conflict` -> 409 instead of replaying someone else's result (N-2). A NULL
+  fingerprint is a pre-C9 row and still replays.
 - `sync.py` — `INVENTORY` (20 durable objects) + `CLIENT_TRAPPED` (2), each with
   a `SyncDomain` and a `SyncPolicy`. **Syncs nothing**; it is the classification
   that must exist before anything could. `data/credentials.json` is the only

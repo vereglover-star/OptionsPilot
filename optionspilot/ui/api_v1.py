@@ -23,6 +23,7 @@ from optionspilot.services import intelligence as intel_view
 from optionspilot.services import LocalSyncProvider
 from optionspilot.services import sync as sync_boundaries
 from optionspilot.services.errors import ServiceError
+from optionspilot.services.idempotency import fingerprint
 from optionspilot.ui.errors import (
     UNCLASSIFIED_MESSAGE, UNCLASSIFIED_STATUS, status_for,
 )
@@ -91,12 +92,19 @@ def _safe(request: Request, fn, *args, **kwargs):
         return _unclassified_fail(request, exc)
 
 
-def _mutation(request: Request, server, operation: str, fn):
-    """Execute a retry-sensitive application mutation once per client key."""
+def _mutation(request: Request, server, operation: str, fn, payload=None):
+    """Execute a retry-sensitive application mutation once per client key.
+
+    `payload` is fingerprinted (V0.9.2-C9, finding N-2) so that reusing one key
+    for a *different* request is refused with a 409 rather than answered with
+    the first request's result. A route that passes nothing opts out, and is no
+    worse off than it was before.
+    """
     try:
         key = request.headers.get("Idempotency-Key") or request.headers.get(
             "X-Idempotency-Key")
-        data, replayed = server.idempotency.execute(operation, key, fn)
+        data, replayed = server.idempotency.execute(
+            operation, key, fn, fingerprint=fingerprint(payload))
         return _ok(request, data, idempotency_replayed=replayed)
     except ServiceError as exc:
         return _service_fail(request, exc)
@@ -125,7 +133,7 @@ def register_v1_routes(app: FastAPI, server) -> None:
     @app.post("/api/v1/workspace", tags=["workspace"])
     def workspace_update(request: Request, payload: dict | None = None):
         return _mutation(request, server, "workspace.update",
-                         lambda: server.update_workspace(payload))
+                         lambda: server.update_workspace(payload), payload)
 
     @app.delete("/api/v1/workspace", tags=["workspace"])
     def workspace_reset(request: Request):
@@ -150,7 +158,7 @@ def register_v1_routes(app: FastAPI, server) -> None:
     @app.patch("/api/v1/runtime", tags=["runtime"])
     def runtime_update(request: Request, payload: dict | None = None):
         return _mutation(request, server, "runtime.update",
-                         lambda: server.update_runtime(payload))
+                         lambda: server.update_runtime(payload), payload)
 
     @app.post("/api/v1/runtime/pause", tags=["runtime"])
     def runtime_pause(request: Request):
@@ -217,7 +225,7 @@ def register_v1_routes(app: FastAPI, server) -> None:
     @app.post("/api/v1/guide/state", tags=["guide"])
     def guide_update(request: Request, payload: dict | None = None):
         return _mutation(request, server, "guide.update",
-                         lambda: server.update_guide(payload))
+                         lambda: server.update_guide(payload), payload)
 
     @app.get("/api/v1/marketdata", tags=["marketdata"])
     def marketdata(request: Request):

@@ -4,6 +4,40 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C9: idempotency locks per key, and checks the request
+
+*2390 → 2409 tests (+19). Findings N-1 and N-2. Both only appear under concurrency or a misbehaving
+client, which is why neither had a test.*
+
+**N-1 — one lock for every key.** `IdempotencyStore.execute` held a single
+store-wide lock across the callback. Spanning the callback is correct ("execute
+once per key" is the whole contract); not being per key was not, so unrelated
+mutations serialised — a workspace update waited behind an update check talking
+to GitHub. Locks are now per `(operation, key)`, reference-counted, and dropped
+at zero so the table is not a memory leak keyed by client input. The count is
+incremented *before* the lock is acquired, or a concurrent caller for the same
+key could find the entry missing and create a second lock for it, which would
+let both run.
+
+**N-2 — no request fingerprint.** An idempotency key replayed with a
+*different* body returned the first request's result and reported success. That
+is the one case the idempotency-key specification says must fail: the client has
+reused a key for a different operation, and silently answering with someone
+else's result is worse than refusing, because nothing anywhere records it. A
+mismatch now raises `Conflict`, which C8's table maps to **409**.
+
+`tests/test_api_v1.py` had asserted the defect — it sent `monitoring_only` then
+`normal` under one key and required the second to come back 200 carrying the
+first result. It is now two tests: a genuine retry (same key, same body)
+replays, and a reused key with a different body is a 409 that leaves the first
+request's effect untouched.
+
+A row written before this commit has a NULL fingerprint and still replays.
+Refusing those would turn an upgrade into a wall of 409s for keys a client
+legitimately still holds; both sides must be known before a mismatch can be
+claimed. The schema migrates with `ALTER TABLE ... ADD COLUMN` guarded by
+`PRAGMA table_info`, since SQLite has no `ADD COLUMN IF NOT EXISTS`.
+
 ## 2026-08-04 — V0.9.2-C8: one place turns a failure into a status
 
 *2365 → 2390 tests (+25). Finding H-7 closed.*

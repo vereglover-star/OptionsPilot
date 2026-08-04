@@ -59,7 +59,32 @@ def test_v1_websocket_uses_versioned_envelopes(tmp_path):
             assert message["type"] in {"status.snapshot", "status.heartbeat"}
 
 
-def test_v1_idempotency_replays_a_mutation_without_reapplying(tmp_path):
+def test_v1_idempotency_replays_a_retried_mutation_without_reapplying(tmp_path):
+    """A retry — the same key AND the same body — replays the first result.
+
+    This is what an idempotency key is for: a client that did not see the
+    response resends the identical request and gets the original answer rather
+    than applying it twice.
+    """
+    app = create_app(AppConfig(), run_loop=False, data_dir=tmp_path)
+    with TestClient(app) as client:
+        headers = {"Idempotency-Key": "runtime-profile-1"}
+        body = {"hidden_profile": "monitoring_only"}
+        first = client.patch("/api/v1/runtime", headers=headers, json=body)
+        second = client.patch("/api/v1/runtime", headers=headers, json=body)
+        assert first.status_code == second.status_code == 200
+        assert second.json()["data"]["settings"]["hidden_profile"] == "monitoring_only"
+        assert second.json()["meta"]["idempotency_replayed"] is True
+
+
+def test_v1_reusing_a_key_for_a_different_request_is_a_conflict(tmp_path):
+    """V0.9.2-C9, finding N-2. This test previously asserted the defect.
+
+    It sent `monitoring_only`, then `normal` under the SAME key, and asserted
+    the second came back 200 carrying the FIRST request's result — so a client
+    that reused a key for a different change was told its change had been
+    applied. It had not been, and nothing anywhere recorded that.
+    """
     app = create_app(AppConfig(), run_loop=False, data_dir=tmp_path)
     with TestClient(app) as client:
         headers = {"Idempotency-Key": "runtime-profile-1"}
@@ -67,6 +92,9 @@ def test_v1_idempotency_replays_a_mutation_without_reapplying(tmp_path):
                              json={"hidden_profile": "monitoring_only"})
         second = client.patch("/api/v1/runtime", headers=headers,
                               json={"hidden_profile": "normal"})
-        assert first.status_code == second.status_code == 200
-        assert second.json()["data"]["settings"]["hidden_profile"] == "monitoring_only"
-        assert second.json()["meta"]["idempotency_replayed"] is True
+        assert first.status_code == 200
+        assert second.status_code == 409
+        assert second.json()["error"]["code"] == "conflict"
+        # And the first request's effect is untouched.
+        settings = client.get("/api/v1/runtime").json()["data"]["settings"]
+        assert settings["hidden_profile"] == "monitoring_only"
