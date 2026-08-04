@@ -49,6 +49,7 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, utcnow
+from optionspilot.services.errors import ValidationError
 
 log = get_logger("ui")
 
@@ -178,8 +179,15 @@ class TradingService:
                 (c for c in chain
                  if c.strike == strike and c.right is right), None)
             if contract is None:
-                raise ValueError(
-                    f"no {right.value} @ {strike} for {symbol} {expiration}")
+                # `ValidationError`, not `NotFound`: the endpoint exists and the
+                # request was understood — the payload names a contract that
+                # cannot be traded. `NotFound` is for addressing a resource that
+                # is absent, which a POST to /api/orders is not doing.
+                raise ValidationError(
+                    f"no {right.value} @ {strike} for {symbol} {expiration}",
+                    details={"symbol": symbol, "strike": strike,
+                             "right": right.value,
+                             "expiration": expiration.isoformat()})
             try:
                 spot = provider.get_quote(symbol).last
             except Exception:  # noqa: BLE001 — spot is advisory for buys
@@ -191,16 +199,30 @@ class TradingService:
                 decision = self._orch.approve_manual_entry(
                     contract, quantity, self._clock(), premium=contract.ask)
                 if not decision.approved:
-                    raise BrokerError(decision.veto)
-            order, event = self._orch.orders.place(
-                kind=kind, side=side, contract=contract, quantity=quantity,
-                ts=self._clock(), tif=tif,
-                limit_price=float(payload.get("limit_price") or 0),
-                stop_level=float(payload.get("stop_level") or 0),
-                trail=float(payload.get("trail") or 0),
-                trail_pct=float(payload.get("trail_pct") or 0),
-                spot=spot,
-            )
+                    # A risk veto is "understood and not acceptable" — the
+                    # circuit breaker is open, or the daily entry limit is
+                    # spent. It was a `BrokerError` and reached the client as
+                    # 422; it is now a service error carrying the same message
+                    # and the same status, but classifiable by a caller that
+                    # is not HTTP.
+                    raise ValidationError(decision.veto,
+                                          details={"reason": "risk_veto"})
+            try:
+                order, event = self._orch.orders.place(
+                    kind=kind, side=side, contract=contract,
+                    quantity=quantity, ts=self._clock(), tif=tif,
+                    limit_price=float(payload.get("limit_price") or 0),
+                    stop_level=float(payload.get("stop_level") or 0),
+                    trail=float(payload.get("trail") or 0),
+                    trail_pct=float(payload.get("trail_pct") or 0),
+                    spot=spot,
+                )
+            except BrokerError as exc:
+                # `OrderManager` refuses three order combinations (a limit with
+                # no price, and two others). That refusal is a statement about
+                # the REQUEST, so it leaves this service classified rather than
+                # as a broker exception the transport has to recognise by type.
+                raise ValidationError(str(exc)) from exc
             if (event and event["event"] == "filled"
                     and side == "buy_to_open"):
                 # track immediately so fast round trips still get coached,

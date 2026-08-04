@@ -282,7 +282,7 @@ the same commit that lands a row.**
 | C4 | ✅ | Extract `TradingService` — orders, chain, account, scan lifecycle | XL | `388384e` |
 | C5 | ✅ | Extract `BacktestService` — job slot as a runtime task | L | `ddafce3` |
 | C6 | ✅ | Move `ui/guide.py` → `services/guide.py` | M | `457372a` |
-| C7 | ⏳ | Raise `ServiceError` from every service (H-7 applied) | L | — |
+| C7 | ✅ | Raise `ServiceError` from every service (H-7 applied) | L | pending |
 | C8 | ⏳ | Map `ServiceError` at the transport boundary | M | — |
 | C9 | ⏳ | Per-key idempotency locking with request fingerprints (N-1, N-2) | M | — |
 | C10 | ⏳ | Enforce a `ui/server.py` size ceiling | S | — |

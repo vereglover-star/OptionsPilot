@@ -4,6 +4,38 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C7: services state why they refused
+
+*2363 → 2365 tests (+2). No behavioural change — deliberately.*
+
+Finding H-7 applied at the source. `TradingService` and `ChartService` now raise
+`ServiceError` subclasses instead of builtins: an unknown contract, a risk veto,
+an `OrderManager` refusal and an unparseable timeframe are all
+`ValidationError` — the request was understood and is not acceptable — each
+carrying a code and structured `details`.
+
+**This commit changes no HTTP status.** C7 changes what services *raise*; C8
+changes what the transport *does* with it. Splitting them keeps this a pure type
+change whose diff can be read for correctness, and it is why
+`tests/test_ui_server.py` and `tests/test_api_v1.py` both pass unchanged: the
+`/api/orders` route gained `ServiceError` in its existing `except` tuple, mapped
+to the same 422 the builtins already produced.
+
+**`ValidationError`, not `NotFound`, for a missing contract.** The endpoint
+exists and the request was understood; the payload names a contract that cannot
+be traded. `NotFound` is for addressing a resource that is absent, which a POST
+to `/api/orders` is not doing.
+
+The rule is now enforced rather than reviewed: an AST guard fails any `raise` of
+a bare builtin anywhere under `services/`, with a four-module allow-list in
+which **every entry is a reason**. All four raise at construction or on an
+internal invariant — a `TaskSpec` with an unknown lane, a `ServiceError`
+subclass with a bad code, a closed idempotency store, unconfigured device-token
+auth — never on the request path, so classifying them would dress a programmer
+error as a client one, which is H-7 pointing the other way. A second test fails
+if the allow-list names a module that no longer exists, because a stale
+exemption silently un-guards whatever replaced it.
+
 ## 2026-08-04 — V0.9.2-C6: the guide joins the service layer
 
 *2361 → 2363 tests (+2).*

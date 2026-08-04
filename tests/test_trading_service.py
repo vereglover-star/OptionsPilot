@@ -32,7 +32,7 @@ import threading
 
 import pytest
 
-from optionspilot.broker.base import BrokerError
+from optionspilot.services.errors import ValidationError
 from optionspilot.core.models import OptionRight, Timeframe
 from optionspilot.notify import NotificationCenter
 from optionspilot.orchestrator import Orchestrator
@@ -239,7 +239,10 @@ class TestTheOrderPathIsUnchanged:
             veto = "circuit breaker open"
 
         server.orch.approve_manual_entry = lambda *a, **k: _Vetoed()
-        with pytest.raises(BrokerError, match="circuit breaker open"):
+        # V0.9.2-C7: was `BrokerError`. A risk veto is now a classified service
+        # failure — same message, same 422, but a caller that is not HTTP can
+        # tell it from an internal fault.
+        with pytest.raises(ValidationError, match="circuit breaker open"):
             server.place_order({
                 "kind": "market", "side": "buy_to_open", "symbol": "SPY",
                 "expiration": exp.isoformat(), "strike": contract.strike,
@@ -248,7 +251,7 @@ class TestTheOrderPathIsUnchanged:
 
     def test_an_unknown_contract_is_refused_by_name(self, server):
         exp, contract = _first_contract(server)
-        with pytest.raises(ValueError, match="no call @ 99999"):
+        with pytest.raises(ValidationError, match="no call @ 99999"):
             server.place_order({
                 "kind": "market", "side": "buy_to_open", "symbol": "SPY",
                 "expiration": exp.isoformat(), "strike": 99999.0,

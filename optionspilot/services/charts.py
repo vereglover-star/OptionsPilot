@@ -46,6 +46,7 @@ from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import Timeframe, utcnow
 from optionspilot.data import sessions
 from optionspilot.data.base import validate_candles
+from optionspilot.services.errors import ValidationError
 
 log = get_logger("ui")
 
@@ -94,7 +95,15 @@ class ChartService:
         Provider-only — no orchestrator state, so no lock is taken and chart
         loads never contend with a running scan."""
         symbol = symbol.upper()
-        tf = Timeframe.from_string(timeframe)
+        try:
+            tf = Timeframe.from_string(timeframe)
+        except ValueError as exc:
+            # An unparseable timeframe is the CLIENT's mistake, and the bare
+            # `ValueError` made it indistinguishable from an internal one. The
+            # status this produces is the transport's decision (V0.9.2-C8);
+            # what changes here is that the failure now carries a code.
+            raise ValidationError(str(exc),
+                                  details={"timeframe": timeframe}) from exc
         end = end or self._clock()
         start = start or self._default_start(end, tf)
         if end < start:

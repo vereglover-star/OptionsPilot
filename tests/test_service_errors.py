@@ -206,3 +206,69 @@ class TestNoHttpConceptsLeakIn:
         assert not offenders, (
             f"HTTP-status-shaped literals in services/errors.py: {offenders}; "
             "status is the transport's decision (V0.9.2-C8)")
+
+
+class TestServicesRaiseClassifiedFailures:
+    """V0.9.2-C7: a service states WHY it refused, in its own vocabulary.
+
+    The defect (finding H-7) is that a transport inferring a status from the
+    exception TYPE cannot tell a client mistake from an internal one —
+    `ValueError` is what `int("x")` raises, and `KeyError` is what a dict typo
+    raises. A service that says `raise ValidationError(...)` is making a claim
+    the transport can trust; one that leaks a builtin is not.
+
+    Enforced on the AST, over the modules that serve requests. The allow-list
+    below is per-module and each entry is a reason, not an exemption.
+    """
+
+    #: Modules where a builtin raise is correct, with why. All four raise at
+    #: CONSTRUCTION or on an internal invariant — never on the request path —
+    #: so classifying them would be dressing a programmer error as a client
+    #: one, which is H-7 pointing the other way.
+    BUILTIN_RAISES_ALLOWED = {
+        # `TaskSpec`/`BackgroundRuntime` validation: an unknown lane or a
+        # non-positive interval is a wiring bug, caught at registration.
+        "runtime.py",
+        # The hierarchy's own guard: a subclass with a bad code fails at
+        # import, which is the whole point of `__init_subclass__`.
+        "errors.py",
+        # `RuntimeError` on a closed store — an internal invariant, not a
+        # statement about any request.
+        "idempotency.py",
+        # `NotImplementedError` for device-token auth that is not configured;
+        # it is a deployment fact, and no client can provoke it.
+        "contracts.py",
+    }
+
+    BUILTINS = {"ValueError", "KeyError", "TypeError", "RuntimeError",
+                "NotImplementedError", "Exception"}
+
+    def test_no_service_raises_a_bare_builtin_on_the_request_path(self):
+        import ast
+        import pathlib as _p
+
+        pkg = _p.Path(__file__).resolve().parent.parent / "optionspilot" / "services"
+        offenders = []
+        for py in sorted(pkg.rglob("*.py")):
+            if py.name in self.BUILTIN_RAISES_ALLOWED:
+                continue
+            tree = ast.parse(py.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Raise) or node.exc is None:
+                    continue
+                exc = node.exc
+                name = (exc.func if isinstance(exc, ast.Call) else exc)
+                if isinstance(name, ast.Name) and name.id in self.BUILTINS:
+                    offenders.append(f"{py.name}:{node.lineno} raise {name.id}")
+        assert not offenders, (
+            "services must raise a ServiceError subclass so the failure "
+            "carries a code:\n  " + "\n  ".join(offenders))
+
+    def test_the_allow_list_names_only_modules_that_exist(self):
+        """A stale exemption silently un-guards a module that was renamed."""
+        import pathlib as _p
+
+        pkg = _p.Path(__file__).resolve().parent.parent / "optionspilot" / "services"
+        present = {py.name for py in pkg.rglob("*.py")}
+        missing = self.BUILTIN_RAISES_ALLOWED - present
+        assert not missing, f"allow-list names modules that are gone: {missing}"

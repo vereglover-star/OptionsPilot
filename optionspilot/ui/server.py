@@ -47,6 +47,7 @@ from optionspilot.integrations import parse_alert
 from optionspilot.learning import LearningEngine, WeightStore
 from optionspilot.orchestrator import WINDOW_DAYS, Orchestrator
 from optionspilot.services import IdempotencyStore, ServiceRegistry
+from optionspilot.services.errors import ServiceError
 from optionspilot.services.runtime import BackgroundRuntime, RuntimeSnapshot, TaskSpec
 from optionspilot.services import trading as trading_service
 from optionspilot.host import current_host
@@ -1197,7 +1198,12 @@ def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,
 
         try:
             return server.place_order(payload)
-        except (ValueError, KeyError, TypeError, BrokerError) as exc:
+        except (ServiceError, ValueError, KeyError, TypeError,
+                BrokerError) as exc:
+            # `ServiceError` first, and mapped to the SAME status the builtins
+            # already produced. C7 changes what services RAISE; C8 changes
+            # what the transport does with it. Splitting them keeps this
+            # commit a pure type change with no behavioural diff.
             return JSONResponse({"error": str(exc)}, status_code=422)
 
     @app.post("/api/orders/cancel")
