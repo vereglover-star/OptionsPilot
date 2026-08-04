@@ -482,6 +482,19 @@ Core-only. Everything OptionsPilot needs from the machine underneath it.
 The platform-independent application layer: between the orchestrator and any
 transport. Every service takes **injected, duck-typed** collaborators and returns
 **frozen view models of primitives**. Never imports `ui/` or any web framework.
+- `errors.py` (V0.9.2-C1) — the classified failure vocabulary: `ServiceError`
+  plus **exactly one subclass per member of `contracts.ERROR_CODES`**
+  (`ValidationError`, `AuthenticationRequired`, `Forbidden`, `NotFound`,
+  `Conflict`, `RateLimited`, `UnavailableProvider`, `InternalError`), rooted at
+  `core.errors.OptionsPilotError`. Finding H-7: the transport used to infer a
+  status from the *builtin* type, so `except KeyError` turned an internal
+  dict-lookup bug into a **404 not found** shown to the user, and a pandas
+  `ValueError` into "your request was invalid". A subclass raised deliberately
+  is a claim; a leaked builtin is a defect and belongs in the log with a 500.
+  **Carries no HTTP status** — `NotFound` becoming 404 is the transport's
+  decision (C8) — and `__init_subclass__` refuses a code outside `ERROR_CODES`
+  at import time, with `tests/test_service_errors.py` asserting the reverse
+  direction so neither catalogue can drift.
 - `viewmodels.py` — `PositionView`, `AccountView`, `PerformanceView`,
   `PnLWindowsView`, `WatchlistView`, `WatchlistEditView`, `WorkspaceView`,
   `HostView`. Frozen, because a view model two renderers can both mutate is the
