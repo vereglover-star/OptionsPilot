@@ -47,6 +47,7 @@ serializer, and it would need no Python object from any other package.
   * It does not persist anything itself. Every store arrives injected.
 """
 
+from optionspilot.services.charts import ChartService
 from optionspilot.services.intelligence import IntelligenceService
 from optionspilot.services.notifications import (
     CATALOGUE, NotificationService, NotificationView,
@@ -76,6 +77,7 @@ from optionspilot.services.workspace import WorkspaceService
 
 __all__ = [
     "ServiceRegistry",
+    "ChartService",
     "IntelligenceService", "NotificationService", "PortfolioService",
     "WatchlistService", "WorkspaceService",
     "CATALOGUE", "NotificationView",

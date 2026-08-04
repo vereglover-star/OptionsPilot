@@ -54,8 +54,25 @@ ALLOWED: dict[str, set[str]] = {
     # below, along with a ban on transport dependencies). `services` sits
     # between the orchestrator and any transport; a second client's backend
     # imports this and gets the whole application without FastAPI.
-    "services": {"core", "config", "host", "intelligence"},
+    # V0.9.2-C2 widened this by two, deliberately (see the module docstring's
+    # standing instruction: update it with justification, never to green a
+    # test). `ChartService` computes the Charts tab's indicator series, and the
+    # endpoint's entire claim is that they come from the SAME analysis library
+    # the engine trades with — injecting that library would let two callers
+    # supply different ones and quietly break the parity it promises. `data` is
+    # narrower than it looks and is bounded by
+    # `test_services_reach_only_the_pure_data_helpers` below.
+    "services": {"core", "config", "host", "intelligence", "analysis", "data"},
 }
+
+# The only modules of `data/` a service may import. Both are pure functions over
+# a DataFrame that happen to live in the market-data package: `validate_candles`
+# (the non-finite-bar sanitizer) and `sessions.labels` (an ET session labeller).
+# Everything else in `data/` opens sockets, holds a key, spends a quota or
+# constructs a provider — and a service must RECEIVE a provider, injected and
+# duck-typed, never import one. Without this bound, adding `data` to the
+# allow-list above would have handed `services/` the whole market-data stack.
+SERVICE_DATA_MODULES = {"base", "sessions"}
 
 # Composition roots — allowed to import any subpackage. Still constrained by the
 # explicit negative invariants below (a root must not import "up").
@@ -196,6 +213,41 @@ def test_services_have_no_transport_dependency():
             offenders.append(f"{py.name} imports {sorted(bad)}")
     assert not offenders, \
         "services/ must stay transport-free:\n  " + "\n  ".join(offenders)
+
+
+def test_services_reach_only_the_pure_data_helpers():
+    """`services` may import `data`, but only its two pure helpers.
+
+    The coarse package-level allow-list cannot express this, and the difference
+    matters: a service that imports `data.credentials` has put a secret in the
+    reusable layer, and one that imports a provider module has acquired a
+    collaborator it was supposed to be given. Stated as an allow-list rather
+    than a ban so a new provider module is forbidden by default.
+    """
+    offenders = []
+    for py in (PKG / "services").rglob("*.py"):
+        tree = ast.parse(py.read_text(encoding="utf-8-sig"), filename=str(py))
+        for node in ast.walk(tree):
+            # `from optionspilot.data import sessions` names the module in the
+            # alias, not in `node.module` — both spellings must be resolved to
+            # the same thing or the allow-list has a hole exactly where the
+            # tidiest import style sits.
+            names: list[str] = []
+            if isinstance(node, ast.ImportFrom) and node.module:
+                names.extend(f"{node.module}.{a.name}" for a in node.names)
+            elif isinstance(node, ast.Import):
+                names.extend(a.name for a in node.names)
+            for name in names:
+                parts = name.split(".")
+                if parts[:2] != ["optionspilot", "data"] or len(parts) < 3:
+                    continue
+                if parts[2] not in SERVICE_DATA_MODULES:
+                    offenders.append(f"{py.name}:{node.lineno} imports "
+                                     f"{'.'.join(parts[:3])}")
+    assert not offenders, (
+        "services/ may import only " + ", ".join(f"data.{m}" for m in
+                                                 sorted(SERVICE_DATA_MODULES))
+        + ":\n  " + "\n  ".join(offenders))
 
 
 def test_host_stays_core_only():

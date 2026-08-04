@@ -507,6 +507,16 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   buckets (`added` / `invalid` / `duplicates` / `over_cap`) exist because a user
   who pastes twelve tickers and gets eight must be able to see which four went
   missing and why.
+- `charts.py` — `ChartService.candles_payload()`, the Charts tab's OHLCV +
+  indicator series (V0.9.2-C2, moved verbatim out of `ui/server.py`). Takes no
+  lock, which is a domain property rather than an omission: it reads a provider
+  and never orchestrator state, so a chart load cannot contend with a running
+  scan. Its collaborators are a provider *source* (a callable, so a provider
+  swapped after construction is the one used), the indicator settings, a
+  `market_open` predicate, the host's clock and `orchestrator.WINDOW_DAYS` —
+  handed down rather than re-declared, so the default history window keeps one
+  owner. The one service that returns a `dict` instead of a view model, because
+  the payload spreads the market-data layer's own `as_meta()` keys.
 - `intelligence.py` — `payload()` and `summary()`, the projections of one
   snapshot. `PERIOD_LIMITS` and `SUMMARY_METRICS` live here.
 - `notifications.py` — `CATALOGUE` (13 kinds; severity + a `pushable` flag

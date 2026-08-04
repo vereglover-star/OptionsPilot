@@ -33,7 +33,7 @@ graph TB
         A_HOST["host/<br/>capability profiles + OS adapter"]
         A_DOM["analysis · engine · risk · broker · journal<br/>learning · experience · coach · intelligence · data · notify"]
         A_ORCH["orchestrator.py<br/>composes ONE cycle"]
-        A_SVC["services/<br/>PortfolioService · WatchlistService · WorkspaceService<br/>IntelligenceService · NotificationService · sync inventory"]
+        A_SVC["services/<br/>PortfolioService · WatchlistService · WorkspaceService<br/>IntelligenceService · NotificationService · ChartService<br/>sync inventory · error hierarchy"]
         A_UI["ui/server.py<br/>FastAPI routing + status codes"]
         A_WV["ui/desktop.py<br/>pywebview shell"]
         A_FUT["future mobile / web host<br/>(does not exist)"]
@@ -60,6 +60,7 @@ deliberately broken):
 |---|---|
 | `services/` never imports `ui/` | `test_services_never_import_the_ui` |
 | `services/` imports no web/GUI framework at all | `test_services_have_no_transport_dependency` |
+| `services/` reaches only `data.base` and `data.sessions` — never a provider, a key or a quota | `test_services_reach_only_the_pure_data_helpers` |
 | `host/` stays core-only and transport-free | `test_host_stays_core_only` |
 | No `sys.platform` / `os.name` branch outside `core/paths.py`, `host/`, `update/installer.py` | `test_no_module_outside_core_and_host_decides_the_storage_root` |
 | No `Path("data")`-style CWD-relative storage path anywhere | `test_no_cwd_relative_storage_paths` |

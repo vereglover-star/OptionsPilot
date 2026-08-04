@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from optionspilot.config.runtime import MAX_WATCHLIST
 from optionspilot.host import current_host
+from optionspilot.services.charts import ChartService
 from optionspilot.services.intelligence import IntelligenceService
 from optionspilot.services.notifications import NotificationService
 from optionspilot.services.portfolio import PortfolioService
@@ -34,7 +35,7 @@ class ServiceRegistry:
 
     def __init__(self, *, orchestrator, runtime, config, lock, directory,
                  trades, verify_symbol, on_symbols_added=None, host=None,
-                 log=None):
+                 log=None, window_days=None, clock=None):
         self._orch = orchestrator
         self._runtime = runtime
         self._cfg = config
@@ -54,6 +55,22 @@ class ServiceRegistry:
             max_symbols=MAX_WATCHLIST,
             on_added=on_symbols_added,
             log=log,
+        )
+        self.charts = ChartService(
+            # Lambdas, not the objects: a provider (or one of its methods)
+            # swapped on a live orchestrator must be the one the next chart
+            # request uses. Capturing them here would freeze the seam.
+            provider=lambda: orchestrator.provider,
+            indicators=config.indicators,
+            market_open=lambda now: orchestrator.market_open(now),
+            # `orchestrator.WINDOW_DAYS` stays that module's fact; the host
+            # hands it down rather than this layer keeping a second copy.
+            window_days=window_days,
+            # And the host's clock, for the same reason: the chart window and
+            # the market-open flag are both read from "now", and a service
+            # holding its own clock answers from a different one than the app
+            # around it.
+            clock=clock,
         )
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)

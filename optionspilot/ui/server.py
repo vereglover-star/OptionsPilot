@@ -26,7 +26,6 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import ValidationError
 
 from optionspilot import __version__
-from optionspilot.analysis import indicators as ind
 from optionspilot.analysis.options_metrics import enrich_greeks, liquidity_score
 from optionspilot.backtest import Backtester
 from optionspilot.broker.base import BrokerError
@@ -39,9 +38,7 @@ from optionspilot.core.models import OptionRight, Timeframe, utcnow
 from optionspilot.core.paths import AppPaths
 from optionspilot.data import replay as mdreplay
 from optionspilot.data import report as mdreport
-from optionspilot.data import sessions
 from optionspilot.data import symbols as symdir
-from optionspilot.data.base import validate_candles
 from optionspilot.data.presets import PRESETS
 from optionspilot.engine.scorer import DEFAULT_WEIGHTS
 from optionspilot.intelligence import (
@@ -229,6 +226,14 @@ class UIServer:
             verify_symbol=lambda symbol: self._live_symbol_check(symbol),
             on_symbols_added=self._queue_meta_refresh,
             log=log,
+            # The default history window per timeframe. `services/` may not
+            # import the orchestrator, and duplicating the table there would be
+            # a second owner of one fact, so the composition root hands it down.
+            window_days=WINDOW_DAYS,
+            # Through the module attribute, not `utcnow` directly: this is a
+            # frozen seam the whole UI suite relies on, and handing over the
+            # function object would capture the real clock forever.
+            clock=lambda: utcnow(),
         )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
@@ -512,124 +517,15 @@ class UIServer:
         end: datetime | None = None,
         extended_hours: bool = False,
     ) -> dict:
-        """OHLCV + indicator series for the Charts tab, computed by the SAME
-        analysis library the engine trades with (guaranteed visual parity).
-        Provider-only — no orchestrator state, so no lock is taken and chart
-        loads never contend with a running scan."""
-        symbol = symbol.upper()
-        tf = Timeframe.from_string(timeframe)
-        end = end or utcnow()
-        start = start or (end - timedelta(days=WINDOW_DAYS[tf]))
-        if end < start:
-            start, end = end, start
-        # display surface: prefer clearly-flagged stale bars over a blank
-        # chart when the live fetch fails (feature-detected so tests that
-        # inject bare fake providers keep working)
-        # Extended hours only exists for intraday intervals; daily+ bars are RTH
-        # aggregates so the flag is forced off there (keeps the cache key and the
-        # session tagging honest).
-        ext = extended_hours and tf.minutes < Timeframe.D1.minutes
-        # `get_history` returns the full result — which tier answered, which
-        # provider, whether the window is older than anything can serve, the
-        # validation report and the diagnostics trace id — so the frontend can
-        # be EXPLICIT about its state instead of inferring one from an empty
-        # array. Feature-detected so tests injecting a bare fake provider (and
-        # any legacy adapter) keep working on the older two-method contract.
-        get_history = getattr(self.orch.provider, "get_history", None)
-        meta: dict = {}
-        if get_history is not None:
-            result = (get_history(symbol, tf, start, end, extended_hours=True)
-                      if ext else get_history(symbol, tf, start, end))
-            df, stale = result.frame, result.stale
-            meta = result.as_meta()
-        else:
-            stale_ok = getattr(self.orch.provider, "get_candles_stale_ok", None)
-            # Only thread the kwarg when actually requesting extended hours, so
-            # plain 4-arg providers are unaffected.
-            if stale_ok is not None:
-                df, stale = (stale_ok(symbol, tf, start, end, extended_hours=True)
-                             if ext else stale_ok(symbol, tf, start, end))
-            else:
-                df = (self.orch.provider.get_candles(symbol, tf, start, end,
-                                                     extended_hours=True)
-                      if ext else self.orch.provider.get_candles(symbol, tf, start, end))
-                stale = False
-        # One sanitization choke point for everything derived below: candles
-        # AND indicator series. Providers validate their own output, but this
-        # endpoint must stay robust to any that don't — a single non-finite
-        # bar otherwise poisons computed indicators (inf VWAP from one inf
-        # high) and 500s the response during JSON serialization.
-        df = validate_candles(df, context=f"/api/candles {symbol} {timeframe}")
-        # Whether the US market is open right now decides how the frontend reads
-        # a stale (disk-fallback) payload: while the market is CLOSED the newest
-        # cached bar already IS the freshest bar the market ever produced, so a
-        # "live data unavailable" banner would be a category error — the chart
-        # is simply showing the last session. Only an OPEN-market stale payload
-        # means the display has genuinely fallen behind live prices.
-        market_open = self.orch.market_open(utcnow())
-        if df.empty:
-            # An empty payload is NOT one condition. `meta["outcome"]` says
-            # which of them it is — `exhausted` (the window predates every
-            # provider: the true start of history, and the frontend must stop
-            # asking), `empty` (a holiday or pre-listing window: legitimate),
-            # or `failed` (nothing could answer: the only case that deserves an
-            # error state). Conflating the three is what made a scroll into old
-            # intraday history retry forever.
-            return {"symbol": symbol, "timeframe": timeframe, "candles": [],
-                    "indicators": {}, "stale": False, "market_open": market_open,
-                    **meta}
+        """Delegates to `services/charts.py` (V0.9.2-C2).
 
-        import math
-        icfg = self.cfg.indicators
-        close = df["close"]
-        series: dict[str, list] = {}
-
-        def col(name: str, s) -> None:
-            series[name] = [round(float(v), 4) if math.isfinite(v) else None
-                            for v in s]
-
-        if icfg.ema:
-            for period in icfg.ema_periods[:3]:
-                col(f"ema{period}", ind.ema(close, period))
-        if icfg.vwap and tf.minutes < Timeframe.D1.minutes:
-            col("vwap", ind.vwap(df))
-        if icfg.bollinger:
-            bb = ind.bollinger(close)
-            col("bb_upper", bb["bb_upper"])
-            col("bb_lower", bb["bb_lower"])
-            col("bb_mid", bb["bb_mid"])
-        if icfg.rsi:
-            col("rsi", ind.rsi(close, icfg.rsi_period))
-        if icfg.macd:
-            m = ind.macd(close)
-            col("macd", m["macd"])
-            col("macd_signal", m["macd_signal"])
-            col("macd_hist", m["macd_hist"])
-
-        times = [int(ts.timestamp()) for ts in df.index]
-        # Per-bar session labels only when extended hours are shown (in RTH-only
-        # mode every bar is regular, so the field is omitted to keep the payload
-        # lean; the frontend defaults a missing session to "rth").
-        sess = sessions.labels(df.index) if ext else None
-        # validate_candles() above already dropped non-finite bars; these
-        # guards are the last line of defense — one rogue float would 500 the
-        # whole endpoint during JSON serialization (allow_nan=False).
-        candles = []
-        for i, (t, r) in enumerate(zip(times, df.itertuples(index=False))):
-            if not all(math.isfinite(v) for v in (r.open, r.high, r.low, r.close)):
-                continue
-            bar = {"time": t, "open": round(r.open, 4), "high": round(r.high, 4),
-                   "low": round(r.low, 4), "close": round(r.close, 4),
-                   "volume": int(r.volume) if math.isfinite(r.volume) else 0}
-            if sess is not None:
-                bar["session"] = sess[i]
-            candles.append(bar)
-        log.debug("candles %s %s: %d bars%s%s", symbol, timeframe, len(candles),
-                  " (stale)" if stale else "", " ext" if ext else "")
-        return {"symbol": symbol, "timeframe": timeframe,
-                "candles": candles, "indicators": series, "stale": stale,
-                "as_of": times[-1] if stale else None,
-                "market_open": market_open, "extended_hours": ext, **meta}
+        Kept as a method because the route, `tests/test_ui_server.py` and the
+        diagnostics page all call it; it forwards rather than reimplements, so
+        there is still exactly one chart payload in the system.
+        """
+        return self.services.charts.candles_payload(
+            symbol, timeframe, start=start, end=end,
+            extended_hours=extended_hours)
 
     def marketdata_diagnostics(self, traces: int = 25) -> dict:
         """Provider health + cache stats + recent request traces.

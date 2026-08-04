@@ -5,15 +5,28 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-03, on closing **V0.9.1 — runtime & thread
-ownership** (C1…C11 committed).
+**Last updated:** 2026-08-03, on landing **V0.9.2-C2** (ChartService).
 
 ## What to do next
 
-**Begin V0.9.2 — complete the service extraction**, once the user approves. V0.9.1
-closed with all eleven commits landed, `verify.ps1` green across 13 gates, and a
-clean 30-minute soak. Plan of record: the V0.9 Engineering Specification,
-Revision 2.
+**Continue V0.9.2 at C3 — extract `MarketDataService`** (XL). ➡ **`ROADMAP.md` ▸
+V0.9.2 ▸ "Commit map" is the per-commit table**, with hashes and status; it is
+the repository's own record of the sequence, built precisely so a lost
+specification can no longer stall a session. Keep it current in the same commit
+that lands a row.
+
+C1 (the error hierarchy) and C2 (ChartService) are landed. **C3's stated
+constraint is that it must NOT acquire `self.lock`** — that is a documented
+decision being preserved, not an oversight to fix.
+
+**The pattern C2 established, which C3–C5 follow.** Collaborators are injected
+and duck-typed; a provider arrives as a *callable* so a later swap is not frozen
+at construction; the clock is the host's, never the module's; a table owned
+elsewhere (`orchestrator.WINDOW_DAYS`) is handed down rather than copied; and
+the golden characterization test is written **before** the move, so it proves
+the payload is unchanged rather than that the new code agrees with itself.
+`tests/test_ui_server.py` must keep passing **unchanged** — editing it destroys
+the evidence.
 
 `BackgroundRuntime` now genuinely owns what it claimed to own. Every application
 background workload is a registered task on a lane; `ui/server.py` and

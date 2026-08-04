@@ -4,6 +4,45 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-03 — V0.9.2-C2: the chart payload leaves the transport
+
+*First of four extractions. 2270 → 2285 tests (+15).*
+
+`ui/server.py::candles_payload` — 126 lines of OHLCV assembly and indicator
+computation — is now `services/charts.py::ChartService`, and the server method
+is a three-line delegation. `ui/server.py` lost 122 lines and no longer imports
+`analysis` at all.
+
+It is a **move**, and the evidence for that is a golden characterization test
+written and passing *before* the new module existed: every key, every bar and
+every rounded indicator value of the pre-move payload is pinned in
+`tests/test_chart_service.py`. `tests/test_ui_server.py` is unchanged.
+
+The move found one real defect the golden caught immediately. The service
+initially read its own module-level `utcnow`, so the UI suite's frozen clock no
+longer reached it and nine market-data tests began reporting `empty` windows —
+the chart would have requested a window around the wall clock while the rest of
+the app worked from the host's. The clock is now an injected collaborator, like
+the provider.
+
+Two smaller decisions worth recording. `orchestrator.WINDOW_DAYS` stays where it
+is and is *handed down* through the registry: `services/` cannot import the
+orchestrator, and a copy of the table would be a second owner of how far back a
+5-minute chart opens. And `ChartService` returns a plain `dict` rather than a
+frozen view model — alone among the services — because the payload spreads
+`as_meta()` from the market-data layer, whose keys are that layer's to choose;
+freezing them would be a behaviour change wearing a refactor's clothes.
+
+The architecture allow-list was widened by two, deliberately.
+`services` may now import `analysis` (the endpoint's whole claim is that the
+chart is drawn by the *same* library the engine trades with — injecting it would
+let two callers supply different ones) and `data`, bounded by a new, narrower
+assertion: only `data.base` and `data.sessions`, the two pure DataFrame helpers.
+Everything else in `data/` opens a socket, holds a key, spends a quota or
+constructs a provider — and a service must *receive* a provider, injected, never
+import one. Stated as an allow-list, so a new provider module is forbidden by
+default.
+
 ## 2026-08-03 — Packaging fix: the windowed exe could not start
 
 *Independent bugfix, found on the first real EXE launch after V0.9.1. 2243 →

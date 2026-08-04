@@ -29,6 +29,22 @@ is. This file is the flat, actionable checklist version.
       landed** (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
+- [ ] **V0.9.2 — complete the service extraction.** In progress. **C1** (the
+      service error hierarchy, H-7's types) and **C2** (`ChartService` — the
+      chart payload out of `ui/server.py`, which lost 122 lines) are committed;
+      **C3 (`MarketDataService`) is next**, and must *not* acquire `self.lock`.
+      Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.2 ▸ Commit map. C2–C5
+      are **mechanical moves** — `tests/test_ui_server.py` must keep passing
+      unchanged, because editing it destroys the evidence that the move changed
+      nothing.
+
+- [ ] **`scripts/guide_check.py` check "tour: the spotlight ring appears" is
+      flaky.** Failed once during V0.9.2-C2's `verify.ps1` run and passed
+      135/135 on two immediate re-runs, against a diff that touches no frontend
+      file. Almost certainly an animation/timing race in the assertion rather
+      than a product defect — but a gate that fails at random trains people to
+      re-run it, which is how a real failure gets waved through.
+
 - [ ] **Make the packaged-build gate reach the desktop launch path.** The
       windowed-exe startup crash (uvicorn's formatter reading
       `sys.stdout.isatty()`) got through `build_exe.ps1`'s packaged-selftest
