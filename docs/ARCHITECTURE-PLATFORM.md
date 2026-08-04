@@ -62,6 +62,7 @@ deliberately broken):
 | `services/` imports no web/GUI framework at all | `test_services_have_no_transport_dependency` |
 | `services/` reaches only `data.base`, `data.sessions` and `data.report` — never a provider, a key or a quota | `test_services_reach_only_the_pure_data_helpers` |
 | `services/` reaches only `broker.base` and `broker.orders` — **never `broker.registry`**, so no reusable service can construct a live-broker adapter | `test_services_never_reach_a_broker_implementation` |
+| `ui/server.py` stays under its line ceiling, and the ceiling stays tight | `test_ui_server_stays_under_its_ceiling`, `test_the_ceiling_is_still_a_ratchet` |
 | `host/` stays core-only and transport-free | `test_host_stays_core_only` |
 | No `sys.platform` / `os.name` branch outside `core/paths.py`, `host/`, `update/installer.py` | `test_no_module_outside_core_and_host_decides_the_storage_root` |
 | No `Path("data")`-style CWD-relative storage path anywhere | `test_no_cwd_relative_storage_paths` |

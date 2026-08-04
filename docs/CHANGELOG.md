@@ -4,6 +4,24 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C10: a ratchet on the transport's size
+
+*2409 → 2411 tests (+2).*
+
+`ui/server.py` was 1,892 lines when V0.9.2 opened and held five services' worth
+of application logic. It is now **1,629**. `MAX_UI_SERVER_LINES = 1650` in
+`tests/test_architecture.py` stops it coming back, and the failure message says
+what the fix is: move the logic into `services/`, which is where the last five
+commits put the charts, the market-data console, the trading surface, the
+backtest slot and the guide.
+
+A second test makes it an actual **ratchet**. A ceiling far above the file is
+not a constraint, it is a comment — so if an extraction leaves more than 120
+lines of slack, the test fails and names the number to lower it to. Without
+that, the first future extraction silently re-grants every line this milestone
+won back. Raising the ceiling to 2,400 was demonstrated: the ratchet test
+catches it and tells you to set 1,649.
+
 ## 2026-08-04 — V0.9.2-C9: idempotency locks per key, and checks the request
 
 *2390 → 2409 tests (+19). Findings N-1 and N-2. Both only appear under concurrency or a misbehaving

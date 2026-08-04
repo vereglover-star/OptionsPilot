@@ -63,7 +63,7 @@ ALLOWED: dict[str, set[str]] = {
     # narrower than it looks and is bounded by
     # `test_services_reach_only_the_pure_data_helpers` below.
     # V0.9.2-C4 adds `broker`, bounded by
-    # `test_services_reach_only_the_order_vocabulary` below. `TradingService`
+    # `test_services_never_reach_a_broker_implementation` below. `TradingService`
     # needs the order VOCABULARY — `OrderKind`, `TIF`, `BrokerError` — to turn
     # a client payload into an order. It still routes every execution through
     # the injected orchestrator's `OrderManager` and every entry through
@@ -431,3 +431,56 @@ def test_ui_server_has_no_function_level_optionspilot_imports():
     assert not nested, \
         "server.py has function-level optionspilot imports (hoist to top): " \
         + ", ".join(sorted(set(nested)))
+
+
+# ── the transport size ceiling (V0.9.2-C10) ──────────────────────────────────
+#
+# `ui/server.py` was 1,892 lines at the start of V0.9.2 and held five services'
+# worth of application logic. C2–C6 moved it out. This is the ratchet that
+# stops it coming back.
+#
+# **Raising this number is not the fix for a failing test here.** The fix is to
+# move the logic into `services/`, which is where the last five commits put the
+# charts, the market-data console, the trading surface, the backtest slot and
+# the guide. A transport decides status codes and shapes; it does not decide
+# what a client is shown.
+MAX_UI_SERVER_LINES = 1650
+
+#: How far below the ceiling the file may sit before the ceiling itself is
+#: stale. A ratchet that is never tightened stops being one — it silently
+#: re-grants every line a past extraction won back. Generous enough not to
+#: fight ordinary work.
+CEILING_SLACK = 120
+
+
+def _ui_server_lines() -> int:
+    return len((PKG / "ui" / "server.py")
+               .read_text(encoding="utf-8-sig").splitlines())
+
+
+def test_ui_server_stays_under_its_ceiling():
+    """The transport does not regrow the application layer.
+
+    If this fails, extract the new logic into `optionspilot/services/` rather
+    than raising `MAX_UI_SERVER_LINES`. Every service in that package was once
+    a section of this file.
+    """
+    lines = _ui_server_lines()
+    assert lines <= MAX_UI_SERVER_LINES, (
+        f"ui/server.py is {lines} lines, over the {MAX_UI_SERVER_LINES} "
+        "ceiling. Move the new logic into services/ — do not raise the "
+        "ceiling. See docs/ARCHITECTURE-PLATFORM.md section 2.")
+
+
+def test_the_ceiling_is_still_a_ratchet():
+    """A ceiling far above the file is not a constraint, it is a comment.
+
+    When an extraction lands, this fails and the ceiling comes down with it —
+    which is the only thing that makes the number mean anything a year from
+    now.
+    """
+    lines = _ui_server_lines()
+    assert MAX_UI_SERVER_LINES - lines <= CEILING_SLACK, (
+        f"ui/server.py is {lines} lines but the ceiling is "
+        f"{MAX_UI_SERVER_LINES}. An extraction has left the ratchet slack: "
+        f"lower MAX_UI_SERVER_LINES to about {lines + 20}.")
