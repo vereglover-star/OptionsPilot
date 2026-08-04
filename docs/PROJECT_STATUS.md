@@ -5,14 +5,18 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-08-02, **V0.9.0 — verification floor, CLOSED**.
-Full `pytest` suite green, ruff green, coverage **91.56%** over the 91 ratchet,
-HTML-id + doc checks green, API contract check green,
-`scripts/marketdata_stress.py` **88/88** offline,
-`scripts/chart_check.py` **65/65**, `scripts/marketdata_check.py` **46/46**,
-`scripts/intelligence_check.py` **54/54**, `scripts/guide_check.py` **135/135**
-and the new `scripts/workspace_check.py` **21/21** in a real headless browser,
-`browser_check.py` green.
+**Last verified:** 2026-08-04, **V0.9.2 — complete the service extraction,
+CLOSED**. `verify.ps1` green across **all 13 gates**: full `pytest` suite
+(**2414 tests**), ruff, HTML-id and doc checks, API contract check, pip check,
+`scripts/marketdata_stress.py` **88/88** offline, and the six browser suites
+(`browser_check`, `chart_check`, `marketdata_check`, `intelligence_check`,
+`guide_check`, `workspace_check`) in a real headless browser.
+
+**Two browser checks are known-flaky** and both are tracked in `TODO.md`:
+`chart_check` is the only gate that fetches from **live providers**, and two of
+its checks have failed and then passed at an identical commit. On that gate, the
+correct first move is to re-run the same state — a bisect against it produced a
+confidently wrong conclusion during V0.9.2-C3.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
 against its real API with a real key — all 2414 tests run against canned
@@ -40,6 +44,20 @@ every automated check in the project.
 
 ## Current phase
 
+**V0.9.2 — complete the service extraction. CLOSED 2026-08-04**, 12 commits
+(`cefe4da`…C12). `ui/server.py` went from 1,892 to **1,629 lines**; the suite
+from 2,247 to **2414 tests**. The error hierarchy, four extractions
+(`ChartService`, `MarketDataAdminService`, `TradingService`, `BacktestService`),
+the guide moved into `services/`, services raising `ServiceError` and the
+transport mapping it to a status (closing finding H-7), per-key idempotency
+locking with request fingerprints (N-1/N-2), a line ceiling with a ratchet, and
+the registry proven constructible *and usable* with no web framework loaded —
+which found a real defect no static check could see. **No trading-behaviour
+change.** Two deliberate status corrections: an internal defect is a 500 rather
+than a confidently-wrong 404, and a bad timeframe is a 422 rather than a 502.
+Per-commit reasoning: `docs/reports/V0.9.2.md`.
+
+**Before that — V0.9.1, runtime & thread ownership** (11 commits), and
 **V0.9.0 — verification floor. CLOSED 2026-08-02**, 11 commits
 (`2707a01`…`e403da6`). The milestone adds no features and changes no trading
 behaviour; it makes the build reproducible, the update path verifiable and the
@@ -554,10 +572,7 @@ because releasing the single-instance lock is the first thing a restart does.
 Commit map for the per-commit table with hashes. **The per-commit sequence is tabulated in `ROADMAP.md` ▸ V0.9.1
 ▸ Commit map** — keep it current in the same commit that lands a row.
 
-**V0.9.2 is in progress: C1 (the service error hierarchy), C2 (`ChartService`)
-C3 (`MarketDataAdminService`), C4 (`TradingService`) and C5
-(`BacktestService`) are landed — **all four extractions complete**. C6 (move
-the guide into `services/`) is next.** The per-commit
+**V0.9.2 is complete — all twelve commits landed.** The per-commit
 table with hashes is `ROADMAP.md` ▸ V0.9.2 ▸ Commit map — keep it current in the
 same commit that lands a row. Then V0.9.3 (a real API v1). Scope detail: the
 V0.9 Engineering Specification, Revision 2, and `ROADMAP.md`.

@@ -29,13 +29,18 @@ is. This file is the flat, actionable checklist version.
       landed** (see `ROADMAP.md` ▸ V0.9.1 ▸ Commit map). The exit criterion is a 30-minute soak, not a green
       suite.
 
-- [ ] **V0.9.2 — complete the service extraction.** In progress. **C1**–**C8**
-      committed: the error hierarchy, all four extractions (`ChartService`,
-      `MarketDataAdminService`, `TradingService`, `BacktestService`), the guide
-      moved into `services/`, services raising `ServiceError`, and the
-      transport mapping it to a status. `ui/server.py` is down from 1,892 to
-      ~1,600 lines and finding H-7 is closed. Per-commit table with hashes:
-      `ROADMAP.md` ▸ V0.9.2 ▸ Commit map.
+- [x] **V0.9.2 — complete the service extraction.** Done 2026-08-04, all
+      twelve commits. The error hierarchy; four extractions (`ChartService`,
+      `MarketDataAdminService`, `TradingService`, `BacktestService`); the guide
+      moved into `services/`; services raising `ServiceError` and the transport
+      mapping it to a status, closing finding H-7; per-key idempotency locking
+      with request fingerprints (N-1, N-2); a line ceiling with a ratchet; and
+      the registry proven constructible *and usable* with no web framework
+      loaded, which found a real defect no static check could see.
+      `ui/server.py` is down from 1,892 to **1,629** lines; 2,247 → **2,414**
+      tests. No trading-behaviour change. Per-commit table with hashes:
+      `ROADMAP.md` ▸ V0.9.2 ▸ Commit map; reasoning:
+      `docs/reports/V0.9.2.md`.
 
 - [ ] **`scripts/chart_check.py` fetches from LIVE providers, and it is the
       only browser gate that does.** Fresh temp data dir per run, but real

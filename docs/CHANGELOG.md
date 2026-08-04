@@ -4,6 +4,36 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C12: documenting the completed application layer
+
+*V0.9.2 closes here. 1,892 → 1,629 lines in `ui/server.py`; 2,247 → 2414 tests
+across twelve commits. No trading-behaviour change.*
+
+Documentation was updated alongside every change that caused it, so this commit
+is the milestone-level consolidation: the statements that could only be written
+once the milestone was done.
+
+`AI_HANDOFF.md` gains the section a session hits before editing a route — the
+ten services and what each answers, the one rule (*a decision about what a
+client is shown belongs in a service*), and the three enforced constraints
+someone is otherwise likely to fight. `ARCHITECTURE.md` had two stale facts: the
+`services/` tree comment still listed only the V0.7.0 services, and the prose
+claimed "seven guards" where `tests/test_architecture.py` now has **fifteen**.
+`ARCHITECTURE-PLATFORM.md` records what the registry's constructor gained and
+why the C11 test builds and *calls* rather than importing. `ROADMAP.md`,
+`PROJECT_STATUS.md`, `PROJECT_STATE.md`, `NEXT_SESSION.md` and `TODO.md` move
+the milestone to complete.
+
+**Nothing claims the extraction is "finished"** in the sense of nothing
+remaining in `ui/server.py`. 1,629 lines is a transport plus roughly eighty
+route handlers, some of which still hold small decisions. The line ceiling and
+its ratchet are the honest statement: the direction is enforced, the endpoint is
+not claimed.
+
+Per-commit reasoning, including every gate that passed while testing nothing
+until an induced-failure demo caught it, plus what this milestone would tell the
+next one: **`docs/reports/V0.9.2.md`**.
+
 ## 2026-08-04 — V0.9.2-C11: the application layer, built with no web server
 
 *2411 → 2414 tests (+3). One real defect found.*

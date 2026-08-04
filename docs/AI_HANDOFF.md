@@ -80,6 +80,47 @@ endpoints plus one WebSocket (`/ws`) that pushes the full status payload
 every second when the payload changed (a tiny heartbeat otherwise, which
 the frontend ignores — no re-render).
 
+### The application layer (`optionspilot/services/`) — read this before editing a route
+
+**`ui/server.py` is a transport. It decides status codes and response shapes,
+and nothing else.** Since V0.9.2 every application decision lives in
+`services/`, which may not import `ui/`, FastAPI, or any web or GUI framework.
+The practical rule when adding an endpoint: if you are about to write a
+*decision about what a client is shown* inside a route handler, it belongs in a
+service.
+
+| Service | Answers |
+|---|---|
+| `PortfolioService` | positions, account, realised performance, P&L windows |
+| `WatchlistService` | parse / validate / add / remove / reorder |
+| `ChartService` | the Charts tab's OHLCV + indicator series |
+| `MarketDataAdminService` | diagnostics, the text report, replay, the twelve control-centre calls |
+| `TradingService` | the manual order path, the option chain, account metrics, the scan cycle |
+| `BacktestService` | the single backtest job slot |
+| `WorkspaceService` | where the user was looking |
+| `IntelligenceService` | the projections of one `IntelligenceSnapshot` |
+| `NotificationService` | the event catalogue and newest-first history |
+| `services/guide.py` | guided onboarding (pure; `re` + `dataclasses` only) |
+
+`ServiceRegistry` wires them; nothing constructs a service by hand.
+`services/errors.py` gives every failure a code, and `ui/errors.py` is the ONE
+place a code becomes an HTTP status — a service never names a status, because a
+CLI or a mobile backend would map the same code differently.
+
+Three things are enforced and worth knowing before you fight them:
+
+* **`ui/server.py` has a line ceiling** (`tests/test_architecture.py`). If it
+  fails, extract to `services/` — do not raise the number.
+* **`services/` may reach only named modules of `data/` and `broker/`.**
+  `broker/registry.py` (the live-broker stubs) is permanently excluded.
+* **The registry is built and exercised with no web framework loaded**, in a
+  subprocess (`tests/test_registry_without_a_transport.py`). That test found a
+  real defect a static import check could not: a GUI library arriving
+  transitively through `notify/`.
+
+Full design: `docs/ARCHITECTURE-PLATFORM.md`. Per-commit reasoning for the
+extraction: `docs/reports/V0.9.2.md`.
+
 ## Backend architecture
 
 Layered, each layer only depends on layers below it:

@@ -252,7 +252,7 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
-### V0.9.2 — Complete the service extraction (in progress)
+### V0.9.2 — Complete the service extraction (COMPLETE, 2026-08-04)
 
 Finding C-5: application logic still resident in the transport layer. V0.7.0
 built `services/` and moved the *presentation* decisions there; `ui/server.py`
@@ -265,6 +265,26 @@ internal dict-lookup bug into a **404 not found** shown to the user.
 Estimate 11–13 days, 12 commits. Sequenced after V0.9.1 deliberately: a service
 that owns background work extracted against a broken ownership model would have
 needed redoing.
+
+**Delivered, all twelve commits.** `ui/server.py` went from **1,892 to 1,629
+lines** and the suite from 2,247 to **2414 tests**. The error hierarchy (C1);
+four extractions — `ChartService`, `MarketDataAdminService`, `TradingService`,
+`BacktestService` (C2–C5); the guide moved into `services/` (C6); services
+raising `ServiceError` (C7) and the transport mapping it to a status (C8),
+closing finding H-7; per-key idempotency locking with request fingerprints
+(C9, findings N-1/N-2); a line ceiling with a ratchet on the transport (C10);
+and the registry proven constructible and *usable* with no web framework loaded
+(C11), which found a real defect no static check could see — a Windows GUI
+library arriving transitively through `notify/`. **No trading-behaviour change.**
+Two deliberate status changes, both fixing a wrong answer: an internal defect is
+now a 500 instead of a confidently-wrong 404, and a client's unparseable
+timeframe is a 422 instead of a 502.
+
+Three existing tests asserted defects and were corrected rather than deleted:
+the 502-for-a-bad-timeframe, the idempotency key reused for a different body,
+and a packaging scanner that matched prose. Per-commit reasoning, including
+every gate that passed while testing nothing until an induced-failure demo
+caught it: **`docs/reports/V0.9.2.md`**.
 
 #### Commit map — the repository's own record of the sequence
 
@@ -287,7 +307,7 @@ the same commit that lands a row.**
 | C9 | ✅ | Per-key idempotency locking with request fingerprints (N-1, N-2) | M | `12a3809` |
 | C10 | ✅ | Enforce a `ui/server.py` size ceiling | S | `4bb94b5` |
 | C11 | ✅ | Assert the registry is constructible without FastAPI | M | `0151504` |
-| C12 | ⏳ | Document the completed application layer | M | — |
+| C12 | ✅ | Document the completed application layer | M | pending |
 
 **Review focus, per the specification, worth repeating here** because it is what
 makes C2–C5 safe: they are **mechanical moves**. `tests/test_ui_server.py` must

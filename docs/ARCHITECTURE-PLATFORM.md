@@ -97,8 +97,28 @@ other package.
 
 `ServiceRegistry` is the one place these are wired. Its constructor signature is
 the honest statement of *what a second client's backend must provide*: an
-orchestrator, a runtime settings store, a config, a lock, a symbol directory, and
-three callables. Everything else is derived.
+orchestrator, a runtime settings store, a config, a lock, a symbol directory, a
+few callables, and — since V0.9.2 — the four things a host owns rather than the
+application (the default chart window, the clock, the replay engine and the
+backtester). Everything else is derived, and nothing constructs a service by
+hand.
+
+**V0.9.2 completed this layer.** V0.7.0 moved the presentation decisions;
+`ui/server.py` still held charts, market data, trading, backtests and the guide,
+at 1,892 lines. It is now **1,629**, and the claim the layer exists to make is
+tested rather than asserted:
+`tests/test_registry_without_a_transport.py` builds the registry over a real
+orchestrator **in a subprocess** and calls one method on every service, then
+fails if any web or GUI framework was loaded. Construction alone would prove
+little — a registry that builds and raises on first use is no use to a second
+client — so each service must actually answer.
+
+That test found a defect no import-graph check could see: constructing the
+registry pulled in `windows_toasts`, because `notify/__init__.py` imported
+`DesktopNotifier`, which imported the toast package at module scope. `services/`
+never imported it; it arrived transitively through an injected collaborator. The
+import is now lazy. **The gap between "the static ban passes" and "a second host
+can actually use this" is the whole reason that test exists.**
 
 **What the layer deliberately does not do:** it does not own the cycle
 (`orchestrator.run_cycle()` is still the only composition of engine + risk +

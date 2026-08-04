@@ -5,47 +5,56 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-04, on landing **V0.9.2-C5** (BacktestService).
+**Last updated:** 2026-08-04, on closing **V0.9.2 — complete the service extraction** (C1…C12).
 
 ## What to do next
 
-**Continue V0.9.2 at C4 — extract `TradingService`** (XL: orders, chain, account, scan lifecycle). It is the **highest-consequence extraction of the milestone** — its lock scope must be identical to before, unlike C2 and C3 which legitimately take no lock at all. ➡ **`ROADMAP.md` ▸
-V0.9.2 ▸ "Commit map" is the per-commit table**, with hashes and status; it is
-the repository's own record of the sequence, built precisely so a lost
-specification can no longer stall a session. Keep it current in the same commit
-that lands a row.
+**V0.9.2 is closed.** All twelve commits landed; `verify.ps1` green across 13
+gates at 2414 tests. The next milestone is **V0.9.3 — a real API v1**. Scope
+detail lives in the V0.9 Engineering Specification, Revision 2, which is *not*
+in this repository — so **build the commit map in `ROADMAP.md` before starting**,
+exactly as V0.9.1 and V0.9.2 did. That table is the only reason a lost
+specification stopped stalling sessions.
 
-C1 (the error hierarchy), C2 (ChartService) and C3 (MarketDataAdminService)
-are landed. C3's constraint — that it must NOT acquire `self.lock` — was a
-documented decision preserved, not an oversight fixed. **C4 is the opposite
-case:** it genuinely needs the lock, and the requirement is that the scope is
-unchanged.
+## What V0.9.2 delivered
 
-**The pattern C2 established, which C3–C5 follow.** Collaborators are injected
-and duck-typed; a provider arrives as a *callable* so a later swap is not frozen
-at construction; the clock is the host's, never the module's; a table owned
-elsewhere (`orchestrator.WINDOW_DAYS`) is handed down rather than copied; and
-the golden characterization test is written **before** the move, so it proves
-the payload is unchanged rather than that the new code agrees with itself.
-`tests/test_ui_server.py` must keep passing **unchanged** — editing it destroys
-the evidence.
+`ui/server.py` went from **1,892 to 1,629 lines** and is now a transport: it
+decides status codes and response shapes, and nothing else. Every application
+decision lives in `optionspilot/services/`.
 
-`BackgroundRuntime` now genuinely owns what it claimed to own. Every application
-background workload is a registered task on a lane; `ui/server.py` and
-`intelligence/engine.py` construct **no threads at all** (asserted on the AST,
-not on source text); `BackgroundRuntime` is the only path to a trading cycle;
-`_DesktopController.exit()` is single-entry; the launcher takes readiness from
-`uvicorn.Server.started`; and `DesktopApplication` makes the desktop wiring
-assertable without a GUI.
+* **C1** the service error hierarchy; **C2–C5** four extractions
+  (`ChartService`, `MarketDataAdminService`, `TradingService`,
+  `BacktestService`); **C6** the guide moved into `services/`.
+* **C7–C8** closed finding H-7: services raise a coded `ServiceError`, and
+  `ui/errors.py` is the ONE place a code becomes a status. Two deliberate
+  corrections — an internal defect is now a **500** rather than a
+  confidently-wrong **404**, and a client's unparseable timeframe is a **422**
+  rather than a **502**.
+* **C9** per-key idempotency locking plus request fingerprints (N-1, N-2): a
+  key reused for a *different* body is a 409 instead of silently replaying
+  someone else's result.
+* **C10** a line ceiling on `ui/server.py`, with a second test that fails if an
+  extraction leaves the ceiling slack.
+* **C11** the registry built **and exercised** in a subprocess with no web
+  framework loaded. It found a real defect no static check could see:
+  `windows_toasts` arriving transitively through `notify/`.
 
-➡ **`ROADMAP.md` ▸ V0.9.1 ▸ "Commit map" is the per-commit table**, with hashes.
-The plan itself lives in the Engineering Specification, which is *not* in this
-repository and which a session loses to context compaction — C7, C9 and C10 all
-had to be confirmed with the user for that reason. **Build the same table for
-V0.9.2 before starting it**, and keep it current in the same commit that lands a
-row.
+**No trading-behaviour change.** Per-commit reasoning, including every gate that
+passed while testing nothing until an induced-failure demo caught it:
+**`docs/reports/V0.9.2.md`**.
 
-**Three things carried into V0.9.2.**
+## Three practices worth carrying forward
+
+1. **The induced-failure demo is not ceremony — it is the only thing that tests
+   the test.** Three separate commits this milestone shipped a gate that passed
+   against deliberately broken code, and the demo is what caught each one.
+2. **Match structure, not text.** Three text-matching assertions broke on prose
+   explaining the rule they enforced (C1, C5, C11). AST every time.
+3. **Re-run the same state before bisecting a networked gate.**
+   `scripts/chart_check.py` is the only browser gate that hits live providers,
+   and a bisect against it produced a confidently wrong conclusion in C3.
+
+**Three things carried into V0.9.3.**
 
 1. **F-1 is out of scope for this whole milestone, not just for one commit.**
    `_maybe_send_summaries` runs outside the server lock on a worker thread

@@ -9,7 +9,41 @@ Full detail: **`docs/CHANGELOG.md`**, `2026-08-03 — V0.9.1`.
 
 ## Exact stopping point
 
-**V0.9.1 is closed. Nothing is in progress.** All eleven commits landed,
+**V0.9.2 is closed. Nothing is in progress.** All twelve commits landed and
+`verify.ps1` is green across all 13 gates at **2414 tests**. `ui/server.py`
+went from 1,892 lines to **1,629**: it is now a transport that decides status
+codes and response shapes, and every application decision lives in
+`optionspilot/services/`.
+
+What shipped: the service error hierarchy (C1); four extractions —
+`ChartService`, `MarketDataAdminService`, `TradingService`, `BacktestService`
+(C2–C5); the guide moved out of `ui/` (C6); services raising a coded
+`ServiceError` (C7) and `ui/errors.py` mapping it to a status (C8), which closed
+finding H-7; per-key idempotency locking with request fingerprints (C9, findings
+N-1 and N-2); a line ceiling on `ui/server.py` with a ratchet that fails when an
+extraction leaves it slack (C10); and the registry proven constructible **and
+usable** with no web framework loaded (C11).
+
+**No trading-behaviour change.** Two deliberate status corrections, both fixing
+a wrong answer rather than a missing one: an internal defect is now a **500**
+instead of a confidently-wrong **404**, and a client's unparseable timeframe is a
+**422** instead of a **502**. Three existing tests asserted defects and were
+corrected rather than deleted.
+
+The commit worth reading about is **C11**. Building the registry in a subprocess
+with no web framework loaded found a defect no import-graph check could see:
+`windows_toasts`, a Windows GUI library on the project's own banned list,
+arriving transitively because `notify/__init__.py` imports `DesktopNotifier`,
+which imported the toast package at module scope. `services/` never imported it.
+That is the gap between "the static ban passes" and "a second host can actually
+use this", and it is why the test builds and *calls* rather than importing.
+
+Per-commit reasoning — including every gate that passed while testing nothing
+until an induced-failure demo caught it: **`docs/reports/V0.9.2.md`**.
+
+## Previously: the exact stopping point at V0.9.1
+
+**V0.9.1 is closed.** All eleven commits landed,
 `verify.ps1` is green across all 13 gates, coverage is **91.86%** over the 91
 ratchet, and the milestone's stated exit criterion — a **30-minute soak**, not a
 green suite — passed clean. Per-commit table with hashes: `ROADMAP.md` ▸ V0.9.1

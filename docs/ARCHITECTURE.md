@@ -65,8 +65,8 @@ optionspilot/
 │   ├── integrations/              #   TradingView webhook parsing (inbound alert only)
 │   ├── update/                    #   self-updater: GitHub Releases → verify → backup → silent install (V0.5.0, core+stdlib only; docs/AUTO_UPDATER.md)
 │   ├── host/                      #   host platform: capability profiles per target + OS adapter (V0.7.0, core-only)
-│   ├── services/                  #   PLATFORM-INDEPENDENT APPLICATION LAYER: portfolio, watchlist, intelligence projections, notifications, workspace, sync inventory, view models (V0.7.0; never imports ui/ or any web framework)
-│   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py) — TRANSPORT ONLY since V0.7.0
+│   ├── services/                  #   PLATFORM-INDEPENDENT APPLICATION LAYER: portfolio, watchlist, charts, market-data admin, trading, backtest, guide, intelligence projections, notifications, workspace, error hierarchy, idempotency, sync inventory, view models (V0.7.0, completed V0.9.2; never imports ui/ or any web framework)
+│   ├── ui/                        #   FastAPI app (server.py), pywebview shell (desktop.py), errors.py (code → HTTP status) — TRANSPORT ONLY since V0.7.0, enforced by a line ceiling since V0.9.2
 │   │   └── static/                #     index.html (entire frontend) + vendored lightweight-charts.js
 │   └── data_assets/                #   bundled 12k-symbol CSV (generated, don't hand-edit)
 │
@@ -101,8 +101,28 @@ test pulls a web server in to compute a win rate. `host/` sits at the bottom
 alongside `core`, and exists so that a business-logic module asks a **capability**
 question (`host.supports(Capability.TOAST)`) rather than an `sys.platform`
 question, which is a bug on every platform that is not Windows and a silent one
-on most. Seven guards in `tests/test_architecture.py` enforce all of this, and
-each was verified to fail when its invariant was deliberately broken.
+on most. **Fifteen** guards in `tests/test_architecture.py` enforce all of
+this, and each was verified to fail when its invariant was deliberately broken.
+
+V0.9.2 finished the job V0.7.0 started. `ui/server.py` went from 1,892 lines to
+**1,629**, and the charts, the market-data console, the trading surface, the
+backtest slot and the guide all moved into `services/`. Three guards were added
+in the process and two of them narrow rather than widen the rule:
+
+* `services/` may now import `analysis`, `data` and `broker` — but only
+  `data.base`, `data.sessions`, `data.report`, `broker.base` and
+  `broker.orders`, each an allow-list rather than a ban, so a new provider or
+  broker module is forbidden by default. **`broker/registry.py` is permanently
+  excluded**: it holds the live-broker stubs, and a reusable application layer
+  that cannot import it is one in which no future host can construct a live
+  adapter by accident.
+* `ui/server.py` has a line ceiling, plus a second test that fails if an
+  extraction leaves the ceiling slack — a ratchet that is never tightened stops
+  being one.
+* The registry is **built and exercised in a subprocess** with no web framework
+  loaded (`tests/test_registry_without_a_transport.py`). That is the claim the
+  whole layer exists to make, and it found a real defect the static checks could
+  not: `windows_toasts` arriving transitively through `notify/`.
 
 ---
 
