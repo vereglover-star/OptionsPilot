@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import sys
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -32,7 +32,7 @@ from optionspilot.coach import CoachProfile, build_dashboard
 from optionspilot.config.runtime import RuntimeSettings
 from optionspilot.config.settings import AppConfig
 from optionspilot.core.logging_setup import get_logger, uvicorn_logging_kwargs
-from optionspilot.core.models import Timeframe, utcnow
+from optionspilot.core.models import utcnow
 from optionspilot.core.paths import AppPaths
 from optionspilot.data import replay as mdreplay
 from optionspilot.data import symbols as symdir
@@ -135,15 +135,6 @@ class UIServer:
         self.background = BackgroundRuntime(health_check=self._health_check)
         self._runtime_health: dict = {"state": "healthy", "last_check": None,
                                       "issues": [], "repairs": []}
-        self._bt_lock = threading.Lock()
-        self.backtest_job: dict = {"state": "idle"}
-        # `TaskSpec.callback` takes no arguments, so a parameterised job hands
-        # its parameters over through server state rather than through the
-        # scheduler. Written and read under `_bt_lock`, the same lock that
-        # claims the single backtest slot, so the parameters and the claim are
-        # one atomic fact — a slot claimed with nobody's parameters behind it
-        # would run the previous request's symbol.
-        self._bt_pending: tuple[str, int, float | None] | None = None
         # The scan pipeline, the cycle lock and the scan/summary/equity state
         # moved to `services/trading.py` in V0.9.2-C4. They are still reachable
         # under their old names through the properties below, because the
@@ -240,6 +231,13 @@ class UIServer:
             # must take effect on the next one.
             watchlist_symbols=lambda: list(self.cfg.data.watchlist),
             tz=ET,
+            # The backtest slot (V0.9.2-C5). The runtime and the task name come
+            # from here because REGISTRATION stays here; the `Backtester` is
+            # injected rather than imported by `services/`.
+            reports_dir=self._reports_dir,
+            background=self.background,
+            backtest_task=BACKTEST_TASK,
+            backtester=Backtester,
         )
 
     # ── cycle loop ───────────────────────────────────────────────────────────
@@ -756,54 +754,39 @@ class UIServer:
 
     # ── backtest job ─────────────────────────────────────────────────────────
 
+    # The slot, the claim and the run moved to `services/backtest.py` in
+    # V0.9.2-C5. Task REGISTRATION stays here, where V0.9.1-C6 put it.
+
+    @property
+    def _bt_lock(self):
+        """The slot lock, still reachable: `GET /api/backtest` reads the job
+        under it so a status poll cannot observe a half-written record."""
+        return self.services.backtest._lock
+
+    @property
+    def backtest_job(self) -> dict:
+        return self.services.backtest.job
+
+    @backtest_job.setter
+    def backtest_job(self, value: dict) -> None:
+        self.services.backtest.job = value
+
     def start_backtest(self, symbol: str, days: int, min_confidence: float | None
                        ) -> dict:
-        """Claim the single backtest slot and let the runtime execute it.
-
-        V0.9.1-C6: what used to be here was
-        ``threading.Thread(..., name="backtest").start()``. Unlike the manual
-        scan C5 replaced, this was never a check-then-act race — the slot is
-        tested and claimed inside one `_bt_lock`. The defect was *ownership*: a
-        job that reads months of candles and writes two report files ran on a
-        thread the runtime could not pause, could not drain at shutdown and
-        could not report, and whose name matched none of the prefixes the
-        suite's only leak test looks for.
-
-        The `_bt_lock` claim stays exactly as it was. It is not a second copy
-        of the runtime's overlap guard: that guard is dispatch state, while
-        `backtest_job` is the user-visible record carrying the symbol, the
-        report and any error, and `GET /api/backtest` returns it.
-        """
-        with self._bt_lock:
-            if self.backtest_job.get("state") == "running":
-                return self.backtest_job
-            self._bt_pending = (symbol.upper(), days, min_confidence)
-            self.backtest_job = {"state": "running", "symbol": symbol.upper(),
-                                 "started": utcnow().isoformat()}
-            claimed = self.backtest_job
-        # The runtime owns the execution, so it has to be alive to own it —
-        # `start()` is idempotent and registers no scheduled work.
-        self.background.start()
-        if not self.background.trigger(BACKTEST_TASK):
-            # Unreachable while the task is registered at construction, and
-            # released rather than trusted: a claimed slot with nothing behind
-            # it would wedge every later backtest for the life of the process,
-            # which is the failure `MarketDataControl.start_maintenance` guards
-            # against by hand for exactly the same reason.
-            with self._bt_lock:
-                self._bt_pending = None
-                self.backtest_job = {"state": "error", "symbol": symbol.upper(),
-                                     "error": "the background runtime is "
-                                              "unavailable"}
-                return self.backtest_job
-        return claimed
+        return self.services.backtest.start(symbol, days, min_confidence)
 
     def _background_backtest(self) -> None:
-        with self._bt_lock:
-            pending, self._bt_pending = self._bt_pending, None
+        """The runtime task body.
+
+        It drains the claim from the service and then calls `self._run_backtest`
+        rather than the service directly, because that method is an overridable
+        seam: `tests/test_runtime_lifecycle.py` replaces it to block a worker
+        deterministically, and reaching past it would silently ignore the
+        replacement — the "registry that captures a bound method freezes a
+        seam" lesson, in the one place it still matters.
+        """
+        pending = self.services.backtest.take_pending()
         if pending is None:
-            # A trigger with no claim behind it: nothing to do, and inventing
-            # parameters here would run a backtest nobody requested.
             return
         self._run_backtest(*pending)
 
@@ -831,29 +814,8 @@ class UIServer:
 
     def _run_backtest(self, symbol: str, days: int,
                       min_confidence: float | None) -> None:
-        try:
-
-            cfg = self.cfg.model_copy(deep=True)
-            if min_confidence is not None:
-                cfg.engine.min_confidence = min_confidence
-            end = utcnow()
-            windows = {1: 5, 5: 10, 15: min(days, 55), 60: 60, 240: 100, 1440: 300}
-            candles = {}
-            for s in {*cfg.engine.entry_timeframes, *cfg.engine.htf_trend_timeframes}:
-                tf = Timeframe.from_string(s)
-                candles[tf] = self.orch.provider.get_candles(
-                    symbol, tf, end - timedelta(days=windows[tf.minutes]), end)
-            report = Backtester(cfg).run(symbol, candles)
-            report.save_json(self._reports_dir / f"{symbol.lower()}.json")
-            report.save_html(self._reports_dir / f"{symbol.lower()}.html")
-            with self._bt_lock:
-                self.backtest_job = {"state": "done", "symbol": symbol,
-                                     "report": report.to_dict()}
-        except Exception as exc:  # noqa: BLE001
-            log.exception("backtest failed: %s", exc)
-            with self._bt_lock:
-                self.backtest_job = {"state": "error", "symbol": symbol,
-                                     "error": str(exc)}
+        """The overridable seam `_background_backtest` calls. Delegates."""
+        self.services.backtest.run(symbol, days, min_confidence)
 
 
 def create_app(config: AppConfig, orchestrator: Orchestrator | None = None,

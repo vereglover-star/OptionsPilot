@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from optionspilot.config.runtime import MAX_WATCHLIST
 from optionspilot.host import current_host
+from optionspilot.services.backtest import BacktestService
 from optionspilot.services.charts import ChartService
 from optionspilot.services.intelligence import IntelligenceService
 from optionspilot.services.marketdata import MarketDataAdminService
@@ -38,7 +39,8 @@ class ServiceRegistry:
     def __init__(self, *, orchestrator, runtime, config, lock, directory,
                  trades, verify_symbol, on_symbols_added=None, host=None,
                  log=None, window_days=None, clock=None, replay=None,
-                 watchlist_symbols=None, tz=None):
+                 watchlist_symbols=None, tz=None, reports_dir=None,
+                 background=None, backtest_task=None, backtester=None):
         self._orch = orchestrator
         self._runtime = runtime
         self._cfg = config
@@ -98,6 +100,20 @@ class ServiceRegistry:
             watchlist=watchlist_symbols or (lambda: list(config.data.watchlist)),
             clock=clock,
             tz=tz,
+        )
+        self.backtest = BacktestService(
+            config=config,
+            provider=lambda: orchestrator.provider,
+            reports_dir=reports_dir,
+            runtime=background,
+            task_name=backtest_task,
+            # The `Backtester` class, injected: it drives engine + risk +
+            # broker + journal, and importing it here would pull the whole
+            # trading stack into a layer whose value is not needing one. A host
+            # that supplies none simply cannot backtest, and the service says
+            # so rather than the attribute being absent.
+            backtester=backtester,
+            clock=clock,
         )
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)

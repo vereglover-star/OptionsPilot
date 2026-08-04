@@ -527,6 +527,15 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   (`data/replay.py`, which reaches the registry and the adapters) is *injected*.
   The twelve delegations go through one `_delegate(name, *args)` dispatcher, so
   each control method name appears exactly once.
+- `backtest.py` — `BacktestService`: the single job slot (V0.9.2-C5). The
+  claim, the parameter stash and the job record are written in ONE critical
+  section, because `TaskSpec.callback` takes no arguments and a slot claimed
+  with nobody's parameters behind it would run the previous request's symbol.
+  Owns its lock outright (unlike `TradingService`) because a backtest never
+  touches the live orchestrator. The `Backtester` is **injected**, not imported
+  — it drives engine + risk + broker + journal, and a client wanting a win rate
+  should not pull a simulator in to get one. Task *registration* stays in
+  `ui/server.py`.
 - `trading.py` — `TradingService`: the manual order path, `chain_payload`,
   `account_metrics`, and the scan cycle with its `scan_state` / `last_summary` /
   `equity_history` (V0.9.2-C4). **Two locks, two jobs**: the orchestrator

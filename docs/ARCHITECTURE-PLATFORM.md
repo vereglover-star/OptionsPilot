@@ -33,7 +33,7 @@ graph TB
         A_HOST["host/<br/>capability profiles + OS adapter"]
         A_DOM["analysis · engine · risk · broker · journal<br/>learning · experience · coach · intelligence · data · notify"]
         A_ORCH["orchestrator.py<br/>composes ONE cycle"]
-        A_SVC["services/<br/>PortfolioService · WatchlistService · WorkspaceService<br/>IntelligenceService · NotificationService · ChartService<br/>MarketDataAdminService · TradingService<br/>sync inventory · error hierarchy"]
+        A_SVC["services/<br/>PortfolioService · WatchlistService · WorkspaceService<br/>IntelligenceService · NotificationService · ChartService<br/>MarketDataAdminService · TradingService · BacktestService<br/>sync inventory · error hierarchy"]
         A_UI["ui/server.py<br/>FastAPI routing + status codes"]
         A_WV["ui/desktop.py<br/>pywebview shell"]
         A_FUT["future mobile / web host<br/>(does not exist)"]
@@ -92,6 +92,7 @@ other package.
 | `ChartService` (V0.9.2-C2) | the Charts tab's OHLCV + indicator series | `UIServer.candles_payload` |
 | `MarketDataAdminService` (V0.9.2-C3) | diagnostics, the text report, replay, the twelve control-centre calls | `UIServer.marketdata_*` |
 | `TradingService` (V0.9.2-C4) | the manual order path, the option chain, account metrics, the scan cycle | `UIServer.place_order`, `chain_payload`, `run_cycle_now` and the scan state |
+| `BacktestService` (V0.9.2-C5) | the single job slot: claim, parameters, report writing, `backtest_job` | `UIServer.start_backtest`, `_run_backtest` and the `_bt_*` state |
 
 `ServiceRegistry` is the one place these are wired. Its constructor signature is
 the honest statement of *what a second client's backend must provide*: an

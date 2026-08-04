@@ -4,6 +4,46 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C5: the backtest slot leaves the transport
+
+*Last of the four extractions. 2346 → 2361 tests (+15).*
+
+The single backtest slot — the atomic claim, the parameter hand-off, the candle
+windows, the report writing and the user-visible `backtest_job` record — becomes
+`services/backtest.py::BacktestService`. `ui/server.py` drops from 1,642 to
+**1,604 lines**, 288 below where V0.9.2 started. Task *registration* stays in
+`ui/server.py`, exactly where V0.9.1-C6 put it.
+
+`_run_backtest` remains an overridable seam on the server, and the runtime task
+body calls it rather than reaching into the service, because
+`tests/test_runtime_lifecycle.py` replaces it to block a worker
+deterministically. Bypassing the seam was demonstrated and fails three tests.
+
+**It owns its lock outright**, unlike `TradingService`, which receives one. A
+backtest never touches the live orchestrator: it builds its own config copy, its
+own components and its own candle set. That has been in `ui/server.py`'s module
+docstring since the feature shipped, and moving the code is where such a claim
+usually gets lost.
+
+**The `Backtester` is injected, not imported**, following the rule C3 set: a
+pure single-purpose helper is imported so a second cannot be substituted
+(`data/report.py`), but heavy machinery is injected (`data/replay.py`).
+`Backtester` drives engine + risk + broker + journal, so importing it would mean
+a client wanting a win rate pulls a simulator in to get one. `services/` gains
+no new allow-list entry for this commit.
+
+**One test in this commit was wrong three times before it was right**, and it is
+worth recording because the failure mode is subtle. Moving the parameter stash
+out of the claim's critical section is a real concurrency defect, and the
+behavioural test could not see it — the parameters still arrive in a
+single-threaded run. The structural replacement then passed against broken code
+twice: first because it unioned the assignments of every `with self._lock` in
+`start()`, then because it accepted *any* single block. Both were satisfied by
+the failure-release branch, which legitimately assigns `self._pending = None`
+and `self.job` together. Only the **first** critical section answers the
+question. A gate that passes while testing nothing is the shape this repository
+keeps paying for.
+
 ## 2026-08-04 — V0.9.2-C4: the trading surface leaves the transport
 
 *Third of four extractions, and the highest-consequence one. 2323 → 2346 tests

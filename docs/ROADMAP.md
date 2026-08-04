@@ -280,7 +280,7 @@ the same commit that lands a row.**
 | C2 | ✅ | Extract `ChartService` — smallest first, establishes the pattern | L | `74de6b2` |
 | C3 | ✅ | Extract `MarketDataService` (shipped as `MarketDataAdminService`) — deliberately lock-free | XL | `4269cfe` |
 | C4 | ✅ | Extract `TradingService` — orders, chain, account, scan lifecycle | XL | `388384e` |
-| C5 | ⏳ | Extract `BacktestService` — job slot as a runtime task | L | — |
+| C5 | ✅ | Extract `BacktestService` — job slot as a runtime task | L | pending |
 | C6 | ⏳ | Move `ui/guide.py` → `services/guide.py` | M | — |
 | C7 | ⏳ | Raise `ServiceError` from every service (H-7 applied) | L | — |
 | C8 | ⏳ | Map `ServiceError` at the transport boundary | M | — |
