@@ -4,6 +4,41 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C11: the application layer, built with no web server
+
+*2411 → 2414 tests (+3). One real defect found.*
+
+This is the milestone's central claim, cashed. V0.7.0 created `services/` so a
+second client's backend would not need FastAPI to compute a win rate, and every
+commit since has asserted a *piece* of that — no `ui` import, no transport
+package, no HTTP status in a service. None asserted what a second host actually
+needs: that you can **construct the registry and call its services** with no web
+framework ever loaded.
+
+It runs in a subprocess, because the pytest process has imported FastAPI many
+times over; checking `sys.modules` in-process would pass regardless. The
+subprocess builds a real `AppConfig`, `Orchestrator`, `RuntimeSettings`,
+`BackgroundRuntime` and `ServiceRegistry`, then calls one method on each of the
+nine services — construction alone would prove far less, since a registry that
+builds and raises on first use is no use to anyone.
+
+**It failed the first time, on a real defect.** Constructing the registry pulled
+in **`windows_toasts`**, a Windows GUI library on the project's own banned list.
+`services/` does not import it; it arrived transitively, because
+`optionspilot/notify/__init__.py` imports `DesktopNotifier`, which imported the
+toast package at module scope. No import-graph check over `services/` could see
+that. The import is now lazy — bound on first `DesktopNotifier()` construction —
+and stays a **literal** `from windows_toasts import ...` inside the function,
+not `importlib.import_module`, because PyInstaller follows the former and cannot
+see the latter.
+
+**And the packaging guard then failed on prose.** `tests/test_packaging.py`
+scanned source *text* for `importlib.import_module("…")` and matched the new
+docstring, which quotes that call as the example of what not to do. The scanner
+now walks the AST. That is the third time this milestone a text-matching
+assertion has broken on a comment explaining the rule it enforces; the fix is
+always to match structure, not text.
+
 ## 2026-08-04 — V0.9.2-C10: a ratchet on the transport's size
 
 *2409 → 2411 tests (+2).*

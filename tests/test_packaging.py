@@ -17,6 +17,7 @@ the second, physical layer of the same guard.
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -27,17 +28,43 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_DIR = ROOT / "optionspilot"
 BUILD_SCRIPT = ROOT / "scripts" / "build_exe.ps1"
 
-_DYNAMIC_IMPORT = re.compile(
-    r"""(?:importlib\.import_module|__import__)\(\s*["']([A-Za-z_][\w.]*)["']"""
-)
+#: The two call shapes PyInstaller's static analysis cannot follow.
+_DYNAMIC_CALLS = {"importlib.import_module", "__import__"}
 
 
 def dynamic_third_party_imports() -> dict[str, list[str]]:
-    """Map of third-party top-level module -> source files that lazy-load it."""
+    """Map of third-party top-level module -> source files that lazy-load it.
+
+    Walks the AST rather than matching source text. V0.9.2-C11 is why: the
+    regex this replaced matched a *docstring* in `notify/desktop.py` that
+    quotes `importlib.import_module("windows_toasts")` as an example of the
+    thing not to do — so a comment explaining the rule failed the check
+    enforcing it. That is the third time in this milestone a text-matching
+    assertion has broken on prose about its own rule, and the fix is always the
+    same: match structure, not text.
+
+    A literal `from x import y` inside a function body is deliberately NOT
+    reported. PyInstaller does follow those; only a module name that exists as
+    a *string* at runtime is invisible to it.
+    """
     found: dict[str, list[str]] = {}
     for py in PACKAGE_DIR.rglob("*.py"):
-        for match in _DYNAMIC_IMPORT.finditer(py.read_text(encoding="utf-8")):
-            top = match.group(1).split(".")[0]
+        # utf-8-sig: "data/yfinance_provider.py" carries a BOM, which
+        # ast.parse rejects as a non-printable character. The architecture
+        # guard hit this first and records the same note.
+        tree = ast.parse(py.read_text(encoding="utf-8-sig"), filename=str(py))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            if ast.unparse(node.func) not in _DYNAMIC_CALLS:
+                continue
+            target = node.args[0]
+            if not isinstance(target, ast.Constant) or not isinstance(
+                    target.value, str):
+                # A computed module name cannot be collected by a build flag
+                # either, but naming it is beyond what this check can do.
+                continue
+            top = target.value.split(".")[0]
             if top == "optionspilot" or top in sys.stdlib_module_names:
                 continue
             found.setdefault(top, []).append(str(py.relative_to(ROOT)))
@@ -46,8 +73,8 @@ def dynamic_third_party_imports() -> dict[str, list[str]]:
 
 class TestDynamicImportsAreBundled:
     def test_scanner_sees_the_known_lazy_import(self):
-        # If this fails, the scanner regex has rotted and the coverage test
-        # below is vacuously green. Fix the regex — don't delete this assert.
+        # If this fails, the scanner has rotted and the coverage test below is
+        # vacuously green. Fix the scanner — do not delete this assert.
         assert "yfinance" in dynamic_third_party_imports()
 
     def test_every_dynamic_import_is_collected_by_the_build_script(self):
