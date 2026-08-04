@@ -25,7 +25,7 @@ below:**
 1. **1:1 with `ERROR_CODES`.** In both directions. A class whose code is not a
    declared code produces an envelope no client can interpret; a declared code
    with no class is a code nothing can ever raise. This repository has paid for
-   one-directional catalogue checks before — `ui/guide.py`'s tutorial ids are
+   one-directional catalogue checks before — `services/guide.py`'s tutorial ids are
    asserted both ways for exactly this reason.
 2. **No HTTP concepts leak in.** No status codes, no `HTTPException`, no
    `fastapi`/`starlette` import. A service must be usable by a CLI, a test or a

@@ -179,7 +179,7 @@ claim the way it has to be proven: wipe `localStorage` in a real browser, reload
 and assert the symbol and timeframe **on screen** are the ones chosen before the
 wipe.
 
-The service itself is pure and shape-validating, modelled on `ui/guide.py`. It
+The service itself is pure and shape-validating, modelled on `services/guide.py`. It
 holds no second catalogue: `tab` and indicator names are frontend vocabulary and
 are checked for type and length only, because a Python copy of them would be the
 two-catalogue drift the guide layer exists to avoid. `timeframe` **is** validated,

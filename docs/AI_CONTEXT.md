@@ -384,7 +384,7 @@ into long-term memory:
    future "is this data what I asked for" test.
 
 23. **Never let the guided-onboarding layer make a claim about the trader**
-   (V0.6.1). `ui/guide.py` recommends **tutorials** from **feature usage** and
+   (V0.6.1). `services/guide.py` recommends **tutorials** from **feature usage** and
    nothing else; behavioural claims belong to `intelligence/`, which measures
    them from the trade record with a false-discovery correction underneath.
    *"You have never placed a limit order"* is a fact about the software;

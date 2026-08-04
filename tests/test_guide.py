@@ -23,8 +23,8 @@ import re
 
 import pytest
 
-from optionspilot.ui import guide
-from optionspilot.ui.guide import GuideFacts
+from optionspilot.services import guide
+from optionspilot.services.guide import GuideFacts
 
 HTML = (pathlib.Path(__file__).resolve().parent.parent
         / "optionspilot" / "ui" / "static" / "index.html")
@@ -285,3 +285,47 @@ class TestRecommendations:
         round_tripped = json.loads(json.dumps(body))
         assert round_tripped["tutorials"] == list(guide.TUTORIALS)
         assert round_tripped["facts"]["order_kinds_used"] == ["limit"]
+
+
+class TestItLivesInTheServiceLayer:
+    """V0.9.2-C6 moved this module from `ui/` to `services/`.
+
+    The guide was always a pure domain layer that happened to sit in the
+    transport package — it imports nothing but `re` and `dataclasses`, and
+    every assertion above passed unchanged across the move. What the move buys
+    is that a second client can ask "what should this user be taught next"
+    without importing a web framework, which is the whole point of the layer it
+    now lives in.
+    """
+
+    def test_the_old_module_is_gone_rather_than_re_exported(self):
+        """No compatibility shim.
+
+        A `ui/guide.py` that re-exported from here would leave two import paths
+        for one module, and the stale one is the one a future reader copies.
+        """
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("optionspilot.ui.guide")
+
+    def test_it_imports_nothing_but_the_standard_library(self):
+        """The purest module in `services/`, and worth keeping that way.
+
+        Asserted on the AST rather than by importing, so a dependency added
+        inside a function body is caught too.
+        """
+        import ast
+        import pathlib
+
+        path = (pathlib.Path(__file__).resolve().parent.parent
+                / "optionspilot" / "services" / "guide.py")
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        imported: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imported.add(node.module.split(".")[0])
+            elif isinstance(node, ast.Import):
+                imported.update(a.name.split(".")[0] for a in node.names)
+        assert imported <= {"__future__", "re", "dataclasses"}, \
+            f"services/guide.py grew a dependency: {sorted(imported)}"

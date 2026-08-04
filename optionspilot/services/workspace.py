@@ -13,7 +13,7 @@ silently discards it — the exact failure V0.6.1 refused to accept for onboardi
 progress, for the exact same reason ("a returning user must not be greeted as a
 beginner"), and workspace state had it all along.
 
-So this service is the same shape as `ui/guide.py`, on purpose:
+So this service is the same shape as `services/guide.py`, on purpose:
 
   * **Pure.** No I/O, no clock, no network. `normalize` and `merge` are
     functions of their arguments; persistence is the caller's, through

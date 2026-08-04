@@ -4,6 +4,27 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## 2026-08-04 — V0.9.2-C6: the guide joins the service layer
+
+*2361 → 2363 tests (+2).*
+
+`optionspilot/ui/guide.py` becomes `optionspilot/services/guide.py`, moved with
+`git mv` so the history follows. It was always a pure domain layer that happened
+to live in the transport package — it imports nothing but `re` and
+`dataclasses`, and all 43 assertions in `tests/test_guide.py` passed across the
+move with only the import path changed. That file is the characterization.
+
+No compatibility shim is left behind: two import paths for one module means the
+stale one is the one a future reader copies, so a test asserts
+`optionspilot.ui.guide` now raises `ModuleNotFoundError`. A second test pins the
+module's purity on the AST, because it is now the purest module in `services/`
+and that is worth keeping.
+
+Stale path references were corrected in `CLAUDE.md` (whose protected-files list
+named the old path), five current-state documents, and five source comments that
+pointed at the module as a live reference. `CHANGELOG.md` and `PROJECT_STATE.md`
+keep their historical wording.
+
 ## 2026-08-04 — V0.9.2-C5: the backtest slot leaves the transport
 
 *Last of the four extractions. 2346 → 2361 tests (+15).*

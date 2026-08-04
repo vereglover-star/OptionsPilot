@@ -21,7 +21,7 @@ whose code is not in `ERROR_CODES`, so a typo fails at import rather than on the
 failing path — the one moment nobody wants a second error.
 `tests/test_service_errors.py` asserts the reverse, that every declared code has
 a class, because a one-directional catalogue check is a drift this repository has
-already paid for (`ui/guide.py`).
+already paid for (`services/guide.py`).
 
 *No HTTP.* No status, no `HTTPException`, no transport import. `NotFound` is a
 statement about the domain; that it becomes 404 over HTTP is the transport's

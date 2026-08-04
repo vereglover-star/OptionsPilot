@@ -52,7 +52,7 @@ from optionspilot.services import trading as trading_service
 from optionspilot.host import current_host
 from optionspilot.services import intelligence as intel_view
 from optionspilot.services import sync as sync_boundaries
-from optionspilot.ui import guide
+from optionspilot.services import guide
 from optionspilot.ui.api_v1 import register_v1_routes
 from optionspilot.update.models import UpdateError
 from optionspilot.update.service import UpdateService

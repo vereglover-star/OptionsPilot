@@ -9,7 +9,7 @@ the dashboard, persisted to data/settings.json after every change:
   - custom-mode overrides (min_confidence, risk_per_trade_pct,
     daily_trade_limit, max_contracts, min_risk_reward, max_daily_loss_pct)
   - guided-onboarding state (tutorials finished/skipped, features used,
-    motion and hint preferences) — see ui/guide.py
+    motion and hint preferences) — see services/guide.py
   - workspace state (selected tab, symbol, timeframe, indicators, sidebar,
     recent symbols, saved layouts) — see services/workspace.py
 
@@ -297,7 +297,7 @@ class RuntimeSettings:
     #
     # Deliberately dumb storage: this store validates nothing about the shape of
     # the document, because the vocabulary (tutorial ids, feature keys, merge
-    # semantics) belongs to `ui/guide.py` and `config/` must not import upward
+    # semantics) belongs to `services/guide.py` and `config/` must not import upward
     # to reach it. The caller normalizes on read and on write — see
     # `UIServer.guide_payload` / `UIServer.update_guide`.
     #

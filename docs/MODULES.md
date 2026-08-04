@@ -32,7 +32,7 @@ validated through `EngineConfig`/`RiskConfig`), `set_operating_mode`
 bootstrap; `_apply_mode` always preserves the caller's current `operating_mode`
 when restoring the baseline for a trading-mode switch. `MAX_WATCHLIST = 30`.
 The guide accessors are deliberately dumb storage: the vocabulary and the merge
-semantics belong to `ui/guide.py`, and `config/` must not import upward to reach
+semantics belong to `services/guide.py`, and `config/` must not import upward to reach
 them.
 
 ## Data (`optionspilot/data/`) — full design in `docs/MARKET_DATA.md`
@@ -436,7 +436,7 @@ by import, so it sits **below** the coach in the layering.
 - `ui.py` — pure formatting: `format_bytes/speed/eta`, safe
   `render_release_notes_html` (escape-first markdown subset), dialog payloads.
 
-## Guided onboarding (`ui/guide.py`, V0.6.1) — full design in `docs/ONBOARDING.md`
+## Guided onboarding (`services/guide.py`, V0.6.1) — full design in `docs/ONBOARDING.md`
 Pure and deterministic (no I/O, no clock, no network). Owns three things the
 frontend cannot: durable progress, shape-validation of a user-editable
 preferences document, and which walkthrough to offer next.

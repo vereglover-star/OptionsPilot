@@ -63,7 +63,7 @@ class TestNormalize:
 
     def test_a_tab_is_NOT_validated_against_a_python_list(self):
         """Deliberate. Tab ids are frontend vocabulary; a backend copy of them
-        would be the two-catalogue drift `ui/guide.py` exists to avoid — a
+        would be the two-catalogue drift `services/guide.py` exists to avoid — a
         failure this project has paid for three times. Type and length only."""
         landing = ws.DEFAULTS["tab"]     # referenced, not spelled: this test
         assert landing == "dashboard"    # hardcoded "dash" and went stale once

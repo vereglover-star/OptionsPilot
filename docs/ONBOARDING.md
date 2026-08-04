@@ -1,7 +1,7 @@
 # ONBOARDING.md — the guided-onboarding, contextual-help and guardrail layer (V0.6.1)
 
 Read this before changing anything under the "guided onboarding" banner in
-`ui/static/index.html`, or `optionspilot/ui/guide.py`. It is the design document
+`ui/static/index.html`, or `optionspilot/services/guide.py`. It is the design document
 for V0.6.1, the same way `TRADING_INTELLIGENCE.md` is for V0.6.0 and
 `MARKET_DATA.md` is for the data subsystem.
 
@@ -36,7 +36,7 @@ Three consequences follow, and they are the three halves of the milestone
 ## 2. Architecture
 
 ```
-optionspilot/ui/guide.py        pure domain layer: state validation, merge
+optionspilot/services/guide.py        pure domain layer: state validation, merge
                                 semantics, feature→tutorial recommendations
         ▲                       (no I/O, no clock, no network)
         │
@@ -221,7 +221,7 @@ tooltip that has to be read is a tooltip that gets in the way.
 
 ## 7. Recommendations, and the line they do not cross
 
-> **`ui/guide.py` recommends TUTORIALS from FEATURE usage. It never recommends
+> **`services/guide.py` recommends TUTORIALS from FEATURE usage. It never recommends
 > trading behaviour.**
 
 That is `intelligence/`'s job, it does it from the trade record with a

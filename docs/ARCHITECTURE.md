@@ -837,7 +837,7 @@ flowchart LR
 Full design in `docs/ONBOARDING.md`. Shape only, here.
 
 ```
-ui/guide.py          pure domain: state validation, merge semantics,
+services/guide.py          pure domain: state validation, merge semantics,
    ▲                 feature-usage → tutorial recommendations
    │                 (no I/O, no clock, no network)
 ui/server.py         GET /api/guide · POST /api/guide/state

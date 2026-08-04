@@ -143,7 +143,8 @@ that's really what they want before writing any code.
   `docs/TRADING_INTELLIGENCE.md` §4. If you add an engine, a metric, a behaviour,
   a dimension or a lesson, read that §4 first; each of its rules exists because
   the naive alternative shipped something confidently wrong.
-- `optionspilot/ui/guide.py` — the guided-onboarding domain layer (V0.6.1). Two
+- `optionspilot/services/guide.py` — the guided-onboarding domain layer (V0.6.1;
+  moved out of `ui/` in V0.9.2-C6). Two
   rules govern it, both enforced by tests. **It shares only IDS with the
   frontend**: a `Recommendation` names a tutorial by id and the title comes from
   `GUIDE_TUTORIALS` in `index.html` at render time, because two catalogues
