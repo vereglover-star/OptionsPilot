@@ -285,7 +285,7 @@ the same commit that lands a row.**
 | C7 | ✅ | Raise `ServiceError` from every service (H-7 applied) | L | `99998fb` |
 | C8 | ✅ | Map `ServiceError` at the transport boundary | M | `7227223` |
 | C9 | ✅ | Per-key idempotency locking with request fingerprints (N-1, N-2) | M | `12a3809` |
-| C10 | ✅ | Enforce a `ui/server.py` size ceiling | S | pending |
+| C10 | ✅ | Enforce a `ui/server.py` size ceiling | S | `4bb94b5` |
 | C11 | ⏳ | Assert the registry is constructible without FastAPI | M | — |
 | C12 | ⏳ | Document the completed application layer | M | — |
 
