@@ -276,7 +276,7 @@ the same commit that lands a row.**
 
 | Commit | Status | Description | Size | Hash |
 |---|---|---|---|---|
-| C1 | ⏳ | The service error hierarchy — H-7's types, before anything raises them | S | — |
+| C1 | ✅ | The service error hierarchy — H-7's types, before anything raises them | S | `cefe4da` |
 | C2 | ⏳ | Extract `ChartService` — smallest first, establishes the pattern | L | — |
 | C3 | ⏳ | Extract `MarketDataService` — deliberately lock-free | XL | — |
 | C4 | ⏳ | Extract `TradingService` — orders, chain, account, scan lifecycle | XL | — |
