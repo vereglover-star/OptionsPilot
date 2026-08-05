@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, after M0-C2.
+**Last updated:** 2026-08-05, after M0-C3.
 
 ---
 
@@ -136,7 +136,7 @@ existing CSS class or id it replaces; blank means new.
 | Motion durations | `--t-fast/.13`, `--t-med/.22` | `--dur-instant/fast/medium/deliberate` | M0-C1 | ✅ values landed; adoption M0-C4 |
 | Motion curves | ➖ | `--ease-enter/exit/move` | M0-C1 | ✅ |
 | Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step ramp `--n-950…--n-050` | M0-C1 ramp, M0-C2 remap | ✅ nine names are now aliases onto the ramp; deleted M0-C4 |
-| Semantic layer | ➖ | `action.*`, `market.*`, `status.*`, `border.*`, `focus.*` | M0-C3 | ⬜ |
+| Semantic layer | ➖ | `--surface-*`, `--ink-*`, `--border-*`, `--action-*`, `--market-*`, `--status-*`, `--focus-*` | M0-C3 | ✅ defined; consumers M0-C4 |
 | Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ⬜ |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 9 roles in `rem` | M0-C5 | ⬜ |
 | Spacing scale | `--sp-1..6`, **0 uses** | 8 purpose-named steps, fully adopted | M0-C6 | ⬜ |
@@ -214,4 +214,5 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C3 | Semantic layer defined, including status tints (the design system named status colours but not their tint backgrounds — the existing `*-soft` tokens needed a home) and the colour-vision alternate as a scoped override; its Settings toggle lands in M6. |
 | 2026-08-05 | M0-C2 | The nine original surface/ink names became aliases onto the ramp; 306 use sites unchanged. `guide_check.py` had one assertion pinned to the literal page colour — rewritten to assert darkness, the property it is named for. |

@@ -521,8 +521,8 @@ mapping.
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
 | C1 | ✅ | UI V2 primitives added to the token block, consumed by nothing | `8c5586e` |
-| C2 | ✅ | The neutral ramp replaces the four ad-hoc surfaces | `pending` |
-| C3 | ⬜ | The semantic layer | — |
+| C2 | ✅ | The neutral ramp replaces the four ad-hoc surfaces | `f416e01` |
+| C3 | ✅ | The semantic layer | `pending` |
 | C4 | ⬜ | Components repointed; zero primitive references | — |
 | C5 | ⬜ | Nine type roles in `rem` | — |
 | C6 | ⬜ | The spacing scale, adopted | — |

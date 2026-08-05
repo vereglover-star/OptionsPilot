@@ -75,6 +75,98 @@
   --shadow-raised:0 4px 14px rgba(0,0,0,.35);
   --shadow-overlay:0 10px 34px rgba(0,0,0,.5);
   --scrim:rgba(11,13,16,.6);   /* n-950 at 60% — dims, never blurs */
+
+  /* ══ semantic layer (M0-C3) ════════════════════════════════════════════
+     The middle of the three token layers. A semantic token names the JOB a
+     colour does; components reference these and never a primitive. Every
+     contrast ratio below was measured, not estimated — see
+     DESIGN_SYSTEM_V2.md §10.2 for the full table. M0-C4 repoints the
+     components; until then these have no consumers. */
+
+  /* surfaces, by the role each plays (freeze F-2) */
+  --surface-page:var(--n-900);      /* canvas: the content area */
+  --surface-base:var(--n-850);      /* instrument */
+  --surface-sunken:var(--n-800);    /* recessed interior */
+  --surface-raised:var(--n-750);    /* popovers, dropdowns, modals */
+  --surface-cockpit:var(--n-950);   /* frame, nav rail, system strip */
+
+  /* ink */
+  --ink-primary:var(--n-050);       /* 16.44:1 on surface-base */
+  --ink-secondary:var(--n-200);     /* 10.78:1 */
+  --ink-muted:var(--n-400);         /*  5.64:1 */
+  --ink-disabled:var(--n-450);      /*  3.03:1 — exempt; a disabled control
+                                       always carries its reason in text at
+                                       full contrast, so the state is legible
+                                       even where the label is dim */
+
+  /* borders — three, because they have three different jobs. Only
+     border-control is required to clear 3:1: it is the sole boundary of a
+     control, and a 1.3:1 hairline is an input a low-vision user cannot
+     find. The other two are decorative and contrast is not required. */
+  --border-subtle:var(--n-700);     /* row and section dividers */
+  --border-default:var(--n-650);    /* edges of interactive elements */
+  --border-control:var(--n-500);    /*  3.32:1 — inputs, unfilled buttons */
+
+  /* action — ONE accent, meaning "the primary action here", at most once
+     per view. Never green: success is the accent so that green keeps
+     meaning GAIN and never needs disambiguating by context. */
+  --action-primary-fill:#2f6fe0;    /*  3.86:1 on surface-base */
+  --action-primary-ink:#ffffff;     /*  4.70:1 on the fill */
+  --action-primary-text:#6fa8ff;    /*  7.52:1 — links, active nav */
+  --action-primary-tint:#111c2e;    /* selected-row / active-segment wash */
+
+  /* market — two tiers per direction, because text and marks have
+     different requirements: text needs 4.5:1 against the surface, chart
+     marks need the perceptual lightness band where hue identity survives
+     colour-vision deficiency. One value cannot do both. */
+  --market-pos-text:#3ddc97;        /* 10.25:1 — P&L, percentages */
+  --market-pos-mark:#16a97a;        /*  6.03:1 — up candles, bars */
+  --market-pos-tint:#0c2318;
+  --market-pos-fill:#12805c;        /*  4.92:1 with white ink */
+  --market-neg-text:#ff6b6b;        /*  6.53:1 */
+  --market-neg-mark:#ef4e52;        /*  5.07:1 */
+  --market-neg-tint:#2a1416;
+  --market-neg-fill:#c43c46;        /*  5.14:1 with white ink */
+  --market-neutral:var(--n-400);    /* unchanged, zero, flat */
+
+  /* status — reserved. Never borrows a market colour or the accent, and
+     always ships with a glyph AND a label; colour alone is never the
+     state. status-neutral is what "insufficient evidence" looks like: it
+     is deliberately grey, deliberately not empty, and deliberately not the
+     same as disabled — "we could not measure this" is a finding, not a
+     broken control. */
+  --status-info:#6fa8ff;
+  --status-info-tint:#111c2e;
+  --status-caution:#f5c044;         /* 10.79:1 */
+  --status-caution-tint:#2b2113;
+  --status-critical-tint:#2a1416;
+  --status-critical:#ff6b6b;        /* shares its value with market-neg-text;
+                                       safe because a P&L cell is never a
+                                       system state and a banner is never a
+                                       number. Recorded so a change to one is
+                                       understood to touch the other. */
+  --status-neutral:var(--n-400);
+
+  /* focus — a DUAL ring, and not for decoration. A focus indicator must
+     clear 3:1 against whatever it sits on, and an element's own colour is
+     not known in advance: measured, the ring is 2.75:1 directly on the
+     primary fill, which fails. The dark gap gives it a guaranteed backdrop
+     (ring vs gap 11.38:1, gap vs fill 4.14:1), so the indicator passes on
+     any surface in the system including a saturated one. */
+  --focus-ring:#a8c7ff;             /* 10.59:1 on surface-base */
+  --focus-gap:var(--n-950);
+}
+
+/* The colour-vision alternate (DESIGN_SYSTEM_V2.md §2.6). Measured, the
+   default green/red pair separates by ΔE 6.7–8.1 under deuteranopia — at or
+   below the safety target — against ΔE 27.3 for blue/orange. Note that the
+   ACCENT moves with it: in this palette blue means gain, so an accent that
+   stayed blue would make every primary button read as positive. That is the
+   whole reason the accent is a token rather than a constant. The Settings
+   toggle that adds this class lands with Settings › Appearance (M6). */
+html.market-alt {
+  --market-pos-mark:#3987e5; --market-neg-mark:#e0701a;
+  --action-primary-fill:#7c5cf0;
 }
 * { box-sizing:border-box; margin:0; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
