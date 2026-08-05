@@ -5,19 +5,26 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — implement the three specification documents.** All three are
-      written and are the authority for every future UI change; none of it is
-      built. `UI_V2_DESIGN.md` is the vision (principles, personas, Pilot,
-      roadmap, metrics). `UI_V2_WIREFRAMES.md` is the layout blueprint — 24
-      aligned wireframes and a fourteen-heading specification per destination.
-      `DESIGN_SYSTEM_V2.md` is the visual language — verified colour tokens,
-      type and spacing scales, 27 components with all seven states, a closed
-      motion catalogue, and component governance. Read `UI_V2_WIREFRAMES.md` §13
-      first: it separates what is settled from the five open decisions that
-      block specific layouts, and lists the browser-check assertions each phase
-      must ship. `DESIGN_SYSTEM_V2.md` §12.6 adds nine design-system health
-      checks for the same suite, and §13 is the delta from the current `:root`
-      tokens for whoever starts Phase 0.
+- [ ] **UI V2 — start M0 (V0.10.0, Foundation).** The design is **frozen**
+      across four documents and the implementation plan is written; none of it is
+      built. **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
+      milestones, ~85 commits, with §12's commit map as the authority for which
+      commit comes next. M0 is invisible by design (tokens, type and spacing
+      scales, two new static gates) and everything after it either consumes M0 or
+      duplicates it.
+
+      The design documents, for reference rather than for reading first:
+      `UI_V2_DESIGN.md` (philosophy, personas, Pilot, metrics),
+      `UI_V2_WIREFRAMES.md` (24 wireframes, a fourteen-heading spec per
+      destination), `DESIGN_SYSTEM_V2.md` (verified colour tokens, scales, 27
+      components, closed motion catalogue), `UI_V2_VISUAL_EXPLORATION.md` (the
+      chosen direction, **Flight Deck**, and its 21-point freeze).
+
+      **Three decisions want answering before M0 can finish:** the typeface
+      question blocks M0-C5, the light-theme timing blocks M0-C3, and the
+      Surface-Level sync question blocks M1-C1. All eight open decisions are in
+      `ROADMAP-UI-V2.md` §11 with the frozen documents' recommendations, which
+      are the default if no decision is taken.
       Ten phases with stated dependencies and exit criteria (§16). Start at
       **Phase 0 (foundation)** — the three-layer token architecture, the type
       and spacing scales replacing ~14 hardcoded font sizes, Surface Level and

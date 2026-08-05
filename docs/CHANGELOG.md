@@ -4,6 +4,105 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2: the implementation plan
+
+*Documentation only. No code, no markup, no behaviour change, no new tests.*
+
+`docs/ROADMAP-UI-V2.md` — with the design frozen across four documents, this is
+the engineering plan that turns it into work: ten independently shippable
+milestones (V0.10.0 … V1.0.0), ~85 commits sized like this repository's existing
+ones, each leaving the application working and each milestone releasable on its
+own. It contains no design decisions; where a question of appearance or behaviour
+arises it is answered by citation, and §11 records the eight genuinely open ones
+rather than resolving them.
+
+**The problem it solves is not the design — it is that `index.html` is a single
+8,253-line file with no build step, and the redesign changes its navigation,
+layout and visual language at once.** A rewrite would be a months-long branch
+that cannot be reviewed, released or tested until finished. The strategy that
+avoids it: **separate the shell from the content and migrate them on different
+schedules.** The six new destinations can host the nine existing sections
+unchanged, so M2 ships a genuinely better navigation over content nobody has
+touched — reviewable, releasable, and reversible by a live-editable
+`ui.shell_v2` flag. M3–M6 then rebuild one destination's interior at a time and
+delete the legacy markup each replaces.
+
+Two migration costs were measured rather than assumed, and both got dedicated
+commits: **38 `data-tab` selector references across the six browser suites** and
+**18 guided-tour step targets** are coupled to the current nine-tab navigation
+and all break at M2. The tour's tutorial *ids* are deliberately left untouched so
+`TestCatalogueContract` keeps asserting the frontend/backend catalogue match in
+both directions.
+
+§4 enumerates the nine backend surfaces the redesign needs — open risk, the
+status-line view model, workspace context, quick-pick resolution, the review view
+model, notification read state, Pilot's composition — and notes that **none is a
+new capability**: every one re-presents something the engine already computes,
+which is what keeps "behaviour does not change" true. §5 adds seven gates and
+updates six, because `index.html` still has no automated coverage and the check
+scripts are the only thing between a UI change and a silent regression. §9's risk
+register carries twelve entries, several of them this repository's own recorded
+hazards: `chart_check`'s live-provider flakiness, the pywebview message-pump
+deadlock that pop-out windows would walk straight into, the two orthogonal mode
+axes the Flight Status popover must not couple, and context compaction losing the
+plan — which is why §12's commit map is updated in the same commit that lands a
+row.
+
+## [Uncommitted] — UI V2: visual direction chosen and frozen
+
+*Documentation only. No code, no markup, no behaviour change, no new tests.*
+
+`docs/UI_V2_VISUAL_EXPLORATION.md` — three complete visual directions, a
+comparison, a recommendation and a design freeze. With the three specification
+documents frozen, this settles the one thing they deliberately left open: what
+the product actually looks like.
+
+The document opens by naming the awkwardness rather than papering over it. A
+visual exploration arriving *after* a design system has been frozen is a
+different exercise, so §0 states exactly which twelve variables a direction may
+still set — surface strategy, border policy, radius character (no document had
+ever given the radii values), density expression, type dominance, panel and card
+treatment, navigation appearance, chart chrome weight, accent budget, motion
+subset, iconography presence — and which decisions are not on the table. Each
+direction closes with a conformance ledger naming anything it would need
+unfrozen, and what that costs.
+
+**A — Quiet** (Linear/Arc/Apple): one continuous dark sheet, no boxes, hierarchy
+from space and weight. **B — Terminal** (Thinkorswim/Bloomberg): a framed
+instrument grid, uppercase labels everywhere, maximum density. **C — Flight
+Deck**: a fixed cockpit — frame, rail, strip — around a canvas carrying
+instruments, where an instrument is a surface step rather than a border and its
+interior is recessed when it scrolls.
+
+**Flight Deck is recommended, and two of the three are eliminated by the frozen
+spec rather than by taste.** Surface Level requires the same product to serve a
+beginner at Level 1 and a professional at Level 4 with one visual identity. Quiet
+cannot render Level 4 — compress it and it is Terminal. Terminal cannot render
+Level 1 — remove the frames and it is Quiet. Flight Deck's identity is zoning
+rather than space or framing, so the zones are unchanged between the two levels
+and only the row height inside them differs.
+
+The aesthetic argument is the second one: **framing must be a signal.** In Quiet
+nothing is framed and in Terminal everything is, so in both a frame communicates
+nothing. Flight Deck reserves the canvas — an element with no instrument around
+it is either the most important thing on screen or explicitly not an instrument —
+and the product has exactly four such elements: the status line, the critical
+banner, an inline guardrail message, and the commit control. On Terminal's Home,
+the status line is unframed prose in a world of frames and therefore reads as the
+*least* important element, which inverts the hierarchy `UI_V2_WIREFRAMES.md` §2.3
+sets.
+
+§8 is the design freeze: 21 numbered decisions covering the five surfaces, the
+five places a border may appear, radius values chosen so an instrument and its
+interior are visibly concentric, density per Surface Level, the typography
+assignment per element, the asymmetric chart chrome table, the colour budget, the
+thirteen animations used (row-enter fade and skeleton shimmer deliberately
+omitted — a shimmering instrument reads as a malfunctioning one), the
+shell-renders-first loading model, the shape invariant that a screen looks
+identical across loading/empty/populated/failed, the canvas reservation, and
+per-screen eye-path acceptance targets. Three new conformance checks join the
+design-system health suite.
+
 ## [Uncommitted] — UI V2: the visual language
 
 *Documentation only. No code, no markup, no behaviour change, no new tests.*

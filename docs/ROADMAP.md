@@ -272,6 +272,39 @@ documented unit before the next begins (see `CLAUDE.md`).
 
 ## Planned
 
+### UI V2 — V0.10.0 … V1.0.0 (ten milestones, not started)
+
+The next major body of work, and the first since the engineering layers
+matured that is primarily about the user. The design is complete and frozen
+across four documents — `UI_V2_DESIGN.md` (philosophy),
+`UI_V2_WIREFRAMES.md` (layout), `DESIGN_SYSTEM_V2.md` (visual language) and
+`UI_V2_VISUAL_EXPLORATION.md` (the chosen direction and its freeze). None of
+it is built.
+
+**The implementation plan is `ROADMAP-UI-V2.md`** — ten independently
+shippable milestones, ~85 commits, each leaving the application working and
+each milestone releasable on its own. Its commit map is the authority for
+which commit comes next.
+
+**`UI_MIGRATION_TRACKER.md` is the authority for what has already moved** —
+every UI surface, component, token group, backend surface and gate, with its
+legacy location, its new owner, its migration commit, its status, when its
+legacy code is deleted, and which checks travel with it. It is updated in the
+same commit that changes a row, so no session has to rediscover migration
+state.
+
+The migration strategy in one line: **separate the shell from the content
+and migrate them on different schedules.** M2 ships the new navigation
+hosting the existing section markup unchanged, behind a live-editable
+`ui.shell_v2` flag; M3–M6 then rebuild one destination's interior at a time
+and delete the legacy markup each replaces. Nothing requires a long-lived
+branch, and every step is reviewable.
+
+Two costs are measured rather than assumed: **38 `data-tab` selector
+references across the six browser suites** and **18 guided-tour step
+targets** are coupled to the current nine-tab navigation and all break at
+M2. Both have dedicated commits.
+
 ### V0.9.2 — Complete the service extraction (COMPLETE, 2026-08-04)
 
 Finding C-5: application logic still resident in the transport layer. V0.7.0
