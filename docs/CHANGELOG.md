@@ -4,6 +4,53 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2 M0: the token foundation (V0.10.0)
+
+*Nine commits. Nothing visible. Two new gates, five latent defects fixed.*
+
+The first milestone of the UI V2 migration, and the one designed to be
+invisible: the application renders as it did before, and everything that
+changed is underneath it.
+
+`index.html` now has **three token layers with a one-way dependency** — a
+twelve-step neutral ramp, a semantic layer naming the job each colour does, and
+components that reference only the semantic layer. 477 `var()` references were
+repointed property-aware rather than renamed, because several tokens were doing
+more than one job: `--accent` alone appeared as a fill, as text, as a border and
+as a focus outline. The type scale moved to `rem`, which collapsed large-text
+mode from nine parallel overrides to a single root change. The spacing scale —
+defined during V3 and never once used — was replaced with the frozen eight steps
+and adopted at all 173 occurrences that already matched exactly.
+
+Two accessibility floors the app did not meet are now met and asserted. Focus is
+a **dual ring**: measured, a single ring is 2.75:1 directly on the primary fill
+and fails, while the offset plus a dark gap gives 11.38:1. Every form control
+carries the one border token required to clear 3:1, because for an input the
+border is the only thing saying where the control is.
+
+**Two static gates** join `verify.ps1`, taking it from 13 to 15. `token_check`
+enforces the layering, resolves every `var()`, and **recomputes sixteen contrast
+floors from the tokens in the file** rather than trusting the numbers in the
+design document. `motion_check` enforces the closed animation catalogue, keeps
+the chart canvas exempt, and verifies reduced motion on both channels.
+
+The gates paid for themselves immediately, finding five defects that predate
+this work: **eight `var()` references to properties this codebase has never
+defined** (`--danger`, `--success`, `--elev-2`, `--text-dim`, `--panel`), so
+those declarations had been rendering unthemed; a browser check pinned to a
+literal page colour; and a browser check that compared the empty string to
+itself and passed vacuously. Writing the motion gate also corrected an
+assumption in the opposite direction — the app routes the OS reduced-motion
+preference and its own toggle through one class rather than a media query, which
+is a better mechanism than the gate first looked for.
+
+Two pieces of debt are **ratcheted rather than paid**, and the ratchets may only
+fall: 51 uses of a 13px type step that is not in the frozen scale, and 313
+off-scale spacing values. Collapsing either is a density change no gate can
+verify — the surfaces at risk are the option chain and the provider dashboard at
+1280px — so each destination retires its own in M3–M6, where the markup is
+re-authored and the layout can actually be checked.
+
 ## [Uncommitted] — UI V2: the implementation plan
 
 *Documentation only. No code, no markup, no behaviour change, no new tests.*

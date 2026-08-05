@@ -5,13 +5,19 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — start M0 (V0.10.0, Foundation).** The design is **frozen**
-      across four documents and the implementation plan is written; none of it is
-      built. **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
-      milestones, ~85 commits, with §12's commit map as the authority for which
-      commit comes next. M0 is invisible by design (tokens, type and spacing
-      scales, two new static gates) and everything after it either consumes M0 or
-      duplicates it.
+- [ ] **UI V2 — M0 complete; start M1 (V0.11.0, workspace context).** The
+      design is **frozen** across four documents; the implementation plan is
+      written and **M0 of ten milestones is built**.
+      **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
+      milestones, ~85 commits, with §12's commit map as the authority for
+      which commit comes next. **M0 landed in 9 commits**
+      (`8c5586e`…`6f859bb`): three token layers with a one-way dependency, the
+      type scale in `rem`, the spacing scale adopted, a dual focus ring, and
+      two static gates taking `verify.ps1` from 13 to 15. Nothing visible
+      changed, which was the exit criterion. **M1 is next** — Surface Level
+      and workspace symbol/timeframe context in `RuntimeSettings`, mostly
+      backend and therefore mostly `pytest`-covered.
+      `UI_MIGRATION_TRACKER.md` is the authority for what has already moved.
 
       The design documents, for reference rather than for reading first:
       `UI_V2_DESIGN.md` (philosophy, personas, Pilot, metrics),
@@ -20,23 +26,29 @@ is. This file is the flat, actionable checklist version.
       components, closed motion catalogue), `UI_V2_VISUAL_EXPLORATION.md` (the
       chosen direction, **Flight Deck**, and its 21-point freeze).
 
-      **Three decisions want answering before M0 can finish:** the typeface
-      question blocks M0-C5, the light-theme timing blocks M0-C3, and the
-      Surface-Level sync question blocks M1-C1. All eight open decisions are in
-      `ROADMAP-UI-V2.md` §11 with the frozen documents' recommendations, which
-      are the default if no decision is taken.
-      Ten phases with stated dependencies and exit criteria (§16). Start at
-      **Phase 0 (foundation)** — the three-layer token architecture, the type
-      and spacing scales replacing ~14 hardcoded font sizes, Surface Level and
-      the shared symbol/timeframe context plumbed through `RuntimeSettings`.
-      Nothing visible ships in Phase 0, and every later phase either consumes
-      it or duplicates it. **Phase 2 (navigation) is the highest-risk phase**
-      and ships behind a switch for one release. Rule for all of them: no phase
-      ships without its own browser check, because `index.html` still has no
-      automated test coverage. Absorbs the still-open `ROADMAP-V3-UX.md`
+      **Two decisions are wanted before M1-C1 and M2:** whether Surface Level
+      syncs across devices (shapes the persisted value), and whether the light
+      theme ships with V2 or after. M0 proceeded on the frozen documents'
+      recommendations, which `ROADMAP-UI-V2.md` §11 makes the default when no
+      decision is taken; all eight open decisions are listed there.
+
+      **M2 (navigation) is the highest-risk milestone** and ships behind
+      `ui.shell_v2` for one release. Standing rule: no commit ships a UI
+      surface without its check, because `index.html` still has no automated
+      coverage. The programme absorbs the still-open `ROADMAP-V3-UX.md`
       findings H5 (notification centre), N2 (chart↔chain) and N4 (toast
-      stacking). Eight open decisions in §19 need the user before the phases
-      that depend on them — #1 (does Pilot get an LLM) gates Phase 9.
+      stacking).
+
+- [ ] **UI V2 debt, ratcheted in `scripts/token_check.py` and
+      `scripts/motion_check.py`.** Four numbers that may only fall, each
+      deliberately deferred out of M0 because collapsing them is a visible
+      change to a surface M0 was not rebuilding: **51** uses of a 13px type
+      step absent from the frozen scale, **313** off-scale spacing values,
+      **3** hardcoded transition durations, and **3** prohibited keyframes
+      (`shimmer`, `gdpulse`, `gdnudge` — the freeze omits the skeleton shimmer,
+      and §7.4 forbids animating to attract attention). Retire each with the
+      destination that owns it in M3–M6, and lower the ratchet in the same
+      commit.
 
 - [x] **V0.9.0 — the verification floor** — done 2026-08-02, 11 commits
       (`2707a01`…`e403da6`), 2065 → 2158 in the suite. Version constant
