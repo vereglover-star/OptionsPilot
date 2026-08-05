@@ -107,6 +107,11 @@ class TestNormalize:
         {"layouts": "not a dict"}, {"recent_symbols": {"not": "a list"}},
         {"sidebar_collapsed": "yes"}, {"extended_hours": 1},
         {"symbol": None}, {"timeframe": []}, {"updated": 12345},
+        {"expiry": 20260918}, {"expiry": "not-a-date"}, {"expiry": "2026-13-45"},
+        {"contract": "SPY260918C00450000"}, {"contract": []},
+        {"contract": {"strike": float("nan")}},
+        {"contract": {"symbol": "SPY", "expiry": "2026-09-18",
+                      "strike": float("inf"), "right": "call"}},
     ])
     def test_no_input_can_make_normalize_raise(self, garbage):
         """The actual guarantee. The failure mode for a bad preferences file
@@ -114,6 +119,116 @@ class TestNormalize:
         doc = ws.normalize(garbage)
         assert set(doc) == set(ws.DEFAULTS) | {"updated"}
         json.dumps(doc, allow_nan=False)   # and it must survive the wire
+
+
+def a_contract(**over) -> dict:
+    return {"symbol": "SPY", "expiry": "2026-09-18",
+            "strike": 450.0, "right": "call", **over}
+
+
+class TestContractContext:
+    """UI V2 M1-C2 — §4.5's second and third continuity guarantees."""
+
+    def test_nothing_is_selected_by_default(self):
+        doc = ws.normalize(None)
+        assert doc["expiry"] == "" and doc["contract"] is None
+
+    def test_a_well_formed_selection_round_trips(self):
+        doc = ws.normalize({"symbol": "SPY", "expiry": "2026-09-18",
+                            "contract": a_contract()})
+        assert doc["expiry"] == "2026-09-18"
+        assert doc["contract"] == a_contract()
+
+    def test_an_expiry_is_validated_as_a_real_date(self):
+        """Same test `timeframe` is held to and for the same reason: this one
+        reaches `/api/chain`, which parses it."""
+        assert ws.normalize({"expiry": "2026-02-30"})["expiry"] == ""
+        assert ws.normalize({"expiry": "18/09/2026"})["expiry"] == ""
+        assert ws.normalize({"expiry": " 2026-09-18 "})["expiry"] == "2026-09-18"
+
+    @pytest.mark.parametrize("field,bad", [
+        ("expiry", ""), ("expiry", "nope"), ("expiry", None),
+        ("strike", 0), ("strike", -5), ("strike", "450"), ("strike", None),
+        ("strike", True), ("strike", ws.MAX_STRIKE + 1),
+        ("right", "CALL"), ("right", "c"), ("right", None), ("right", 1),
+        ("symbol", ""), ("symbol", None), ("symbol", 7),
+    ])
+    def test_a_contract_is_all_or_nothing(self, field, bad):
+        """A contract missing a usable strike is not a partially-selected
+        contract; keeping the readable half hands the ticket something it
+        cannot price.
+
+        `("strike", True)` is the one worth reading twice: `isinstance(True,
+        int)` is True in Python, so a naive check stores a $1.00 strike.
+        """
+        doc = ws.normalize({"symbol": "SPY", "contract": a_contract(**{field: bad})})
+        assert doc["contract"] is None
+
+    def test_a_missing_field_drops_the_whole_contract(self):
+        for field in ("symbol", "expiry", "strike", "right"):
+            partial = {k: v for k, v in a_contract().items() if k != field}
+            assert ws.normalize({"symbol": "SPY", "contract": partial})["contract"] is None
+
+    def test_a_contract_for_another_symbol_is_dropped_on_read(self):
+        """The one cross-field invariant. A stored SPY call is meaningless once
+        the workspace symbol is QQQ, and keeping it would break §4.5's FIRST
+        guarantee (one symbol context) in order to serve its third."""
+        doc = ws.normalize({"symbol": "QQQ", "contract": a_contract()})
+        assert doc["contract"] is None
+
+    def test_changing_the_symbol_drops_the_selection(self):
+        state = ws.merge(None, {"symbol": "SPY", "contract": a_contract()})
+        assert state["contract"] == a_contract()
+        state = ws.merge(state, {"symbol": "QQQ"})
+        assert state["contract"] is None
+
+    def test_selecting_a_row_for_a_symbol_switched_in_the_same_patch_survives(self):
+        """The client flow that would break under a naive "clear on symbol
+        change" rule written in `merge` instead of in `normalize`."""
+        state = ws.merge(None, {"symbol": "QQQ",
+                                "contract": a_contract(symbol="QQQ")})
+        assert state["contract"] == a_contract(symbol="QQQ")
+
+    def test_a_symbol_change_keeps_the_timeframe_and_the_expiry(self):
+        """§4.5-2 says the timeframe survives a symbol change. An expiry does
+        too — a date means the same thing under any underlying — and only the
+        contract, which names an instrument, does not."""
+        state = ws.merge(None, {"symbol": "SPY", "timeframe": "15m",
+                                "expiry": "2026-09-18",
+                                "contract": a_contract()})
+        state = ws.merge(state, {"symbol": "QQQ"})
+        assert state["timeframe"] == "15m"
+        assert state["expiry"] == "2026-09-18"
+        assert state["contract"] is None
+
+    def test_the_selection_survives_a_tab_change(self):
+        """'...and remains selected if the user visits Research and returns.'"""
+        state = ws.merge(None, {"symbol": "SPY", "contract": a_contract()})
+        state = ws.merge(state, {"tab": "backtest"})
+        state = ws.merge(state, {"tab": "trade"})
+        assert state["contract"] == a_contract()
+
+    def test_clearing_is_expressible(self):
+        state = ws.merge(None, {"symbol": "SPY", "expiry": "2026-09-18",
+                                "contract": a_contract()})
+        state = ws.merge(state, {"contract": None, "expiry": ""})
+        assert state["contract"] is None and state["expiry"] == ""
+
+    def test_a_reset_clears_the_selection(self):
+        store = FakeStore({"symbol": "SPY", "expiry": "2026-09-18",
+                           "contract": a_contract()})
+        view = WorkspaceService(store).reset()
+        assert view.contract is None and view.expiry == ""
+
+    def test_a_selection_survives_the_wire_and_a_restart(self):
+        store = FakeStore()
+        WorkspaceService(store).update({"symbol": "SPY", "expiry": "2026-09-18",
+                                        "contract": a_contract()})
+        json.dumps(store.doc, allow_nan=False)      # what settings.json holds
+        restarted = WorkspaceService(FakeStore(store.doc)).get()
+        assert restarted.contract == a_contract()
+        assert restarted.expiry == "2026-09-18"
+        json.dumps(restarted.to_dict(), allow_nan=False)
 
 
 class TestMerge:

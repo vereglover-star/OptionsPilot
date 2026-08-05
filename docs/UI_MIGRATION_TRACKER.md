@@ -153,7 +153,7 @@ All are re-presentations of existing computations — no new capability.
 | Surface | Home | Milestone | Status | Tests |
 | --- | --- | --- | --- | --- |
 | Surface Level | `config/runtime.py` | M1-C1 | ✅ | `tests/test_runtime_settings.py` |
-| Workspace symbol / timeframe / selection | `services/workspace.py` | M1-C2 | ⬜ | `tests/test_services_workspace.py` |
+| Workspace symbol / timeframe / selection | `services/workspace.py` | M1-C2 | ✅ | `tests/test_services_workspace.py` |
 | Open risk | `services/portfolio.py` | M3-C1 | ⬜ | `tests/test_portfolio.py` |
 | Status-line view model | `services/` (new) | M3-C2 | ⬜ | new test file |
 | Quick-pick intent resolution | `services/contracts.py` | M4-C1 | ⬜ | `tests/test_contracts.py` |
@@ -212,6 +212,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 
 | Date | Milestone | Change |
 | --- | --- | --- |
+| 2026-08-05 | M1-C2 | The workspace document gained `expiry` and `contract`, completing §4.5's definition of context (symbol, timeframe, expiry, contract). One **cross-field** invariant, checked in `normalize` rather than on the symbol-change path so it holds for a hand-edited file too: a contract whose symbol is not the workspace symbol is dropped. `expiry` is validated as a real ISO date and `right` against `OptionRight`, on the same test that already admits `Timeframe` — the domain's own vocabulary, defined in one place. |
 | 2026-08-05 | M1-C1 | `surface_level` landed in `RuntimeSettings` (1–4, default **3 Full** — the only default that removes nothing from an installation that predates the field). Two product decisions recorded in `ROADMAP-UI-V2.md` §11: Surface Level is **local only** (its own `sync.py` inventory row, `PREFERENCES`/`DEVICE_ONLY`, kept OUT of the workspace document because that one is meant to follow a user to a second client), and the **light theme ships after V2**. |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |

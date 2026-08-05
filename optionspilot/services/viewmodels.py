@@ -194,6 +194,14 @@ class WorkspaceView(ViewModel):
     ticket_chart_open: bool
     recent_symbols: list
     layouts: dict
+    #: The selected expiry ("" for none) and chain row (None for none) — UI V2
+    #: M1-C2. The contract is a plain dict of primitives, not an
+    #: `OptionContract`: this file's first rule is that a view model holds no
+    #: domain object, and a *selection* is not a market snapshot. It names the
+    #: instrument the user picked; whether that instrument still has a bid is
+    #: the chain's question, asked fresh every time.
+    expiry: str = ""
+    contract: dict | None = None
     updated: str | None = None
 
 

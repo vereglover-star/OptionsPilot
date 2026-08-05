@@ -12,7 +12,7 @@ Surface Level), after closing **M0 — Foundation**.
 
 **Continue UI V2 · M1.** `docs/ROADMAP-UI-V2.md` §12 is the authority for which
 commit comes next — read it first, not this file. `verify.ps1` is green across
-**15 gates** at 2517 tests.
+**15 gates** at 2552 tests.
 
 The programme is ten milestones, M0…M9, ending at V1.0.0. Four frozen design
 documents precede it and **must not be modified**: `UI_V2_DESIGN.md` (why),

@@ -28,7 +28,13 @@ So this service is the same shape as `services/guide.py`, on purpose:
     two-catalogues drift the guide layer is explicitly built to avoid, so they
     are checked for type and length only. `timeframe` IS validated, because
     `core.models.Timeframe` is the domain's own vocabulary and the one place it
-    is defined.
+    is defined — and since M1-C2 so are `expiry` (a real ISO date) and the
+    selected contract's `right` (`core.models.OptionRight`), on the same test.
+  * **One cross-field invariant, checked on every read.** A selected contract
+    belongs to an underlying, so a contract whose symbol is not the workspace
+    symbol is dropped rather than carried. Every other rule here validates a
+    field in isolation; this one cannot, because the failure it prevents is a
+    ticket holding a SPY call while the workspace says QQQ.
 
 What it deliberately does NOT own: chart drawings. Those are user work-product
 with their own versioned on-disk shape and a per-symbol key, they are far larger
@@ -39,7 +45,10 @@ remain in `localStorage` and remain the last client-trapped domain — see
 
 from __future__ import annotations
 
-from optionspilot.core.models import Timeframe
+import math
+from datetime import date
+
+from optionspilot.core.models import OptionRight, Timeframe
 from optionspilot.services.viewmodels import WorkspaceView
 
 #: How many recently-viewed symbols to remember. Small on purpose: this is a
@@ -56,6 +65,13 @@ MAX_NAME = 60
 
 #: Cap on any single free-form string (tab id, sort key, indicator name).
 MAX_TOKEN = 40
+
+#: Upper bound on a stored strike. Not a market rule — a bound on what a
+#: preferences file may contain. `math.isfinite` rejects `inf` and `nan`; this
+#: rejects the merely absurd, because everything in this document is written
+#: from client input and lands in the same `settings.json` the trading mode
+#: lives in.
+MAX_STRIKE = 1_000_000
 
 #: The shipped workspace. Every value here is the pre-V0.7.0 `localStorage`
 #: default, so a user with no stored workspace sees exactly what they saw
@@ -79,6 +95,18 @@ DEFAULTS: dict = {
     "ticket_chart_open": False,
     "recent_symbols": [],
     "layouts": {},
+    # UI V2 M1-C2. The other two thirds of the context `UI_V2_DESIGN.md` §4.5
+    # guarantees: "the symbol, timeframe, expiry and contract currently under
+    # the user's attention, carried across every destination". Symbol and
+    # timeframe were already here; these two complete it.
+    #
+    # "" and None are the empty selections rather than a sentinel expiry or a
+    # zero strike, because "no contract is selected" is a real and common state
+    # — it is what the ticket shows on first launch — and encoding it as a
+    # value would make every consumer test for that value instead of for
+    # absence.
+    "expiry": "",
+    "contract": None,
 }
 
 
@@ -125,6 +153,70 @@ def _timeframe(value, default: str) -> str:
         return str(Timeframe.from_string(value.strip()))
     except ValueError:
         return default
+
+
+def _expiry(value, default: str) -> str:
+    """An ISO date, or "" for none.
+
+    Validated against `date.fromisoformat` for the same reason `timeframe` is
+    validated against `Timeframe`: it is not cosmetic. An expiry reaches
+    `/api/chain`, which parses it, and a value that cannot be parsed produces a
+    server error in the middle of a chain load rather than an empty strip.
+    """
+    if not isinstance(value, str):
+        return default
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    try:
+        return date.fromisoformat(cleaned).isoformat()
+    except ValueError:
+        return default
+
+
+def _strike(value) -> float | None:
+    # bool BEFORE the number check: `isinstance(True, int)` is True in Python,
+    # so `"strike": true` would otherwise be stored as a $1.00 strike.
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or not (0 < value <= MAX_STRIKE):
+        return None
+    return float(value)
+
+
+def _contract(value, symbol: str) -> dict | None:
+    """The selected chain row, or None.
+
+    Four fields, and **all or nothing**: a contract missing its strike is not a
+    partially-selected contract, it is a bug in whatever wrote it, and keeping
+    the readable half would hand the ticket something it cannot price.
+
+    `right` is validated against `core.models.OptionRight` on the same
+    principle that admits `Timeframe` and excludes tab ids: it is the domain's
+    own vocabulary, defined in exactly one place, so checking against it cannot
+    become a second catalogue that drifts.
+
+    The `symbol` argument enforces the cross-field invariant, and it is the one
+    rule here that is a real decision: **a contract belongs to an underlying.**
+    A stored SPY 450 call is meaningless once the workspace symbol is QQQ, and
+    keeping it would break §4.5's FIRST guarantee (one symbol context) in order
+    to serve its third (one contract selection). Checking it in `normalize`
+    rather than only on the symbol-change path means a hand-edited file cannot
+    smuggle a mismatch in either.
+    """
+    if not isinstance(value, dict):
+        return None
+    underlying = _symbol(value.get("symbol"), "")
+    expiry = _expiry(value.get("expiry"), "")
+    strike = _strike(value.get("strike"))
+    right = value.get("right")
+    right = right if right in {r.value for r in OptionRight} else None
+    if not underlying or not expiry or strike is None or right is None:
+        return None
+    if underlying != symbol:
+        return None
+    return {"symbol": underlying, "expiry": expiry,
+            "strike": strike, "right": right}
 
 
 def _string_list(value, *, cap: int) -> list[str]:
@@ -183,12 +275,15 @@ def normalize(state: dict | None) -> dict:
     callers are a startup read of a user-editable JSON file and a POST body.
     """
     raw = state if isinstance(state, dict) else {}
+    symbol = _symbol(raw.get("symbol"), DEFAULTS["symbol"])
     return {
         "tab": _token(raw.get("tab"), DEFAULTS["tab"]),
         "sidebar_collapsed": _flag(raw.get("sidebar_collapsed"),
                                    DEFAULTS["sidebar_collapsed"]),
-        "symbol": _symbol(raw.get("symbol"), DEFAULTS["symbol"]),
+        "symbol": symbol,
         "timeframe": _timeframe(raw.get("timeframe"), DEFAULTS["timeframe"]),
+        "expiry": _expiry(raw.get("expiry"), DEFAULTS["expiry"]),
+        "contract": _contract(raw.get("contract"), symbol),
         "indicators": _string_list(raw.get("indicators"), cap=24),
         "extended_hours": _flag(raw.get("extended_hours"),
                                 DEFAULTS["extended_hours"]),
@@ -217,6 +312,16 @@ def merge(current: dict | None, patch: dict | None, *, now: str | None = None) -
     sets `symbol` promotes that symbol to the head of the recents, so a client
     never has to maintain the list itself and two clients cannot disagree about
     its order.
+
+    **A patch that changes the symbol drops the selected contract**, and it
+    does so through `normalize`'s cross-field check rather than through a rule
+    written here — so the invariant holds for a document read off disk as well
+    as for one arriving from a client, and there is only one place it can be
+    got wrong. A patch that sets `symbol` and `contract` together (selecting a
+    chain row for a symbol the client just switched to) is normalised after
+    both are applied, so the selection survives. `timeframe` and `expiry` are
+    unaffected by a symbol change: §4.5-2 says timeframe survives one, and a
+    date means the same thing under any underlying.
     """
     base = normalize(current)
     incoming = patch if isinstance(patch, dict) else {}
