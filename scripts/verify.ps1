@@ -29,7 +29,7 @@ $ErrorActionPreference = "Continue"
 
 $results = [ordered]@{}
 
-Write-Step "1/7 Tests"
+Write-Step "1/8 Tests"
 & "$PSScriptRoot\test.ps1"
 $results["Tests"] = ($LASTEXITCODE -eq 0)
 
@@ -37,31 +37,39 @@ $python = Ensure-Environment -Extras @("dev", "ui")
 
 # Same rule set and same paths as the CI job, so a contributor never
 # discovers in CI a lint failure they could have seen locally.
-Write-Step "2/7 Lint (ruff)"
+Write-Step "2/8 Lint (ruff)"
 & $python -m ruff check optionspilot tests scripts
 $results["Lint (ruff)"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "3/7 Frontend id() references"
+Write-Step "3/8 Frontend id() references"
 & $python "$PSScriptRoot\check_html_ids.py"
 $results["HTML id references"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "4/7 Documentation consistency"
+# Static design-token gate (M0-C7). Reads index.html only - no browser, no
+# server - and enforces the three-layer token architecture: a component may
+# not reach past the semantic layer to a primitive, every var() must resolve,
+# and the two migration ratchets may only shrink.
+Write-Step "4/8 Design tokens"
+& $python "$PSScriptRoot\token_check.py"
+$results["Design tokens"] = ($LASTEXITCODE -eq 0)
+
+Write-Step "5/8 Documentation consistency"
 & $python "$PSScriptRoot\check_docs.py"
 $results["Docs consistency"] = ($LASTEXITCODE -eq 0)
 
 # Same script CI runs. Offline: it builds the app in a temp data dir and
 # drives it with TestClient, so it needs no network and no real storage.
-Write-Step "5/7 API v1 contract check"
+Write-Step "6/8 API v1 contract check"
 & $python "$PSScriptRoot\api_contract_check.py"
 $results["API contract"] = ($LASTEXITCODE -eq 0)
 
-Write-Step "6/7 Dependency check (pip check)"
+Write-Step "7/8 Dependency check (pip check)"
 & $python -m pip check
 $results["pip check"] = ($LASTEXITCODE -eq 0)
 
 # Offline by default (scripted providers, no network) so it is deterministic
 # and safe here; `--live` probes the real provider chain and is a manual step.
-Write-Step "7/7 Market-data stress scenarios"
+Write-Step "8/8 Market-data stress scenarios"
 & $python "$PSScriptRoot\marketdata_stress.py"
 $results["Market-data stress"] = ($LASTEXITCODE -eq 0)
 

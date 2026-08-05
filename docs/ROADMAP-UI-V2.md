@@ -525,8 +525,8 @@ mapping.
 | C3 | ✅ | The semantic layer | `b60daa1` |
 | C4 | ✅ | Components repointed; zero primitive references | `26a35d0` |
 | C5 | ✅ | Type roles in `rem`; large text becomes one root change | `9082c8c` |
-| C6 | ✅ | The spacing scale, adopted where it already matched | `pending` |
-| C7 | ⬜ | `scripts/token_check.py` | — |
+| C6 | ✅ | The spacing scale, adopted where it already matched | `d7502a7` |
+| C7 | ✅ | `scripts/token_check.py`, wired as gate 4/8 | `pending` |
 | C8 | ⬜ | Dual focus ring and `border.control` on inputs | — |
 | C9 | ⬜ | `scripts/motion_check.py` | — |
 
