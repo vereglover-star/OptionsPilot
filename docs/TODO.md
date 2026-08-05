@@ -5,6 +5,32 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
+- [ ] **UI V2 — implement the three specification documents.** All three are
+      written and are the authority for every future UI change; none of it is
+      built. `UI_V2_DESIGN.md` is the vision (principles, personas, Pilot,
+      roadmap, metrics). `UI_V2_WIREFRAMES.md` is the layout blueprint — 24
+      aligned wireframes and a fourteen-heading specification per destination.
+      `DESIGN_SYSTEM_V2.md` is the visual language — verified colour tokens,
+      type and spacing scales, 27 components with all seven states, a closed
+      motion catalogue, and component governance. Read `UI_V2_WIREFRAMES.md` §13
+      first: it separates what is settled from the five open decisions that
+      block specific layouts, and lists the browser-check assertions each phase
+      must ship. `DESIGN_SYSTEM_V2.md` §12.6 adds nine design-system health
+      checks for the same suite, and §13 is the delta from the current `:root`
+      tokens for whoever starts Phase 0.
+      Ten phases with stated dependencies and exit criteria (§16). Start at
+      **Phase 0 (foundation)** — the three-layer token architecture, the type
+      and spacing scales replacing ~14 hardcoded font sizes, Surface Level and
+      the shared symbol/timeframe context plumbed through `RuntimeSettings`.
+      Nothing visible ships in Phase 0, and every later phase either consumes
+      it or duplicates it. **Phase 2 (navigation) is the highest-risk phase**
+      and ships behind a switch for one release. Rule for all of them: no phase
+      ships without its own browser check, because `index.html` still has no
+      automated test coverage. Absorbs the still-open `ROADMAP-V3-UX.md`
+      findings H5 (notification centre), N2 (chart↔chain) and N4 (toast
+      stacking). Eight open decisions in §19 need the user before the phases
+      that depend on them — #1 (does Pilot get an LLM) gates Phase 9.
+
 - [x] **V0.9.0 — the verification floor** — done 2026-08-02, 11 commits
       (`2707a01`…`e403da6`), 2065 → 2158 in the suite. Version constant
       reconciled + a docs-version gate; dependency lockfile on CI and the

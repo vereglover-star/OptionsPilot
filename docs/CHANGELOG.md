@@ -4,6 +4,153 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2: the visual language
+
+*Documentation only. No code, no markup, no behaviour change, no new tests.*
+
+`docs/DESIGN_SYSTEM_V2.md` — the third and last document before implementation.
+The first says what the product should feel like, the second says where things
+go, and this says what they look like and how they behave as *components*. It is
+platform-neutral by construction: every value is a token or a rule, because the
+same system has to survive a desktop WebView today and a native mobile client
+later.
+
+It is what `UI_V2_DESIGN.md` §11 deferred when it defined colour philosophy and
+left the values to "Phase 1, recorded as an appendix at that point." The
+difference from a normal palette document is that **every colour here was
+computed, not chosen by eye.** Sixteen WCAG contrast pairs are measured and
+tabulated; the categorical chart palette is validated for colour-vision
+separation with the Machado–Oliveira–Fernandes simulation rather than asserted
+to be safe.
+
+Three findings came out of running the numbers rather than trusting the design.
+**The trading green/red pair is marginal**: measured at ΔE 6.7–8.1 under
+deuteranopia, at or below the safety target, against ΔE 27.3 for a blue/orange
+alternate. That is why sign, direction glyph and stable column position are
+specified as mandatory rather than as good practice, and why the alternate
+palette is a first-class one-click option that **moves the accent to violet with
+it** — because in that palette blue means gain, so a blue accent would make every
+primary button read as positive. **A single focus ring fails on the one control
+where focus matters most**: the ring measured 2.75:1 directly on the primary
+fill, so focus is a dual ring with a dark gap, which passes on any surface in the
+system. And **one market colour value cannot serve both text and chart marks** —
+text needs 4.5:1 against the surface, marks need the perceptual lightness band —
+so market colour is four tiers, not one value.
+
+Everything else follows the same standard: a 12-step neutral ramp with three
+distinct border tokens (the third exists because an input whose only boundary is
+a 1.3:1 hairline is a control a low-vision user cannot find); nine type roles on
+a ratio scale in `rem`, with the rule that a number a user acts on is never
+smaller than body; an eight-step spacing scale named by purpose; twenty-seven
+components each specifying purpose, variants, all seven states, motion, keyboard
+and accessibility; a closed catalogue of seventeen permitted animations with an
+explicit never-animate list; and component governance whose most useful rule is
+that a component with one caller is a screen, not a component.
+
+Two conventions are rejected with reasons. **Flash-on-tick**, which every
+professional platform uses, is replaced by a persistent direction glyph — at a
+~1s push cadence a flashing cell is in transition a meaningful fraction of the
+time, which makes it least readable exactly when it changes fastest. And
+**emoji**, currently in the mode controls, are removed: they ignore the type
+scale, cannot be recoloured, render differently on every platform, and read as a
+consumer app.
+
+## [Uncommitted] — UI V2: the screen-by-screen blueprint
+
+*Documentation only. No code, no markup, no behaviour change, no new tests.*
+
+`docs/UI_V2_WIREFRAMES.md` — the layer between the vision and the code. Where
+`UI_V2_DESIGN.md` (below) says what the product should feel like and why, this
+says where every element goes, what it does when touched, and what it looks like
+when there is no data, slow data, or wrong data. It is written to be
+implementable without invention: an engineer should be able to build a screen
+from it and disagree with nothing that was left unstated.
+
+Twenty-four aligned ASCII wireframes covering the global shell (frame, nav rail
+at three widths, system strip, command palette, symbol jump, Pilot panel, Flight
+Status popover, notification inbox, toast stack), all six desktop destinations in
+populated, loading and empty states, the order ticket in its empty, selected and
+blocked states, the option chain at two Surface Levels, the review-and-commit
+modal, the three error scopes, the sub-1024px message, and four mobile screens.
+Each destination is specified against the same fourteen headings — purpose,
+layout, hierarchy, regions, navigation, interactions, keyboard, loading, empty,
+error, motion, responsive, accessibility, mobile equivalent.
+
+Three structural decisions do most of the work. **Four layout archetypes** —
+bands, workspace, index+detail, sections — so a new screen picks one rather than
+inventing a layout; a destination never changes archetype based on state.
+**Flight Status and the system strip own disjoint facts**, with a table naming
+the owner of each and a rule that a fact needing a second home is linked to, not
+copied — the same discipline `data/health.py` learned when provider health lived
+in two objects. And **the ticket is always present in five states**, so the shape
+of an order is visible before a contract is chosen, and a guardrail that removes
+an option says what changed, why, and what to do instead — while
+`OrderManager` independently refuses the same combinations.
+
+The evidence convention from `TRADING_INTELLIGENCE.md` is specified once, in §0.5,
+as a table of what each situation renders and what it must never render, and then
+applied silently by every screen: a blank cell always means "we have not said,"
+never "zero." Journal › Progress is where it is most visible — an unassessable
+dimension reads "not enough evidence" with a `Why not?` disclosure rather than a
+grey card, every score card states its coverage, and permanently unassessable
+behaviours are listed with their reason rather than omitted.
+
+Also fixed by specification: the chart's blank-canvas load becomes a skeleton
+with a real axis frame; `<1024px` shows a stated minimum rather than a degraded
+column, and says background monitoring is unaffected; the animation list in §11
+is closed, with a named prohibition list and the chart canvas exempt from the
+whole system. §13 separates what is settled from what still needs a decision, and
+lists the browser-check assertions each implementation phase must ship — because
+`index.html` still has no automated coverage and those scripts are the only thing
+standing between a UI change and a silent regression.
+
+## [Uncommitted] — UI V2: the Human Interface Guidelines
+
+*Documentation only. No code, no markup, no behaviour change, no new tests.*
+
+`docs/UI_V2_DESIGN.md` — the authoritative specification for every future UI
+change, on desktop and on the mobile app that does not exist yet. The backend
+has been the mature half of this product for several milestones; this is the
+document that says what the other half should be.
+
+It is not an audit. `ROADMAP-V3-UX.md` audited the existing screens and its
+open findings (the notification centre, chart↔chain cross-links, toast
+stacking) are absorbed here as implementation phases. This document starts from
+what the interface *should* be and evaluates the current screens against that.
+
+The substance, briefly. Nine tabs become **six destinations** chosen as
+questions a user has rather than features the codebase contains — Home, Trade,
+Portfolio, Research, Journal, Settings — with a command palette carrying the
+old names as aliases so the rename teaches rather than strands. Charts and
+Trade merge into **one workspace**, because they were always one activity and
+the Trade tab's collapsible chart was a workaround for a navigation mistake.
+The header's two orthogonal mode controls collapse into one **Flight Status**
+popover, with the orthogonality invariant restated where a designer will read
+it. **Context continuity** — one symbol, one timeframe, one selection, one
+Surface Level, server-owned and restart-surviving — is specified as a set of
+testable guarantees, because it is the mechanism that makes six destinations
+feel like one environment rather than six programs.
+
+Three commitments are worth naming because they inherit directly from work
+already done here. **Never state what cannot be evidenced**: the UI renders
+insufficient evidence as a first-class result with its reason, which is
+`intelligence/`'s §4.1 rule finally reaching the surface that displays it.
+**Progressive disclosure, never progressive implementation**: Surface Levels
+change what is revealed and never what is computed, never hide money or a
+warning, never gate a safety mechanism, and are reversible in one click — a
+crippled edition would teach users the software hides things, which is the
+opposite of the trust the document is trying to build. And **Pilot v1 is
+deterministic**, a composition layer over the glossary, the tutorial engine,
+`intelligence/`, `coach/` and the gate's own reasoning; whether it ever gets an
+LLM is recorded as Open Decision #1 rather than assumed.
+
+Includes ASCII wireframes for Home, the trade workspace, the review step and
+mobile; a design-system philosophy rather than a palette; a ten-phase roadmap
+with dependencies and exit criteria; measurable success metrics with stated
+measurement methods; a self-audit table checking all thirty major decisions
+against the three questions the document holds itself to; and eight open
+decisions left explicitly to the product owner.
+
 ## 2026-08-04 — Release automation: one command, six phases, automatic rollback
 
 *2414 → 2493 tests (+79). One real defect found in existing tooling.*
