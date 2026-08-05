@@ -6,9 +6,18 @@
 <title>OptionsPilot</title>
 <style>
 :root {
-  --page:#0b0c0e; --surface:#15171b; --surface-2:#1d2026; --surface-3:#262a31;
-  --ink:#f4f5f7; --ink-2:#c7cad0; --muted:#82868e;
-  --grid:#23262c; --baseline:#3a3e46; --ring:rgba(255,255,255,.10);
+  /* The nine names below are the app's original surface/ink tokens. Since
+     M0-C2 they are ALIASES onto the neutral ramp defined further down, so
+     306 existing use sites keep working while the values behind them come
+     from one place. Steps were picked by nearest value, deliberately: M0 is
+     invisible by design, and which step a surface *ought* to use is a
+     semantic decision that lands in M0-C3 and is applied by the shell in M2.
+     These aliases are deleted in M0-C4 once components reference the
+     semantic layer instead. */
+  --page:var(--n-950); --surface:var(--n-850);
+  --surface-2:var(--n-800); --surface-3:var(--n-750);
+  --ink:var(--n-050); --ink-2:var(--n-200); --muted:var(--n-400);
+  --grid:var(--n-700); --baseline:var(--n-650); --ring:rgba(255,255,255,.10);
   --accent:#3d8bff; --accent-soft:#16233a;
   --good:#00c46a; --good-soft:#0c2318; --bad:#ff5252; --bad-soft:#2a1416;
   --warn:#f7b32b; --warn-soft:#2b2113;

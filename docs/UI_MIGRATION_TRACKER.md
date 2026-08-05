@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, before M0-C1.
+**Last updated:** 2026-08-05, after M0-C2.
 
 ---
 
@@ -135,7 +135,7 @@ existing CSS class or id it replaces; blank means new.
 | Radius values | `--r-sm/md/lg/pill` (8/12/14/999) | `--radius-sm/med/lg/pill` 6/10/14/999 | M0-C1 | ✅ values landed; adoption M0-C4 |
 | Motion durations | `--t-fast/.13`, `--t-med/.22` | `--dur-instant/fast/medium/deliberate` | M0-C1 | ✅ values landed; adoption M0-C4 |
 | Motion curves | ➖ | `--ease-enter/exit/move` | M0-C1 | ✅ |
-| Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step ramp `--n-950…--n-050` | M0-C1 ramp, M0-C2 remap | 🟡 ramp landed |
+| Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step ramp `--n-950…--n-050` | M0-C1 ramp, M0-C2 remap | ✅ nine names are now aliases onto the ramp; deleted M0-C4 |
 | Semantic layer | ➖ | `action.*`, `market.*`, `status.*`, `border.*`, `focus.*` | M0-C3 | ⬜ |
 | Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ⬜ |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 9 roles in `rem` | M0-C5 | ⬜ |
@@ -190,6 +190,7 @@ All are re-presentations of existing computations — no new capability.
 | `scripts/browser_check.py` | 1 | M2-C9 | ⬜ |
 | `index.html` guided-tour targets | 18 | M2-C8 | ⬜ |
 | `scripts/check_html_ids.py` | ➖ | continuous | ➖ |
+| `scripts/guide_check.py` colour literal | ➖ | M0-C2 | ✅ un-pinned from `rgb(11, 12, 14)` |
 
 ---
 
@@ -213,3 +214,4 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C2 | The nine original surface/ink names became aliases onto the ramp; 306 use sites unchanged. `guide_check.py` had one assertion pinned to the literal page colour — rewritten to assert darkness, the property it is named for. |

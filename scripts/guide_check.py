@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -753,11 +754,18 @@ def check_accessibility(page, base: str, c: Checks) -> None:
     c.check("a11y: high contrast changes the secondary-text colour",
             muted_before.strip() != muted_after.strip(),
             f"{muted_before} -> {muted_after}")
+    # Asserts the PROPERTY the check is named for, not one literal colour.
+    # It used to pin `rgb(11, 12, 14)`, which meant the first token change of
+    # the UI V2 migration (M0-C2, which moved the page onto the neutral ramp)
+    # failed a check about high contrast for reasons that had nothing to do
+    # with high contrast. High contrast raises secondary text and hairlines;
+    # it deliberately does NOT invert to a light theme, and "every channel is
+    # dark" is that claim stated in a way a repaint cannot falsely break.
+    contrast_bg = page.evaluate("getComputedStyle(document.body).backgroundColor")
+    bg_channels = [int(n) for n in re.findall(r"\d+", contrast_bg)[:3]]
     c.check("a11y: high contrast stays a dark theme",
-            page.evaluate(
-                "getComputedStyle(document.body).backgroundColor")
-            in ("rgb(11, 12, 14)",),
-            page.evaluate("getComputedStyle(document.body).backgroundColor"))
+            len(bg_channels) == 3 and max(bg_channels) < 40,
+            contrast_bg)
     c.check("a11y: high contrast is persisted server-side",
             guide_state(base)["state"]["high_contrast"] is True)
     page.uncheck("#gd-contrast")
