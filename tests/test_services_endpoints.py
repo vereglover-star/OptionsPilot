@@ -120,6 +120,56 @@ class TestWorkspaceEndpoint:
         doc = client.delete("/api/workspace").json()
         assert doc["symbol"] == "SPY" and doc["layouts"] == {}
 
+    def test_the_full_context_round_trips_through_the_transport(self, client):
+        """UI V2 M1-C3. Symbol, timeframe, expiry, contract and Surface Level
+        are what `UI_V2_DESIGN.md` §4.5 calls context; a client must be able to
+        set and re-read all of it, and it must survive JSON in both
+        directions."""
+        contract = {"symbol": "SPY", "expiry": "2026-09-18",
+                    "strike": 450.0, "right": "call"}
+        client.post("/api/workspace", json={"symbol": "SPY", "timeframe": "15m",
+                                            "expiry": "2026-09-18",
+                                            "contract": contract,
+                                            "surface_level": 1})
+        doc = client.get("/api/workspace").json()
+        assert doc["expiry"] == "2026-09-18"
+        assert doc["contract"] == contract
+        assert doc["surface_level"] == 1
+
+    def test_a_symbol_change_over_the_wire_drops_the_selected_contract(self, client):
+        client.post("/api/workspace", json={
+            "symbol": "SPY",
+            "contract": {"symbol": "SPY", "expiry": "2026-09-18",
+                         "strike": 450.0, "right": "put"}})
+        doc = client.post("/api/workspace", json={"symbol": "QQQ"}).json()
+        assert doc["contract"] is None
+
+    def test_surface_level_is_stored_outside_the_workspace_document(self, client):
+        """Two keys in `settings.json`, because they have two sync policies:
+        the workspace follows a user to a second device, Surface Level does
+        not (`ROADMAP-UI-V2.md` §11-5)."""
+        client.post("/api/workspace", json={"surface_level": 4,
+                                            "symbol": "TSLA"})
+        doc = json.loads((client.tmp_path / "settings.json")
+                         .read_text(encoding="utf-8"))
+        assert doc["surface_level"] == 4
+        assert "surface_level" not in doc["workspace"]
+        assert doc["workspace"]["symbol"] == "TSLA"
+
+    def test_a_bad_surface_level_does_not_4xx_the_endpoint(self, client):
+        r = client.post("/api/workspace", json={"surface_level": 99})
+        assert r.status_code == 200
+        assert r.json()["surface_level"] == 3
+
+    def test_a_stored_expiry_is_one_the_chain_endpoint_accepts(self, client):
+        """The same argument as the timeframe test below, for the same reason:
+        this value is handed straight back to `/api/chain`, and a value that
+        endpoint cannot parse is a 5xx in the middle of a chain load."""
+        from datetime import date
+        client.post("/api/workspace", json={"expiry": "2026-09-18"})
+        stored = client.get("/api/workspace").json()["expiry"]
+        assert date.fromisoformat(stored)
+
     def test_a_stored_timeframe_is_one_the_candles_endpoint_accepts(self, client):
         """The reason `timeframe` is validated where `tab` is not: this value is
         handed straight back to `/api/candles`."""

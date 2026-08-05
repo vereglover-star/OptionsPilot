@@ -512,9 +512,9 @@ every shipped build**, and the `/api/marketdata/qa/*` endpoints return **404**
 | POST | `/api/risk/reset_halt` | Manual circuit-breaker reset |
 | GET/POST | `/api/backtest` | Backtest job (the `backtest` runtime task on the worker lane, polled status). One slot, claimed under `_bt_lock`; a second POST while one runs returns the running job unchanged |
 | POST | `/webhook/tradingview` | Inbound TradingView alert → triggers a scan (never a direct order) |
-| GET | `/api/workspace` | Where the user was: tab, symbol, timeframe, indicators, extended hours, auto-follow, watchlist sort, ticket chart, recent symbols, saved layouts (V0.7.0). Persisted in `settings.json` under a `workspace` key — **not** localStorage, which is a cache a cleared profile silently discards, and which a second client cannot see at all |
-| POST | `/api/workspace` | Merge a **partial** patch and return the full document. Partial by design: a client that only knows about `symbol` must be able to say so without overwriting panel layout it has never heard of. Unusable values fall back to their default rather than 4xx-ing, because this records where someone was looking |
-| DELETE | `/api/workspace` | Reset to the shipped defaults, saved layouts included |
+| GET | `/api/workspace` | Where the user was: tab, symbol, timeframe, indicators, extended hours, auto-follow, watchlist sort, ticket chart, recent symbols, saved layouts (V0.7.0), plus the selected `expiry` and `contract` and the `surface_level` (V0.11.0). Persisted in `settings.json` under a `workspace` key — **not** localStorage, which is a cache a cleared profile silently discards, and which a second client cannot see at all. `surface_level` is the one field **served here but stored elsewhere**, under its own top-level key: it is device-only where the workspace is not, and a client needs every context fact in one call to render a first frame |
+| POST | `/api/workspace` | Merge a **partial** patch and return the full document. Partial by design: a client that only knows about `symbol` must be able to say so without overwriting panel layout it has never heard of. Unusable values fall back to their default rather than 4xx-ing, because this records where someone was looking — including `surface_level`, whose store-level setter is strict for every other caller. A patch that changes `symbol` drops the selected `contract`: a contract belongs to an underlying |
+| DELETE | `/api/workspace` | Reset to the shipped defaults, saved layouts included. `surface_level` is **not** reset — it is stored outside the document and is closer to an accessibility setting than to a panel arrangement |
 | GET | `/api/host` | What this build's host can do: `optionspilot/host/`'s capability profile, so a client decides which surfaces to offer instead of guessing from a user agent. No user data, no secret |
 | GET | `/api/diagnostics/sync` | The classified inventory of every durable object the app owns, with its sync domain and policy (V0.7.0). **Nothing syncs anything** — this is the classification that must exist first. `never_sync` names what must not leave the machine. Safe in a public bug report |
 | WS | `/ws` | 1s cadence with change detection: full `status_payload()` when something changed, tiny heartbeat otherwise. **Not enveloped** — a known blocker for any client that cannot update in lockstep (`ARCHITECTURE-PLATFORM.md` §7) |
@@ -628,7 +628,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2552 tests as of this writing, all passing)
+# Tests (2564 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -773,7 +773,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2552 tests cover this
+   exercises the FastAPI layer via `TestClient` (2564 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

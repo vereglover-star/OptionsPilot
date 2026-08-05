@@ -563,7 +563,15 @@ transport. Every service takes **injected, duck-typed** collaborators and return
 - `workspace.py` — pure `normalize` / `merge` plus `WorkspaceService`. Holds no
   second catalogue: `tab` and indicator names are frontend vocabulary and are
   checked for type and length only; `timeframe` IS validated against
-  `core.models.Timeframe` because it is handed back to `/api/candles`.
+  `core.models.Timeframe` because it is handed back to `/api/candles`, and
+  since V0.11.0 so are `expiry` (a real ISO date, handed back to `/api/chain`)
+  and the selected contract's `right` (`core.models.OptionRight`). The selected
+  `contract` is all-or-nothing and carries **one cross-field invariant checked
+  on every read** — a contract whose symbol is not the workspace symbol is
+  dropped, so a symbol change cannot leave the ticket holding an instrument the
+  context has left. `surface_level` is served in this payload but stored under
+  its own `settings.json` key with its own DEVICE_ONLY sync policy; the
+  service's store is duck-typed to four methods, not two.
 - `idempotency.py` — `IdempotencyStore` plus `fingerprint()`. One lock per
   `(operation, key)`, reference-counted and dropped at zero (V0.9.2-C9, N-1);
   a stored request fingerprint so reusing a key for a *different* body raises

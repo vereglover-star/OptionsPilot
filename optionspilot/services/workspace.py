@@ -343,17 +343,23 @@ def merge(current: dict | None, patch: dict | None, *, now: str | None = None) -
     return merged
 
 
-def view(state: dict | None) -> WorkspaceView:
-    """The normalized document as the frozen view model clients receive."""
+def view(state: dict | None, surface_level: int) -> WorkspaceView:
+    """The normalized document, plus the one context fact stored beside it.
+
+    `surface_level` is passed in rather than read here because this module is
+    pure and the level lives in `RuntimeSettings` under its own key — see the
+    field's note in `viewmodels.py` for why transport and storage differ.
+    """
     doc = normalize(state)
-    return WorkspaceView(**doc)
+    return WorkspaceView(**doc, surface_level=surface_level)
 
 
 class WorkspaceService:
     """The stateful face of the above, over an injected preferences store.
 
     The store is duck-typed to `workspace_state()` / `set_workspace_state(dict)`
-    — `RuntimeSettings` satisfies it, and so would anything a future mobile
+    plus, since M1-C3, `surface_level()` / `set_surface_level(int)` —
+    `RuntimeSettings` satisfies all four, and so would anything a future mobile
     backend host wanted to put underneath, which is the point of not importing
     it here.
     """
@@ -369,12 +375,25 @@ class WorkspaceService:
         return stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)
 
     def get(self) -> WorkspaceView:
-        return view(self._store.workspace_state())
+        return view(self._store.workspace_state(), self._store.surface_level())
 
     def update(self, patch: dict | None) -> WorkspaceView:
+        incoming = patch if isinstance(patch, dict) else {}
+        if "surface_level" in incoming:
+            # The one field written to a different key, so it is applied
+            # separately — and the store's setter is STRICT while this endpoint
+            # is FORGIVING, which is a service decision rather than an
+            # inconsistency. `/api/workspace` records where someone was
+            # looking; 4xx-ing it mid-scroll is a worse outcome than ignoring
+            # one unusable value, exactly as it is for `timeframe`. The strict
+            # setter still protects every other caller.
+            try:
+                self._store.set_surface_level(incoming["surface_level"])
+            except ValueError:
+                pass
         merged = merge(self._store.workspace_state(), patch, now=self._now())
         self._store.set_workspace_state(merged)
-        return view(merged)
+        return view(merged, self._store.surface_level())
 
     def reset(self) -> WorkspaceView:
         """Back to the shipped defaults.
@@ -383,9 +402,15 @@ class WorkspaceService:
         twenty stale layouts is the kind of half-reset a user then reports as
         "reset doesn't work". If layouts are ever worth keeping across a reset,
         that is a separate, named action.
+
+        Surface Level is NOT reset, and that is the same judgement read the
+        other way: it is stored outside this document, it is closer to an
+        accessibility setting than to a panel arrangement, and someone tidying
+        their layout has not asked to be shown nineteen columns they chose not
+        to see.
         """
         fresh = normalize(None)
         if self._clock is not None:
             fresh["updated"] = self._now()
         self._store.set_workspace_state(fresh)
-        return view(fresh)
+        return view(fresh, self._store.surface_level())

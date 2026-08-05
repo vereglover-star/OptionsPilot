@@ -200,8 +200,22 @@ class WorkspaceView(ViewModel):
     #: domain object, and a *selection* is not a market snapshot. It names the
     #: instrument the user picked; whether that instrument still has a bid is
     #: the chain's question, asked fresh every time.
-    expiry: str = ""
-    contract: dict | None = None
+    expiry: str
+    contract: dict | None
+    #: How much of the interface is revealed (1 Guided - 4 Pro) — UI V2 M1-C3.
+    #: It is STORED apart from the workspace document, under its own
+    #: `settings.json` key with its own DEVICE_ONLY sync policy, because a user
+    #: may want Guided on a phone and Full on a desktop. It is SERVED here
+    #: because `UI_V2_DESIGN.md` §4.5 lists it as a context-continuity
+    #: guarantee alongside the symbol and the timeframe, and a client needs all
+    #: of them in the same breath to render a first frame. Transport and
+    #: storage are allowed to disagree; conflating them is what would cost a
+    #: round trip on every launch.
+    #:
+    #: No default: the value comes from the store on every read, and a default
+    #: here would be a second copy of `config.runtime.DEFAULT_SURFACE_LEVEL`
+    #: that could disagree with the first.
+    surface_level: int
     updated: str | None = None
 
 

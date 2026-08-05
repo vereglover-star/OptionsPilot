@@ -23,11 +23,17 @@ from optionspilot.services.workspace import WorkspaceService
 
 
 class FakeStore:
-    """The `RuntimeSettings` surface WorkspaceService actually uses."""
+    """The `RuntimeSettings` surface WorkspaceService actually uses.
 
-    def __init__(self, doc=None):
+    `set_surface_level` is strict here because the real one is: the service's
+    forgiveness on the workspace endpoint is a decision it makes for itself,
+    and a lenient double would test the decision away.
+    """
+
+    def __init__(self, doc=None, surface_level=3):
         self.doc = doc if doc is not None else {}
         self.writes = 0
+        self.level = surface_level
 
     def workspace_state(self):
         return dict(self.doc)
@@ -36,6 +42,16 @@ class FakeStore:
         self.doc = dict(state)
         self.writes += 1
         return dict(self.doc)
+
+    def surface_level(self):
+        return self.level
+
+    def set_surface_level(self, level):
+        if level not in (1, 2, 3, 4):
+            raise ValueError(f"surface_level must be one of [1, 2, 3, 4], "
+                             f"got {level!r}")
+        self.level = level
+        return level
 
 
 class TestNormalize:
@@ -229,6 +245,61 @@ class TestContractContext:
         assert restarted.contract == a_contract()
         assert restarted.expiry == "2026-09-18"
         json.dumps(restarted.to_dict(), allow_nan=False)
+
+
+class TestSurfaceLevelOnTheWorkspace:
+    """UI V2 M1-C3 — §4.5-5, served with the rest of the context.
+
+    Stored apart (its own `settings.json` key, its own DEVICE_ONLY sync
+    policy), served together, because a client needs every context fact in the
+    same breath to render a first frame.
+    """
+
+    def test_it_is_served_with_the_workspace(self):
+        assert WorkspaceService(FakeStore(surface_level=1)).get().surface_level == 1
+
+    def test_it_can_be_set_through_the_same_patch_as_a_symbol(self):
+        store = FakeStore()
+        view = WorkspaceService(store).update({"symbol": "QQQ", "surface_level": 4})
+        assert view.symbol == "QQQ" and view.surface_level == 4
+        assert store.level == 4
+
+    def test_it_is_not_written_into_the_workspace_document(self):
+        """Two keys, two sync policies. If it leaked into the document it
+        would inherit LAST_WRITE_WINS and start following users between
+        devices, which is the decision that was explicitly not taken."""
+        store = FakeStore()
+        WorkspaceService(store).update({"surface_level": 2})
+        assert "surface_level" not in store.doc
+        assert store.level == 2
+
+    def test_an_unusable_level_is_ignored_rather_than_4xxd(self):
+        """The same forgiveness `timeframe` gets on this endpoint, and for the
+        same reason: it records where someone was looking."""
+        store = FakeStore(surface_level=3)
+        view = WorkspaceService(store).update({"surface_level": 9,
+                                               "symbol": "NVDA"})
+        assert view.surface_level == 3          # unchanged, not defaulted
+        assert view.symbol == "NVDA"            # the rest of the patch applied
+
+    def test_the_stores_setter_is_still_strict_for_everyone_else(self):
+        """The forgiveness is the SERVICE's decision for one endpoint, not a
+        weakening of the store — a CLI or a settings screen calling the setter
+        directly still gets told."""
+        store = FakeStore()
+        with pytest.raises(ValueError):
+            store.set_surface_level(9)
+
+    def test_a_workspace_reset_does_not_reset_it(self):
+        """Closer to an accessibility setting than to a panel arrangement:
+        someone tidying their layout has not asked to be shown nineteen
+        columns they chose not to see."""
+        store = FakeStore({"symbol": "QQQ"}, surface_level=1)
+        assert WorkspaceService(store).reset().surface_level == 1
+
+    def test_it_survives_the_wire(self):
+        doc = WorkspaceService(FakeStore(surface_level=4)).get().to_dict()
+        assert json.loads(json.dumps(doc, allow_nan=False))["surface_level"] == 4
 
 
 class TestMerge:
