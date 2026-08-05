@@ -527,14 +527,14 @@ mapping.
 | C5 | ✅ | Type roles in `rem`; large text becomes one root change | `9082c8c` |
 | C6 | ✅ | The spacing scale, adopted where it already matched | `d7502a7` |
 | C7 | ✅ | `scripts/token_check.py`, wired as gate 4/8 | `7714d54` |
-| C8 | ✅ | Dual focus ring, control borders, 16 contrast assertions | `pending` |
-| C9 | ⬜ | `scripts/motion_check.py` | — |
+| C8 | ✅ | Dual focus ring, control borders, 16 contrast assertions | `dc0f9df` |
+| C9 | ✅ | `scripts/motion_check.py`, wired as gate 5/9 | `pending` |
 
 ### All milestones
 
 | Milestone | Commits | Status | Hashes |
 | --- | --- | --- | --- |
-| M0 · V0.10.0 Foundation | C1–C9 | 🟡 in progress | see above |
+| M0 · V0.10.0 Foundation | C1–C9 | ✅ **complete** | see above |
 | M1 · V0.11.0 Workspace context | C1–C7 | ⬜ not started | — |
 | M2 · V0.12.0 Shell | C1–C11 | ⬜ not started | — |
 | M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |

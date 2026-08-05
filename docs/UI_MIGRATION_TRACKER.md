@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, after M0-C8.
+**Last updated:** 2026-08-05, **M0 complete**.
 
 ---
 
@@ -37,7 +37,7 @@ Re-measure at each milestone close.
 | `var(--radius-*)` uses | 56 legacy | all radii | **53** on the new names; legacy deleted |
 | `data-tab` refs in browser suites | 38 | 0 | 38 |
 | `data-tab` refs in `index.html` | 18 | 0 | 18 |
-| `verify.ps1` gates | 13 | 20 | **14** |
+| `verify.ps1` gates | 13 | 20 | **15** |
 | Test count | 2,493 | grows | 2,493 |
 
 **Correction to `ROADMAP-V3-UX.md`:** that audit reported ~14 hardcoded
@@ -171,7 +171,7 @@ All are re-presentations of existing computations — no new capability.
 | Gate | Milestone | Status | Wired into `verify.ps1` |
 | --- | --- | --- | --- |
 | `scripts/token_check.py` | M0-C7 | ✅ | ✅ gate 4/8 |
-| `scripts/motion_check.py` | M0-C9 | ⬜ | ⬜ |
+| `scripts/motion_check.py` | M0-C9 | ✅ | ✅ gate 5/9 |
 | `scripts/shell_check.py` | M2-C10 | ⬜ | ⬜ |
 | `scripts/home_check.py` | M3-C9 | ⬜ | ⬜ |
 | `scripts/trade_check.py` | M4-C10 | ⬜ | ⬜ |
@@ -214,6 +214,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C9 | `motion_check.py` landed as gate 5/9: closed keyframe catalogue, chart canvas kept exempt, reduced motion verified on both channels, two ratchets. It found that this app routes the OS preference and the in-app toggle through one `html.gd-nomotion` class rather than a media query — a better mechanism than the gate first assumed. **M0 complete: 9 commits, 15 gates.** |
 | 2026-08-05 | M0-C8 | Dual focus ring (2px offset + a guaranteed dark gap on filled controls) and `--border-control` on every form field. `token_check` now recomputes **16 contrast floors** from the tokens in the file, so a ramp tweak fails the build rather than an audit. |
 | 2026-08-05 | M0-C7 | `token_check.py` landed and wired as gate 4/8. It found **8 dangling `var()` references on its first run** — `--danger`, `--success`, `--elev-2`, `--text-dim`, `--panel` were never defined in this codebase, so those declarations had been rendering unthemed; two more hid behind hex fallbacks. All 16 occurrences repaired. Also closes the radius/motion/shadow adoption C4 left behind. |
 | 2026-08-05 | M0-C6 | Spacing scale replaced with the frozen eight steps and adopted at all 173 occurrences that already matched a step exactly — zero visual delta. **Deviation:** 313 off-scale occurrences (6, 10, 14, 18px…) are NOT snapped; that is a whole-app density change no gate can verify, and it retires per destination in M3–M6. |
