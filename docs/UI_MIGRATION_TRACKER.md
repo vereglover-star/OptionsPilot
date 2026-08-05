@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, after M0-C3.
+**Last updated:** 2026-08-05, after M0-C4.
 
 ---
 
@@ -98,11 +98,11 @@ existing CSS class or id it replaces; blank means new.
 
 | # | Component | Legacy | Milestone | Status |
 | --- | --- | --- | --- | --- |
-| 1 | Button | `.btn`, `.btn.primary`, `.btn.buy` | M0-C4 | ⬜ |
+| 1 | Button | `.btn`, `.btn.primary`, `.btn.buy` | M0-C4 | 🟡 on semantic tokens; states M4 |
 | 2 | Commit control | ➖ | M4-C8 | ⬜ |
 | 3 | Input | bare `input`/`textarea` rules | M0-C8 | ⬜ |
-| 4 | Dropdown / select | bare `select` rules | M0-C4 | ⬜ |
-| 5 | Segmented control | `.seg`, `.side-seg` | M0-C4 | ⬜ |
+| 4 | Dropdown / select | bare `select` rules | M0-C4 | 🟡 on semantic tokens |
+| 5 | Segmented control | `.seg`, `.side-seg` | M0-C4 | 🟡 on semantic tokens |
 | 6 | Card / panel → **instrument** | `.panel`, `.cards` | M3-C4 | ⬜ |
 | 7 | Table | `.wl-*`, `.chain-wrap`, journal table | M4-C5 | ⬜ |
 | 8 | Chart | `#chart-panel`, `CH.*` | M4-C3 | ⬜ |
@@ -137,7 +137,7 @@ existing CSS class or id it replaces; blank means new.
 | Motion curves | ➖ | `--ease-enter/exit/move` | M0-C1 | ✅ |
 | Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step ramp `--n-950…--n-050` | M0-C1 ramp, M0-C2 remap | ✅ nine names are now aliases onto the ramp; deleted M0-C4 |
 | Semantic layer | ➖ | `--surface-*`, `--ink-*`, `--border-*`, `--action-*`, `--market-*`, `--status-*`, `--focus-*` | M0-C3 | ✅ defined; consumers M0-C4 |
-| Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ⬜ |
+| Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ✅ 477 replacements; old names deleted |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 9 roles in `rem` | M0-C5 | ⬜ |
 | Spacing scale | `--sp-1..6`, **0 uses** | 8 purpose-named steps, fully adopted | M0-C6 | ⬜ |
 | Focus ring | single `:focus-visible` outline | dual ring + gap | M0-C8 | ⬜ |
@@ -214,5 +214,6 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C4 | 477 `var()` references repointed onto the semantic layer, property-aware; old token names deleted; `gd-contrast` rewritten. `guide_check.py` read `--muted` by name — both reads went empty and the check passed vacuously, so it now asserts the token is defined. **Debt:** the equity chart's dot uses the accent inside a plot area, which DV rule C-6 forbids; fix in M3. |
 | 2026-08-05 | M0-C3 | Semantic layer defined, including status tints (the design system named status colours but not their tint backgrounds — the existing `*-soft` tokens needed a home) and the colour-vision alternate as a scoped override; its Settings toggle lands in M6. |
 | 2026-08-05 | M0-C2 | The nine original surface/ink names became aliases onto the ramp; 306 use sites unchanged. `guide_check.py` had one assertion pinned to the literal page colour — rewritten to assert darkness, the property it is named for. |

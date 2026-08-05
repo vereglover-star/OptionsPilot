@@ -745,12 +745,24 @@ def check_accessibility(page, base: str, c: Checks) -> None:
     page.wait_for_timeout(400)
 
     # High contrast raises secondary text, and stays a dark theme.
-    muted_before = page.evaluate(
-        "getComputedStyle(document.documentElement).getPropertyValue('--muted')")
+    #
+    # The token this reads is named, so a rename can break it — and one did:
+    # M0-C4 renamed --muted to --ink-muted, after which BOTH reads returned
+    # the empty string and the "did it change?" comparison quietly compared
+    # nothing to nothing. A check that cannot fail is worse than one that
+    # fails, so the emptiness is now asserted explicitly: a future rename
+    # fails here with "token not defined" rather than passing vacuously.
+    MUTED = "--ink-muted"
+    read_muted = (
+        "getComputedStyle(document.documentElement)"
+        f".getPropertyValue('{MUTED}')")
+    muted_before = page.evaluate(read_muted)
     page.check("#gd-contrast")
     page.wait_for_timeout(400)
-    muted_after = page.evaluate(
-        "getComputedStyle(document.documentElement).getPropertyValue('--muted')")
+    muted_after = page.evaluate(read_muted)
+    c.check(f"a11y: {MUTED} is defined (guards against a silent rename)",
+            bool(muted_before.strip()) and bool(muted_after.strip()),
+            f"{MUTED!r}: {muted_before!r} -> {muted_after!r}")
     c.check("a11y: high contrast changes the secondary-text colour",
             muted_before.strip() != muted_after.strip(),
             f"{muted_before} -> {muted_after}")
