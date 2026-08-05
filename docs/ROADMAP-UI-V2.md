@@ -516,9 +516,25 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
+### Active milestone — M0 · V0.10.0 Foundation
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | UI V2 primitives added to the token block, consumed by nothing | `pending` |
+| C2 | ⬜ | The neutral ramp replaces the four ad-hoc surfaces | — |
+| C3 | ⬜ | The semantic layer | — |
+| C4 | ⬜ | Components repointed; zero primitive references | — |
+| C5 | ⬜ | Nine type roles in `rem` | — |
+| C6 | ⬜ | The spacing scale, adopted | — |
+| C7 | ⬜ | `scripts/token_check.py` | — |
+| C8 | ⬜ | Dual focus ring and `border.control` on inputs | — |
+| C9 | ⬜ | `scripts/motion_check.py` | — |
+
+### All milestones
+
 | Milestone | Commits | Status | Hashes |
 | --- | --- | --- | --- |
-| M0 · V0.10.0 Foundation | C1–C9 | ⬜ not started | — |
+| M0 · V0.10.0 Foundation | C1–C9 | 🟡 in progress | see above |
 | M1 · V0.11.0 Workspace context | C1–C7 | ⬜ not started | — |
 | M2 · V0.12.0 Shell | C1–C11 | ⬜ not started | — |
 | M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |

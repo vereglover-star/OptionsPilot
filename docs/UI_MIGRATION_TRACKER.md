@@ -132,17 +132,17 @@ existing CSS class or id it replaces; blank means new.
 
 | Token group | Legacy | New | Milestone | Status |
 | --- | --- | --- | --- | --- |
-| Radius values | `--r-sm/md/lg/pill` (8/12/14/999) | 6/10/14/pill per freeze F-6 | M0-C1 | ⬜ |
-| Motion durations | `--t-fast/.13`, `--t-med/.22` | instant/fast/medium/deliberate | M0-C1 | ⬜ |
-| Motion curves | ➖ | enter/exit/move | M0-C1 | ⬜ |
-| Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step neutral ramp | M0-C2 | ⬜ |
+| Radius values | `--r-sm/md/lg/pill` (8/12/14/999) | `--radius-sm/med/lg/pill` 6/10/14/999 | M0-C1 | ✅ values landed; adoption M0-C4 |
+| Motion durations | `--t-fast/.13`, `--t-med/.22` | `--dur-instant/fast/medium/deliberate` | M0-C1 | ✅ values landed; adoption M0-C4 |
+| Motion curves | ➖ | `--ease-enter/exit/move` | M0-C1 | ✅ |
+| Surfaces | `--page`, `--surface`, `--surface-2/3` | 12-step ramp `--n-950…--n-050` | M0-C1 ramp, M0-C2 remap | 🟡 ramp landed |
 | Semantic layer | ➖ | `action.*`, `market.*`, `status.*`, `border.*`, `focus.*` | M0-C3 | ⬜ |
 | Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ⬜ |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 9 roles in `rem` | M0-C5 | ⬜ |
 | Spacing scale | `--sp-1..6`, **0 uses** | 8 purpose-named steps, fully adopted | M0-C6 | ⬜ |
 | Focus ring | single `:focus-visible` outline | dual ring + gap | M0-C8 | ⬜ |
 | Input borders | none / `--grid` | `border.control` at 3.32:1 | M0-C8 | ⬜ |
-| Elevation shadows | `--sh-1/2/3` | overlay-only per F-2 | M0-C2 | ⬜ |
+| Elevation shadows | `--sh-1/2/3` | `--shadow-raised/overlay`, `--scrim` | M0-C1 values, M0-C4 adoption | 🟡 values landed |
 
 ---
 
@@ -212,3 +212,4 @@ Nothing is deleted before its replacement ships and its checks pass.
 | Date | Milestone | Change |
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
+| 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |

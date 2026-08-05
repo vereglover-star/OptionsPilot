@@ -24,6 +24,48 @@
   --sh-2:0 4px 14px rgba(0,0,0,.35);
   --sh-3:0 10px 34px rgba(0,0,0,.5);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* ══ UI V2 primitives (M0-C1) ══════════════════════════════════════════
+     Values from docs/UI_V2_VISUAL_EXPLORATION.md §8 (the design freeze) and
+     docs/DESIGN_SYSTEM_V2.md §2, §4, §7. NOTHING CONSUMES THESE YET — M0-C2
+     remaps the surfaces, M0-C3 adds the semantic layer above them, and
+     M0-C4 repoints every component onto that layer. Do not reference a
+     primitive from a component rule; scripts/token_check.py (M0-C7) fails
+     the build if you do. */
+
+  /* neutral ramp — the twelve steps every surface and ink derives from.
+     Dark is the reference theme (DESIGN_SYSTEM_V2.md §2.2). */
+  --n-950:#0b0d10;  /* cockpit: frame, nav rail, system strip; scrim base */
+  --n-900:#0f1115;  /* canvas: the content-area background */
+  --n-850:#14161a;  /* instrument: panels, cards, toasts, rails */
+  --n-800:#1b1e24;  /* interior: recessed wells, table bodies, inputs */
+  --n-750:#23272e;  /* overlay: popovers, dropdowns, tooltips, modals */
+  --n-700:#2b2f37;  /* hairlines and dividers on an instrument */
+  --n-650:#333945;  /* default borders on interactive elements */
+  --n-500:#626a78;  /* control borders — the only boundary a control has */
+  --n-450:#5d646f;  /* disabled ink */
+  --n-400:#8a909b;  /* muted ink: labels, units, metadata */
+  --n-200:#c3c8d1;  /* secondary ink */
+  --n-050:#f2f4f7;  /* primary ink */
+
+  /* radius — freeze F-6/F-7. sm and med are chosen in relation to each
+     other: an instrument (med) and its recessed interior (sm) are visibly
+     concentric with space-3 between them. */
+  --radius-sm:6px; --radius-med:10px; --radius-lg:14px; --radius-pill:999px;
+
+  /* motion — DESIGN_SYSTEM_V2.md §7.1/§7.2. `deliberate` is the commit
+     gesture and nothing else. */
+  --dur-instant:100ms; --dur-fast:130ms; --dur-medium:220ms;
+  --dur-deliberate:600ms;
+  --ease-enter:cubic-bezier(0,0,.2,1);   /* entering: decelerate */
+  --ease-exit:cubic-bezier(.4,0,1,1);    /* exiting: accelerate */
+  --ease-move:cubic-bezier(.4,0,.2,1);   /* moving within: ease both ends */
+
+  /* elevation — freeze F-3: an instrument has NO shadow; the surface step
+     is its edge. Shadow exists only where an element floats free. */
+  --shadow-raised:0 4px 14px rgba(0,0,0,.35);
+  --shadow-overlay:0 10px 34px rgba(0,0,0,.5);
+  --scrim:rgba(11,13,16,.6);   /* n-950 at 60% — dims, never blurs */
 }
 * { box-sizing:border-box; margin:0; }
 :focus-visible { outline:2px solid var(--accent); outline-offset:1px; border-radius:4px; }
