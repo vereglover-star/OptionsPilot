@@ -14,7 +14,7 @@ deliberately impossible today).
 
 All 8 original v1 phases are complete, plus the V2 rewrite through V2-4
 (chart workspace); the V3 product-quality sprint and the V0.5–V0.7 milestones
-are on branch `feature/v0.7`. **2493 tests, 100% passing.** See
+are on branch `feature/v0.7`. **2517 tests, 100% passing.** See
 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) for the current snapshot,
 [docs/ROADMAP.md](docs/ROADMAP.md) for what's next.
 
@@ -313,7 +313,7 @@ scripts/         dev/test/verify/docs/build/release/clean .ps1 entry points
                  push, then watch the GitHub build (see docs/RELEASE.md)
   lib/           helper library behind release.ps1
 docs/            see "Documentation" below
-tests/           pytest suite (2493 tests)
+tests/           pytest suite (2517 tests)
 ```
 
 ## Documentation

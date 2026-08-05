@@ -2,7 +2,12 @@ import json
 
 import pytest
 
-from optionspilot.config.runtime import MAX_WATCHLIST, RuntimeSettings
+from optionspilot.config.runtime import (
+    DEFAULT_SURFACE_LEVEL,
+    MAX_WATCHLIST,
+    SURFACE_LEVELS,
+    RuntimeSettings,
+)
 from optionspilot.config.settings import AppConfig
 
 
@@ -43,6 +48,78 @@ class TestUpdatePrefs:
         rt.set_update_prefs(auto_check=False)
         p = rt.update_prefs()
         assert p["channel"] == "beta" and p["auto_check"] is False
+
+
+class TestSurfaceLevel:
+    """UI V2 M1-C1. A presentation-only third axis; see UI_V2_DESIGN.md §8."""
+
+    def test_default_is_full_when_nothing_is_stored(self, tmp_path):
+        _, rt = make(tmp_path)
+        assert rt.surface_level() == DEFAULT_SURFACE_LEVEL == 3
+
+    @pytest.mark.parametrize("level", SURFACE_LEVELS)
+    def test_every_level_round_trips_through_a_restart(self, tmp_path, level):
+        _, rt = make(tmp_path)
+        assert rt.set_surface_level(level) == level
+        _, rt2 = make(tmp_path)
+        assert rt2.surface_level() == level
+
+    @pytest.mark.parametrize("bad", [0, 5, -1, "3", "guided", None, 3.5,
+                                     [3], {"level": 3}])
+    def test_a_client_sending_a_bad_level_is_rejected(self, tmp_path, bad):
+        _, rt = make(tmp_path)
+        with pytest.raises(ValueError, match="surface_level"):
+            rt.set_surface_level(bad)
+        assert rt.surface_level() == DEFAULT_SURFACE_LEVEL
+
+    def test_an_integral_float_is_accepted(self, tmp_path):
+        """JSON has one number type: a client that computed the level
+        arithmetically sends 3.0 and means 3."""
+        _, rt = make(tmp_path)
+        assert rt.set_surface_level(4.0) == 4
+        assert rt.surface_level() == 4
+
+    @pytest.mark.parametrize("bad", [True, False, "1", None, 9, 0, [1]])
+    def test_a_hand_edited_file_falls_back_and_never_raises(self, tmp_path, bad):
+        """The failure mode is "you lose a preference", never "the app will
+        not start" — `apply_control_state` learned this the expensive way.
+
+        `True` is the one that matters: `isinstance(True, int)` is True in
+        Python and `True == 1`, so a naive check would silently put a user
+        into Guided — the most restrictive level, chosen by nobody.
+        """
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"surface_level": bad}), encoding="utf-8")
+        cfg, rt = make(tmp_path)
+        rt.apply(cfg)                                    # no crash
+        assert rt.surface_level() == DEFAULT_SURFACE_LEVEL
+
+    def test_it_does_not_touch_either_existing_mode_axis(self, tmp_path):
+        """The third axis obeys the rule binding the other two: switching one
+        never implicitly changes another (CLAUDE.md, UI_V2_DESIGN.md §8.1)."""
+        cfg, rt = make(tmp_path)
+        rt.set_mode(cfg, "high_risk")
+        rt.set_operating_mode(cfg, "human")
+        before = cfg.model_dump()
+
+        rt.set_surface_level(1)
+
+        assert cfg.model_dump() == before
+        assert cfg.engine.trading_mode == "high_risk"
+        assert cfg.engine.operating_mode == "human"
+        # and the reverse direction: a mode switch leaves the level alone
+        rt.set_mode(cfg, "conservative")
+        rt.set_operating_mode(cfg, "ai")
+        assert rt.surface_level() == 1
+
+    def test_it_survives_alongside_the_other_persisted_keys(self, tmp_path):
+        cfg, rt = make(tmp_path)
+        rt.set_surface_level(2)
+        rt.set_watchlist(cfg, ["SPY"])
+        rt.set_update_prefs(channel="beta")
+        doc = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+        assert doc["surface_level"] == 2
+        assert doc["watchlist"] == ["SPY"]
 
 
 class TestWatchlist:

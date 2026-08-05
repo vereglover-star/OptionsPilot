@@ -5,17 +5,44 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-04, on completing **release automation** (a standalone
-change, after closing **V0.9.2 — complete the service extraction**, C1…C12).
+**Last updated:** 2026-08-05, during **UI V2 · M1** (workspace context and
+Surface Level), after closing **M0 — Foundation**.
 
 ## What to do next
 
-**V0.9.2 is closed and release automation is done.** `verify.ps1` green across
-13 gates at 2493 tests. The next milestone is **V0.9.3 — a real API v1**. Scope
-detail lives in the V0.9 Engineering Specification, Revision 2, which is *not*
-in this repository — so **build the commit map in `ROADMAP.md` before starting**,
-exactly as V0.9.1 and V0.9.2 did. That table is the only reason a lost
-specification stopped stalling sessions.
+**Continue UI V2 · M1.** `docs/ROADMAP-UI-V2.md` §12 is the authority for which
+commit comes next — read it first, not this file. `verify.ps1` is green across
+**15 gates** at 2517 tests.
+
+The programme is ten milestones, M0…M9, ending at V1.0.0. Four frozen design
+documents precede it and **must not be modified**: `UI_V2_DESIGN.md` (why),
+`UI_V2_WIREFRAMES.md` (where), `DESIGN_SYSTEM_V2.md` (what it looks like),
+`UI_V2_VISUAL_EXPLORATION.md` (§8 is the freeze). If an answer is not in one of
+them, `ROADMAP-UI-V2.md` §11 gets a row and the work stops at that boundary
+rather than inventing one.
+
+**M0 (V0.10.0) is complete and deliberately unreleased** — the user's decision:
+it contains nothing a user can see, so V0.11.0 will be the release that carries
+both milestones. Nine commits `8c5586e`…`6f859bb`: three token layers with a
+one-way dependency, the type scale in `rem`, the spacing scale adopted where it
+already matched, a dual focus ring, and two new static gates
+(`token_check.py`, `motion_check.py`). The UI renders as it did before, which
+was the exit criterion.
+
+**Two product decisions are settled** and recorded in `ROADMAP-UI-V2.md` §11:
+Surface Level is **local only** (never synchronised), and the **light theme
+ships after V2** — dark first. Six decisions remain open there; each names the
+commit it blocks, and the frozen documents' recommendation is the default if
+none is taken.
+
+**Four ratchets** carry M0's unpayable debt, all in the gate scripts and all
+allowed only to fall: 51 uses of `--legacy-fs-md` (13px), 313 off-scale spacing
+values, 3 hardcoded transition durations, 3 prohibited keyframes. They retire
+per destination in M3–M6, where the markup is re-authored and the layout can
+actually be verified.
+
+**V0.9.3 — a real API v1 — is still unstarted** and is not blocked by any of
+this; it simply lost its place in the queue to the UI programme.
 
 ## Releasing is now one command
 

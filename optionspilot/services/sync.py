@@ -210,6 +210,20 @@ INVENTORY: tuple[PersistedObject, ...] = (
         "key level today so the file can be split for real later.",
         shared_writer=True,
     ),
+    PersistedObject(
+        "data/settings.json#surface_level", SyncDomain.PREFERENCES,
+        SyncPolicy.DEVICE_ONLY,
+        "how much of the interface is revealed (1 Guided - 4 Pro)",
+        "A preference in kind but DEVICE_ONLY by decision, which is why it is "
+        "listed apart from the settings.json row that would otherwise carry "
+        "it: a user may reasonably want Guided on a phone and Full on a "
+        "desktop, so replicating it would overwrite a deliberate choice with "
+        "another deliberate choice. This is also why it is not part of the "
+        "workspace document — that one IS meant to follow the user to a "
+        "second client, and merging the two would have made the difference "
+        "unexpressible without a migration.",
+        shared_writer=True,
+    ),
     # ── workspace ────────────────────────────────────────────────────────────
     PersistedObject(
         "data/settings.json#workspace", SyncDomain.WORKSPACE,

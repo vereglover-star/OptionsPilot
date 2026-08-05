@@ -490,22 +490,40 @@ Named so nobody has to ask.
 
 Each blocks a specific milestone. None blocks starting.
 
-| # | Decision | Blocks | Needed by |
-| --- | --- | --- | --- |
-| 1 | Vendored variable typeface, or platform faces? | Type token values | **M0-C5** |
-| 2 | Does the light theme ship with V2 or after? | Whether M0 defines both themes or only dark | **M0-C3** |
-| 3 | Compact or Comfortable default at Surface Levels 3–4? | Row heights everywhere | **M1-C6** |
-| 4 | Real OS windows or in-app panes for pop-outs? | Scope and hazard profile | **M9-C5** |
-| 5 | Does Surface Level sync across devices? | The shape of the persisted value | **M1-C1** |
-| 6 | Is Research one destination or two? | The section rail | **M6-C1** |
-| 7 | Does Pilot get an LLM? | Whether the panel has an ask field | **M8-C3** |
-| 8 | Which local telemetry, if any, backs the success metrics? | Whether M3+ instruments anything | **M3-C1** |
+| # | Decision | Blocks | Needed by | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Vendored variable typeface, or platform faces? | Type token values | **M0-C5** | ✅ Platform faces (recommendation adopted; M0-C5 shipped) |
+| 2 | Does the light theme ship with V2 or after? | Whether M0 defines both themes or only dark | **M0-C3** | ✅ **After.** Dark ships first; light lands once V2 is complete |
+| 3 | Compact or Comfortable default at Surface Levels 3–4? | Row heights everywhere | **M1-C6** | ⬜ open |
+| 4 | Real OS windows or in-app panes for pop-outs? | Scope and hazard profile | **M9-C5** | ⬜ open |
+| 5 | Does Surface Level sync across devices? | The shape of the persisted value | **M1-C1** | ✅ **No — local only.** Not synchronised under any transport |
+| 6 | Is Research one destination or two? | The section rail | **M6-C1** | ⬜ open |
+| 7 | Does Pilot get an LLM? | Whether the panel has an ask field | **M8-C3** | ⬜ open |
+| 8 | Which local telemetry, if any, backs the success metrics? | Whether M3+ instruments anything | **M3-C1** | ⬜ open |
 
 Recommendations for all eight are already recorded in the frozen documents
 (`UI_V2_DESIGN.md` §19, `DESIGN_SYSTEM_V2.md` §12.4,
 `UI_V2_WIREFRAMES.md` §13.2, `UI_V2_VISUAL_EXPLORATION.md` §9). Adopting
 the recommendations unblocks everything and is the default if no decision
 is taken.
+
+**Consequences of the two decisions taken** — recorded here because both
+have an implementation the frozen documents do not describe:
+
+- **5 · Surface Level is local only.** It is therefore NOT part of the
+  workspace document, which is explicitly meant to follow a user to a
+  second client. It is its own key in `settings.json`, with its own row in
+  `services/sync.py::INVENTORY` classified `PREFERENCES` /
+  `DEVICE_ONLY` — a preference in kind, device-scoped by decision. The
+  design's per-device recommendation carried a rider ("with an offer to
+  match on first mobile launch"); that rider is **not** adopted, because
+  the offer needs a second client to make it to and there is none.
+- **2 · Light theme after V2.** M0 defined the semantic layer against the
+  dark ramp only. Nothing about the layering makes the second theme harder
+  later — a theme becomes a second block of semantic assignments over the
+  same ramp — but until it exists, `token_check.py`'s contrast floors
+  cover one theme and `a11y_check.py` (M9) inherits a smaller job than §5.1
+  states. When light ships, both gates gain the second theme.
 
 ---
 
@@ -516,7 +534,19 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
-### Active milestone — M0 · V0.10.0 Foundation
+### Active milestone — M1 · V0.11.0 Workspace context and Surface Level
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | `surface_level` in `RuntimeSettings`, device-only, total on read | `pending` |
+| C2 | ⬜ | Workspace symbol / timeframe / selected-contract context | — |
+| C3 | ⬜ | The workspace endpoint extended | — |
+| C4 | ⬜ | One symbol context | — |
+| C5 | ⬜ | One timeframe context | — |
+| C6 | ⬜ | The Surface Level control, chain columns its first consumer | — |
+| C7 | ⬜ | `workspace_check.py` extended with the loop test | — |
+
+### M0 · V0.10.0 Foundation — complete
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
@@ -535,7 +565,7 @@ mapping.
 | Milestone | Commits | Status | Hashes |
 | --- | --- | --- | --- |
 | M0 · V0.10.0 Foundation | C1–C9 | ✅ **complete** | see above |
-| M1 · V0.11.0 Workspace context | C1–C7 | ⬜ not started | — |
+| M1 · V0.11.0 Workspace context | C1–C7 | 🔄 in progress | see above |
 | M2 · V0.12.0 Shell | C1–C11 | ⬜ not started | — |
 | M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |
 | M4 · V0.14.0 Trade | C1–C11 | ⬜ not started | — |

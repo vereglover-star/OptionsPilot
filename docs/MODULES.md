@@ -27,7 +27,10 @@ yaml config, persisted to `data/settings.json`: `set_watchlist`,
 `set_pinned`, `save_favorites`, `set_mode` (trading_mode + custom tunables,
 validated through `EngineConfig`/`RiskConfig`), `set_operating_mode`
 (ai/human, independent of trading_mode), `guide_state`/`set_guide_state`
-(V0.6.1 — the guided-onboarding document, stored under the `guide` key).
+(V0.6.1 — the guided-onboarding document, stored under the `guide` key),
+`surface_level`/`set_surface_level` (V0.11.0 — the UI V2 presentation axis,
+1–4; a read of a hand-edited file falls back to `DEFAULT_SURFACE_LEVEL`
+rather than raising, a write from a client is rejected loudly).
 `apply(cfg)` overlays persisted choices onto a freshly loaded config at
 bootstrap; `_apply_mode` always preserves the caller's current `operating_mode`
 when restoring the baseline for a trading-mode switch. `MAX_WATCHLIST = 30`.

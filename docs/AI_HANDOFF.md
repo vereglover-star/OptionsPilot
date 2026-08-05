@@ -366,9 +366,12 @@ Two config layers, by design:
 2. **`data/settings.json`** (via `config/runtime.py::RuntimeSettings`) — the
    in-app-editable overlay: watchlist (+ pinned + favorites), `trading_mode`
    (+ custom-mode tunables), `operating_mode`, updater preferences, the
-   guided-onboarding document (`guide`, V0.6.1) and the workspace document
+   guided-onboarding document (`guide`, V0.6.1), the workspace document
    (`workspace`, V0.7.0 — selected tab, symbol, timeframe, indicators, sidebar,
-   recent symbols, saved layouts). Applied on top of the yaml
+   recent symbols, saved layouts) and `surface_level` (V0.11.0 — how much of
+   the interface is revealed, 1 Guided to 4 Pro; a presentation-only third
+   axis, deliberately device-only and so kept out of the workspace document,
+   which is meant to follow a user to a second client). Applied on top of the yaml
    config at startup (`RuntimeSettings.apply()`), then mutated live by UI
    actions under the `UIServer.lock`. A `baseline` snapshot (yaml values,
    taken before any runtime overlay) lets mode switches restore exact yaml
@@ -625,7 +628,7 @@ python -m venv .venv
 .venv\Scripts\python -m optionspilot scan           # one cycle, print JSON
 .venv\Scripts\python -m optionspilot backtest SPY --days 25
 
-# Tests (2493 tests as of this writing, all passing)
+# Tests (2517 tests as of this writing, all passing)
 .venv\Scripts\python -m pytest
 
 # Package as a Windows exe (no console window; data/ preserved across rebuilds)
@@ -770,7 +773,7 @@ Windows 10/11 by default).
    "stock leg" type and touch `broker/orders.py`, `PaperBroker`, and the
    Trade tab chain UI.
 5. Frontend coverage is real but shallow — `tests/test_ui_server.py`
-   exercises the FastAPI layer via `TestClient` (2493 tests cover this
+   exercises the FastAPI layer via `TestClient` (2517 tests cover this
    thoroughly), but nothing drives `static/index.html` in a real browser.
    V2-1 through V2-3 frontend surfaces (Trade tab, Coach tab, AI/Human
    toggle) have all been manually live-verified, but there is no regression

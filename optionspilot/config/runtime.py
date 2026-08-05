@@ -12,6 +12,7 @@ the dashboard, persisted to data/settings.json after every change:
     motion and hint preferences) — see services/guide.py
   - workspace state (selected tab, symbol, timeframe, indicators, sidebar,
     recent symbols, saved layouts) — see services/workspace.py
+  - surface_level (1–4) — how much of the interface is revealed
 
 Changes mutate the *live* AppConfig objects that every component reads at
 call time (the orchestrator re-reads the watchlist each cycle, the gate and
@@ -69,6 +70,23 @@ _RUNTIME_BOOL_KEYS = {
     "start_minimized_to_tray", "restore_previous_workspace",
     "auto_resume_monitoring",
 }
+
+# Surface Level (UI V2). How much of the interface is revealed:
+# 1 Guided, 2 Focused, 3 Full, 4 Pro. `docs/UI_V2_DESIGN.md` §8 states the
+# four invariants that bind it, and the first two are the reason it lives
+# here rather than anywhere near the engine: it NEVER changes behaviour and
+# it NEVER hides money, risk or a warning. It is a third mode-like axis
+# alongside operating_mode and trading_mode, and the same orthogonality rule
+# applies — no code path may let one of the three change another.
+SURFACE_LEVELS = (1, 2, 3, 4)
+
+# 3 (Full) for an installation that has no stored value, which means every
+# installation that predates this field. That is not a preference about what
+# a new user should see — onboarding asks them (§7.2) and writes the answer.
+# It is the only default that does not silently REMOVE something: an existing
+# user is already looking at every column this app has, and §8.3 is explicit
+# that "the system never lowers a user's level. Only the user does."
+DEFAULT_SURFACE_LEVEL = 3
 
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
@@ -292,6 +310,55 @@ class RuntimeSettings:
                     continue
                 out[key] = value
         return out
+
+    # ── Surface Level (UI V2 M1) ─────────────────────────────────────────────
+    #
+    # Deliberately NOT part of the workspace document, and the distinction is
+    # the product decision recorded in `ROADMAP-UI-V2.md` §11-5: the workspace
+    # is "where you were looking" and is meant to follow you to a second
+    # client, whereas Surface Level is per-device — someone may reasonably want
+    # Guided on a phone and Full on a desktop. Folding it into the workspace
+    # would have made that impossible to express later without a migration.
+    # `services/sync.py` carries the matching inventory row.
+    #
+    # The read/write asymmetry is the house pattern (see _valid_runtime_patch):
+    # a READ of a hand-edited file must never fail — it falls back and the user
+    # loses a preference — while a WRITE from a client is rejected loudly,
+    # because a client sending 7 has a bug that silently defaulting would hide.
+
+    def surface_level(self) -> int:
+        """The stored Surface Level, or the default. Never raises."""
+        with self._lock:
+            return self._coerce_surface_level(self._doc.get("surface_level"))
+
+    def set_surface_level(self, level) -> int:
+        """Validate, persist and return the new Surface Level."""
+        valid = self._coerce_surface_level(level, reject=True)
+        with self._lock:
+            self._doc["surface_level"] = valid
+            self._save()
+        log.info("surface level set to %d", valid)
+        return valid
+
+    @staticmethod
+    def _coerce_surface_level(value, *, reject: bool = False) -> int:
+        # bool BEFORE int: `isinstance(True, int)` is True in Python, so a
+        # hand-edited `"surface_level": true` would otherwise be accepted and
+        # silently become Guided — the most restrictive level, arrived at by
+        # nobody's decision.
+        if isinstance(value, bool):
+            value = None
+        elif isinstance(value, float) and value.is_integer():
+            # JSON has one number type; a client that computed the level
+            # arithmetically sends 3.0 and means 3.
+            value = int(value)
+        if value in SURFACE_LEVELS:
+            return int(value)
+        if reject:
+            raise ValueError(
+                f"surface_level must be one of {list(SURFACE_LEVELS)}, "
+                f"got {value!r}")
+        return DEFAULT_SURFACE_LEVEL
 
     # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
     #
