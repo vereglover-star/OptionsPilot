@@ -528,7 +528,7 @@ mapping.
 | C6 | ✅ | The spacing scale, adopted where it already matched | `d7502a7` |
 | C7 | ✅ | `scripts/token_check.py`, wired as gate 4/8 | `7714d54` |
 | C8 | ✅ | Dual focus ring, control borders, 16 contrast assertions | `dc0f9df` |
-| C9 | ✅ | `scripts/motion_check.py`, wired as gate 5/9 | `pending` |
+| C9 | ✅ | `scripts/motion_check.py`, wired as gate 5/9 | `6f859bb` |
 
 ### All milestones
 
