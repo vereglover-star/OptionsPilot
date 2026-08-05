@@ -526,8 +526,8 @@ mapping.
 | C4 | ✅ | Components repointed; zero primitive references | `26a35d0` |
 | C5 | ✅ | Type roles in `rem`; large text becomes one root change | `9082c8c` |
 | C6 | ✅ | The spacing scale, adopted where it already matched | `d7502a7` |
-| C7 | ✅ | `scripts/token_check.py`, wired as gate 4/8 | `pending` |
-| C8 | ⬜ | Dual focus ring and `border.control` on inputs | — |
+| C7 | ✅ | `scripts/token_check.py`, wired as gate 4/8 | `7714d54` |
+| C8 | ✅ | Dual focus ring, control borders, 16 contrast assertions | `pending` |
 | C9 | ⬜ | `scripts/motion_check.py` | — |
 
 ### All milestones

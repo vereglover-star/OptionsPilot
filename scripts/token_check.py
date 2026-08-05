@@ -69,6 +69,64 @@ RETIRED = (
     "--bad-soft", "--warn", "--warn-soft",
 )
 
+# Contrast floors, from DESIGN_SYSTEM_V2.md §10.2. The design document
+# reports these as measured; this recomputes them from the tokens actually in
+# the file, so a well-meaning tweak to a ramp step fails here rather than in
+# an accessibility audit six months later. 4.5 is body text, 3.0 is large
+# text and meaningful non-text (borders, marks, focus indicators).
+CONTRAST = [
+    ("--ink-primary", "--surface-base", 4.5),
+    ("--ink-secondary", "--surface-base", 4.5),
+    ("--ink-muted", "--surface-base", 4.5),
+    ("--ink-muted", "--surface-raised", 4.5),
+    ("--action-primary-text", "--surface-base", 4.5),
+    ("--action-primary-ink", "--action-primary-fill", 4.5),
+    ("--market-pos-text", "--surface-base", 4.5),
+    ("--market-neg-text", "--surface-base", 4.5),
+    ("--status-caution", "--surface-base", 4.5),
+    ("--action-primary-fill", "--surface-base", 3.0),
+    ("--market-pos-mark", "--surface-base", 3.0),
+    ("--market-neg-mark", "--surface-base", 3.0),
+    ("--border-control", "--surface-base", 3.0),
+    ("--focus-ring", "--surface-base", 3.0),
+    # The dual focus ring, and the reason it is dual: the ring alone on the
+    # primary fill measures 2.75:1 and fails, so the gap carries it.
+    ("--focus-ring", "--focus-gap", 3.0),
+    ("--focus-gap", "--action-primary-fill", 3.0),
+]
+
+
+def resolve(defs: dict[str, str], name: str, depth: int = 0) -> str | None:
+    """Follow a token through any var() chain to a literal colour."""
+    if depth > 8 or name not in defs:
+        return None
+    value = defs[name].strip()
+    chain = re.fullmatch(r"var\(\s*(--[a-z0-9-]+)\s*\)", value)
+    return resolve(defs, chain.group(1), depth + 1) if chain else value
+
+
+def luminance(hex_colour: str) -> float | None:
+    h = hex_colour.strip().lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6 or not re.fullmatch(r"[0-9a-fA-F]{6}", h):
+        return None
+    parts = []
+    for i in (0, 2, 4):
+        c = int(h[i:i + 2], 16) / 255
+        parts.append(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = parts
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a: str, b: str) -> float | None:
+    la, lb = luminance(a), luminance(b)
+    if la is None or lb is None:
+        return None
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 RHYTHM_DECL = re.compile(
     r"\b((?:padding|margin|gap)(?:-(?:top|right|bottom|left|inline|block|x|y))?)"
     r"\s*:\s*([^;{}]+);"
@@ -147,8 +205,32 @@ def check() -> list[str]:
             f"off-scale rhythm values: {off_scale}, ratchet is "
             f"{MAX_OFF_SCALE_RHYTHM}. Use a --space-* step.")
 
+    # 6. contrast, recomputed from the tokens in the file
+    root = block_span(text, ":root")
+    defs: dict[str, str] = {}
+    if root:
+        for m in re.finditer(r"(--[a-z0-9-]+)\s*:\s*([^;]+);", text[root[0]:root[1]]):
+            defs[m.group(1)] = m.group(2)
+    checked = 0
+    for fg, bg, floor in CONTRAST:
+        a, b = resolve(defs, fg), resolve(defs, bg)
+        if a is None or b is None:
+            problems.append(
+                f"contrast: {fg} on {bg} — token missing or unresolvable.")
+            continue
+        ratio = contrast(a, b)
+        if ratio is None:
+            problems.append(
+                f"contrast: {fg} ({a}) on {bg} ({b}) — not a plain hex colour.")
+        elif ratio < floor:
+            problems.append(
+                f"contrast: {fg} on {bg} is {ratio:.2f}:1, floor is {floor}:1.")
+        else:
+            checked += 1
+
     if not problems:
-        print(f"OK: token layering clean; {legacy_fs} legacy type uses "
+        print(f"OK: {checked} contrast floors met; token layering clean; "
+              f"{legacy_fs} legacy type uses "
               f"(<= {MAX_LEGACY_FS_MD}), {off_scale} off-scale rhythm values "
               f"(<= {MAX_OFF_SCALE_RHYTHM}).")
         if legacy_fs < MAX_LEGACY_FS_MD or off_scale < MAX_OFF_SCALE_RHYTHM:

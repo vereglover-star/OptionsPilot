@@ -181,7 +181,22 @@ html.market-alt {
   --action-primary-fill:#7c5cf0;
 }
 * { box-sizing:border-box; margin:0; }
-:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; border-radius:4px; }
+/* Focus is a DUAL ring (DESIGN_SYSTEM_V2.md §2.8). The offset lifts the
+   bright ring clear of whatever the element is filled with, and the dark
+   gap underneath gives it a guaranteed backdrop — measured, the ring is
+   only 2.75:1 directly on the primary fill, which fails, but 11.38:1
+   against the gap and 4.14:1 gap-against-fill. Filled controls get the gap
+   explicitly; everything else sits on a dark surface already. */
+:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px;
+                 border-radius:var(--radius-sm); }
+.btn.primary:focus-visible, .btn.buy:focus-visible, .btn.sell:focus-visible,
+.md-switch input:focus-visible + .track {
+  box-shadow:0 0 0 2px var(--focus-gap); }
+
+/* Every form control carries the one border token that is REQUIRED to clear
+   3:1, because for an input the border is the only thing saying where the
+   control is. Component rules may restyle it; they may not weaken it. */
+input, select, textarea { border-color:var(--border-control); }
 .skip { position:absolute; left:-9999px; top:8px; z-index:100; background:var(--action-primary-fill);
         color:#fff; padding:var(--space-2) 14px; border-radius:var(--radius-sm); font-size:var(--legacy-fs-md); }
 .skip:focus { left:8px; }
@@ -373,7 +388,7 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 .tk-fields { display:flex; flex-direction:column; gap:var(--space-3); }
 .tk-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
 .tk-row .lbl { color:var(--ink-muted); font-size:var(--legacy-fs-md); }
-.tk-row select, .tk-row input[type=number] { background:var(--surface-sunken); border:1px solid var(--border-subtle);
+.tk-row select, .tk-row input[type=number] { background:var(--surface-sunken); border:1px solid var(--border-control);
   color:var(--ink-primary); border-radius:var(--radius-sm); padding:var(--space-2) 10px; font-size:var(--legacy-fs-md); }
 .tk-est { display:flex; justify-content:space-between; padding:10px 2px 2px; border-top:1px solid var(--border-subtle);
   font-size:var(--text-body); }
@@ -730,7 +745,7 @@ details.md-sec > div { padding-top:11px; }
 
 /* watchlist manager */
 .wl-addwrap { position:relative; margin-bottom:var(--space-3); }
-textarea.wl-input { width:100%; background:var(--surface-sunken); border:1px solid var(--border-subtle);
+textarea.wl-input { width:100%; background:var(--surface-sunken); border:1px solid var(--border-control);
   color:var(--ink-primary); border-radius:10px; padding:11px 13px; font-size:var(--text-body); resize:vertical;
   min-height:44px; font-family:inherit; }
 textarea.wl-input:focus { outline:none; border-color:var(--action-primary-fill); }
@@ -747,7 +762,7 @@ textarea.wl-input:focus { outline:none; border-color:var(--action-primary-fill);
   transition:all var(--dur-fast); }
 .chips button:hover { border-color:var(--action-primary-fill); color:var(--ink-primary); }
 .wl-tools { display:flex; gap:10px; align-items:center; margin:6px 0 10px; flex-wrap:wrap; }
-.wl-tools input, .wl-tools select { background:var(--surface-sunken); border:1px solid var(--border-subtle);
+.wl-tools input, .wl-tools select { background:var(--surface-sunken); border:1px solid var(--border-control);
   color:var(--ink-primary); border-radius:var(--radius-sm); padding:7px 10px; font-size:var(--legacy-fs-md); }
 .wl-list { outline:none; }
 .wl-row { display:flex; align-items:center; gap:10px; padding:var(--space-2) 10px; border-radius:var(--radius-sm);
@@ -774,7 +789,7 @@ textarea.wl-input:focus { outline:none; border-color:var(--action-primary-fill);
 /* advanced custom mode form */
 .adv { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:var(--space-3); margin-top:var(--space-3); }
 .adv label { display:flex; flex-direction:column; gap:var(--space-1); color:var(--ink-muted); font-size:var(--text-caption); }
-.adv input { background:var(--surface-sunken); border:1px solid var(--border-subtle); color:var(--ink-primary);
+.adv input { background:var(--surface-sunken); border:1px solid var(--border-control); color:var(--ink-primary);
   border-radius:var(--radius-sm); padding:var(--space-2) 10px; font-size:var(--legacy-fs-md); }
 details.advwrap summary { cursor:pointer; color:var(--ink-secondary); font-size:var(--legacy-fs-md); margin-top:10px; }
 
@@ -791,7 +806,7 @@ svg.chart { width:100%; height:200px; display:block; }
 
 form.bt { display:flex; gap:10px; align-items:end; flex-wrap:wrap; margin-bottom:14px; }
 form.bt label { display:flex; flex-direction:column; gap:var(--space-1); color:var(--ink-muted); font-size:var(--text-caption); }
-form.bt input { background:var(--surface-sunken); border:1px solid var(--border-subtle); color:var(--ink-primary);
+form.bt input { background:var(--surface-sunken); border:1px solid var(--border-control); color:var(--ink-primary);
                 border-radius:var(--radius-sm); padding:var(--space-2) 10px; width:110px; font-size:var(--legacy-fs-md); }
 pre.cfg { background:var(--surface-sunken); border-radius:10px; padding:14px; overflow:auto;
           font-size:var(--text-caption); line-height:1.5; color:var(--ink-secondary); }
@@ -853,7 +868,7 @@ h3.sub { font-size:var(--text-caption); color:var(--ink-muted); margin:14px 0 va
 
 /* chart workspace */
 .chart-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
-.chart-bar input { background:var(--surface-sunken); border:1px solid var(--border-subtle); color:var(--ink-primary);
+.chart-bar input { background:var(--surface-sunken); border:1px solid var(--border-control); color:var(--ink-primary);
   border-radius:var(--radius-sm); padding:7px 10px; font-size:var(--text-body); font-weight:700; width:96px;
   text-transform:uppercase; }
 .chart-bar input:focus { outline:none; border-color:var(--action-primary-fill); }

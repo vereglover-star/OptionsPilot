@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, after M0-C7.
+**Last updated:** 2026-08-05, after M0-C8.
 
 ---
 
@@ -100,7 +100,7 @@ existing CSS class or id it replaces; blank means new.
 | --- | --- | --- | --- | --- |
 | 1 | Button | `.btn`, `.btn.primary`, `.btn.buy` | M0-C4 | 🟡 on semantic tokens; states M4 |
 | 2 | Commit control | ➖ | M4-C8 | ⬜ |
-| 3 | Input | bare `input`/`textarea` rules | M0-C8 | ⬜ |
+| 3 | Input | bare `input`/`textarea` rules | M0-C8 | 🟡 border + focus done; states M4 |
 | 4 | Dropdown / select | bare `select` rules | M0-C4 | 🟡 on semantic tokens |
 | 5 | Segmented control | `.seg`, `.side-seg` | M0-C4 | 🟡 on semantic tokens |
 | 6 | Card / panel → **instrument** | `.panel`, `.cards` | M3-C4 | ⬜ |
@@ -140,8 +140,8 @@ existing CSS class or id it replaces; blank means new.
 | Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ✅ 477 replacements; old names deleted |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 8 roles in `rem` + `--legacy-fs-md` | M0-C5 | ✅ roles landed; the 13px legacy step retires per destination in M3–M6 |
 | Spacing scale | `--sp-1..6`, **0 uses** | `--space-0..7`, 8 purpose-named steps | M0-C6 | ✅ scale landed, 173 exact matches adopted; 313 off-scale retire per destination |
-| Focus ring | single `:focus-visible` outline | dual ring + gap | M0-C8 | ⬜ |
-| Input borders | none / `--grid` | `border.control` at 3.32:1 | M0-C8 | ⬜ |
+| Focus ring | single `:focus-visible` outline | dual ring + gap, 2px offset | M0-C8 | ✅ |
+| Input borders | none / `--grid` | `--border-control` at 3.32:1 | M0-C8 | ✅ base rule + field rules upgraded |
 | Elevation shadows | `--sh-1/2/3` | `--shadow-raised/overlay`, `--scrim` | M0-C1 values, M0-C4 adoption | 🟡 values landed |
 
 ---
@@ -214,6 +214,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C8 | Dual focus ring (2px offset + a guaranteed dark gap on filled controls) and `--border-control` on every form field. `token_check` now recomputes **16 contrast floors** from the tokens in the file, so a ramp tweak fails the build rather than an audit. |
 | 2026-08-05 | M0-C7 | `token_check.py` landed and wired as gate 4/8. It found **8 dangling `var()` references on its first run** — `--danger`, `--success`, `--elev-2`, `--text-dim`, `--panel` were never defined in this codebase, so those declarations had been rendering unthemed; two more hid behind hex fallbacks. All 16 occurrences repaired. Also closes the radius/motion/shadow adoption C4 left behind. |
 | 2026-08-05 | M0-C6 | Spacing scale replaced with the frozen eight steps and adopted at all 173 occurrences that already matched a step exactly — zero visual delta. **Deviation:** 313 off-scale occurrences (6, 10, 14, 18px…) are NOT snapped; that is a whole-app density change no gate can verify, and it retires per destination in M3–M6. |
 | 2026-08-05 | M0-C5 | Type scale converted to `rem` and renamed to the frozen roles; the 4 hardcoded sizes tokenised; large-text mode collapsed from nine overrides to one root change. **Deviation:** 13px is not a step in the frozen scale but 51 rules use it, so it survives as `--legacy-fs-md`, labelled legacy rather than blessed as a role. Collapsing it is a density change M0 cannot verify; each destination retires its own uses under rule T-1 as it is rebuilt. |
