@@ -524,8 +524,8 @@ mapping.
 | C2 | ✅ | The neutral ramp replaces the four ad-hoc surfaces | `f416e01` |
 | C3 | ✅ | The semantic layer | `b60daa1` |
 | C4 | ✅ | Components repointed; zero primitive references | `26a35d0` |
-| C5 | ✅ | Type roles in `rem`; large text becomes one root change | `pending` |
-| C6 | ⬜ | The spacing scale, adopted | — |
+| C5 | ✅ | Type roles in `rem`; large text becomes one root change | `9082c8c` |
+| C6 | ✅ | The spacing scale, adopted where it already matched | `pending` |
 | C7 | ⬜ | `scripts/token_check.py` | — |
 | C8 | ⬜ | Dual focus ring and `border.control` on inputs | — |
 | C9 | ⬜ | `scripts/motion_check.py` | — |

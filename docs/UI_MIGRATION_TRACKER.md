@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-05, after M0-C5.
+**Last updated:** 2026-08-05, after M0-C6.
 
 ---
 
@@ -32,8 +32,8 @@ Re-measure at each milestone close.
 | `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 8,254 |
 | Hardcoded `font-size: Npx` | 4 | 0 | **0** ✅ |
 | `font-size: var(--fs-*)` uses | 185 | all on roles | **0** — all renamed to `--text-*`; 51 on `--legacy-fs-md` |
-| `var(--sp-*)` uses | **0** | all spacing | 0 |
-| Distinct hardcoded padding/margin/gap px values | 19 | 0 | 19 |
+| `var(--space-*)` uses | 0 | all rhythm | **173** |
+| Off-scale rhythm occurrences (≤48px) | 321 | 0 | **313** — ratcheted, retired per destination in M3–M6 |
 | `var(--r-*)` uses | 56 | all radii | 56 |
 | `data-tab` refs in browser suites | 38 | 0 | 38 |
 | `data-tab` refs in `index.html` | 18 | 0 | 18 |
@@ -139,7 +139,7 @@ existing CSS class or id it replaces; blank means new.
 | Semantic layer | ➖ | `--surface-*`, `--ink-*`, `--border-*`, `--action-*`, `--market-*`, `--status-*`, `--focus-*` | M0-C3 | ✅ defined; consumers M0-C4 |
 | Component→semantic repoint | components use primitives | zero primitive refs | M0-C4 | ✅ 477 replacements; old names deleted |
 | Type scale | `--fs-*` in px (9 steps, 4 stragglers) | 8 roles in `rem` + `--legacy-fs-md` | M0-C5 | ✅ roles landed; the 13px legacy step retires per destination in M3–M6 |
-| Spacing scale | `--sp-1..6`, **0 uses** | 8 purpose-named steps, fully adopted | M0-C6 | ⬜ |
+| Spacing scale | `--sp-1..6`, **0 uses** | `--space-0..7`, 8 purpose-named steps | M0-C6 | ✅ scale landed, 173 exact matches adopted; 313 off-scale retire per destination |
 | Focus ring | single `:focus-visible` outline | dual ring + gap | M0-C8 | ⬜ |
 | Input borders | none / `--grid` | `border.control` at 3.32:1 | M0-C8 | ⬜ |
 | Elevation shadows | `--sh-1/2/3` | `--shadow-raised/overlay`, `--scrim` | M0-C1 values, M0-C4 adoption | 🟡 values landed |
@@ -214,6 +214,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 | --- | --- | --- |
 | 2026-08-05 | — | Created, before M0-C1. Baseline measured. |
 | 2026-08-05 | M0-C1 | UI V2 primitives landed in the token block: neutral ramp, radius, motion, elevation. Consumed by nothing. |
+| 2026-08-05 | M0-C6 | Spacing scale replaced with the frozen eight steps and adopted at all 173 occurrences that already matched a step exactly — zero visual delta. **Deviation:** 313 off-scale occurrences (6, 10, 14, 18px…) are NOT snapped; that is a whole-app density change no gate can verify, and it retires per destination in M3–M6. |
 | 2026-08-05 | M0-C5 | Type scale converted to `rem` and renamed to the frozen roles; the 4 hardcoded sizes tokenised; large-text mode collapsed from nine overrides to one root change. **Deviation:** 13px is not a step in the frozen scale but 51 rules use it, so it survives as `--legacy-fs-md`, labelled legacy rather than blessed as a role. Collapsing it is a density change M0 cannot verify; each destination retires its own uses under rule T-1 as it is rebuilt. |
 | 2026-08-05 | M0-C4 | 477 `var()` references repointed onto the semantic layer, property-aware; old token names deleted; `gd-contrast` rewritten. `guide_check.py` read `--muted` by name — both reads went empty and the check passed vacuously, so it now asserts the token is defined. **Debt:** the equity chart's dot uses the accent inside a plot area, which DV rule C-6 forbids; fix in M3. |
 | 2026-08-05 | M0-C3 | Semantic layer defined, including status tints (the design system named status colours but not their tint backgrounds — the existing `*-soft` tokens needed a home) and the colour-vision alternate as a scoped override; its Settings toggle lands in M6. |
