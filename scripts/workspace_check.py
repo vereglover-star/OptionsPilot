@@ -169,8 +169,60 @@ def run_checks(page, base: str, c: Checks) -> None:
     c.check("and the abandoned text never reached the server",
             workspace(base)["symbol"] == "IWM", workspace(base)["symbol"])
 
-    # Back to QQQ, so the storage-loss checks below read exactly what they did
-    # before this block existed.
+    # ── one timeframe context (UI V2 M1-C5) ──────────────────────────────────
+    # §4.5-2: "Changing the chart timeframe changes it everywhere a timeframe
+    # applies, and it survives a symbol change."
+    #
+    # The second half is the one worth asserting, because it is the one a
+    # careless symbol handler breaks: the timeframe is a statement about how
+    # you read a market, not about which market.
+    page.fill("#ch-symbol", "AMD")
+    page.press("#ch-symbol", "Enter")
+    page.wait_for_timeout(2500)
+    active_tf = page.eval_on_selector_all(
+        "#ch-tfs button.active", "els => els.map(e => e.dataset.tf)")
+    c.check("the timeframe survives a symbol change", active_tf == ["15m"],
+            str(active_tf))
+    settle(page, 2500)
+    c.check("and the server still holds it",
+            workspace(base)["timeframe"] == "15m", workspace(base)["timeframe"])
+
+    # And "everywhere a timeframe applies" — asserted structurally, because the
+    # reason it holds is structural: the Trade tab's chart is not a second
+    # chart, it is THE chart relocated into a second slot, so its timeframe
+    # control is the same control. A test that read a copied value would pass
+    # just as happily against two charts that agreed by luck.
+    page.click('nav button[data-tab="trade"]')
+    page.wait_for_selector("#tab-trade", state="visible")
+    expanded = page.get_attribute("#tk-chart-toggle", "aria-expanded")
+    if expanded != "true":
+        page.click("#tk-chart-toggle")
+    page.wait_for_timeout(2500)
+    c.check("the Trade tab hosts THE chart, not a second one",
+            page.eval_on_selector(
+                "#tk-chart-slot", "el => !!el.querySelector('#ch-tfs')"))
+    trade_tf = page.eval_on_selector_all(
+        "#tk-chart-slot #ch-tfs button.active", "els => els.map(e => e.dataset.tf)")
+    c.check("so the timeframe on Trade is the timeframe on Charts",
+            trade_tf == ["15m"], str(trade_tf))
+
+    # Park the chart back on the Charts tab if this check is what moved it.
+    # Leaving it in the Trade slot means `#ch-symbol` is inside a hidden tab
+    # for everything below — which is exactly how this block first failed.
+    if expanded != "true":
+        page.click("#tk-chart-toggle")
+        page.wait_for_timeout(1000)
+
+    # Back to QQQ on the Charts tab, so the storage-loss checks below read
+    # exactly what they did before this block existed.
+    #
+    # This transition is load-bearing, not tidy-up. Visiting Trade starts an
+    # option-chain fetch for the PREVIOUS symbol, and typing a new one before
+    # it returns is what caught M1-C4's staleness bug: the late response
+    # adopted its own symbol and dragged the whole workspace back to it. The
+    # storage-loss checks below are what noticed, several assertions later.
+    page.click('nav button[data-tab="charts"]')
+    page.wait_for_selector("#tab-charts", state="visible")
     page.fill("#ch-symbol", "QQQ")
     page.press("#ch-symbol", "Enter")
     page.wait_for_timeout(2500)

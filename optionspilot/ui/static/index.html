@@ -3444,7 +3444,36 @@ window.Ctx = (() => {
     if (INPUTS.includes(e.target?.id)) render();
   });
 
-  return {symbol, setSymbol, render,
+  /* One timeframe context (M1-C5). §4.5-2: "Changing the chart timeframe
+     changes it everywhere a timeframe applies, and it survives a symbol
+     change."
+
+     Most of that guarantee already held, and for a good reason: the Charts
+     tab and the Trade tab's chart are the SAME chart instance, relocated
+     between two slots, so the timeframe control travels with it and cannot
+     disagree with itself. What did not hold was ownership — `CH.tf` was
+     written from the pill handler AND from `chRenderData`, which is the
+     two-writers-of-one-fact shape that has produced drift here three times.
+     One setter now, exactly as for the symbol. */
+  const timeframe = () => CH.tf;
+
+  function setTimeframe(next) {
+    const tf = String(next == null ? "" : next).trim();
+    if (!tf || tf === CH.tf) return CH.tf;
+    CH.tf = tf;
+    // Persisted from HERE, before any network-backed render: waiting for
+    // setData once made a slow provider lose a timeframe the user had
+    // already chosen. The symbol learned the same lesson in C4.
+    try { localStorage.setItem("chTf", tf); } catch (e) {
+      console.debug("could not persist timeframe", e);
+    }
+    try { chPaintControls(); } catch (e) {
+      console.debug("could not paint timeframe controls", e);
+    }
+    return CH.tf;
+  }
+
+  return {symbol, setSymbol, render, timeframe, setTimeframe,
           onChange: fn => listeners.push(fn),
           get inputs() { return INPUTS.slice(); }};
 })();
@@ -4132,9 +4161,10 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
   CH.dataKey = key;
   CH.dataSig = chSig(d);
   CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
-  // chSym is NOT written here: `Ctx.setSymbol` owns it, and a second writer of
-  // one fact is how this codebase has produced drift three times over.
-  localStorage.setItem("chTf", CH.tf);
+  // Neither chSym nor chTf is written here: `Ctx` owns both, and a second
+  // writer of one fact is how this codebase has produced drift three times.
+  // A render is not where a user's intent is recorded — the intent was
+  // recorded when they expressed it, whether or not the render succeeds.
   // The whole setData + viewport-restore sequence is ONE chMoveViewport call
   // (Bug 4 — a single controller, not a convention every caller has to
   // remember). restoringViewport must cover setData too: setData auto-fits
@@ -5480,12 +5510,10 @@ function toggleChartFullscreen() {
 }
 
 document.querySelectorAll("#ch-tfs button").forEach(b => b.onclick = () => {
-  CH.tf = b.dataset.tf;
-  // Persist user intent before the network-backed chart render completes.
-  // Waiting for setData made a slow provider lose a timeframe choice during
-  // startup/reload even though the user had already selected it.
-  localStorage.setItem("chTf", CH.tf);
-  chPaintControls(); loadChart();
+  // One setter: it persists the intent and repaints the pills, so this
+  // handler is left saying only what it means — load the chart.
+  Ctx.setTimeframe(b.dataset.tf);
+  loadChart();
   Guide.mark("chart.timeframe");
 });
 $("ch-ext").onclick = () => {
@@ -5645,6 +5673,14 @@ async function loadChain() {
   const resp = await fetch(`/api/chain?symbol=${encodeURIComponent(symbol)}` +
                            (tkExp ? `&expiration=${tkExp}` : ""));
   const d = await resp.json();
+  // A response that arrives after the context has moved on describes a symbol
+  // nobody is looking at any more. Dropping it matters more since M1-C4 than
+  // it did before: this function ADOPTS the served symbol below, so a slow
+  // chain for the previous symbol would drag the whole workspace — chart,
+  // ticket and backtest — back to it, several seconds after the user typed
+  // something else. Found by `workspace_check` failing only when it ran fast
+  // enough to beat the response.
+  if (Ctx.symbol() !== symbol) return;
   if (d.error) { toast(d.error, false); $("tk-chain").innerHTML =
     `<div class="empty">${esc(d.error)}</div>`; return; }
   // A provider may answer about a different symbol than it was asked about,
