@@ -1662,6 +1662,30 @@ html.gd-nomotion #gd-ring::after { display:none; }
 
   <!-- SETTINGS -->
   <section id="tab-settings" style="display:none">
+    <!-- ── Surface Level (UI V2 M1-C6) ─────────────────────────────────────
+         A TEMPORARY home. UI_V2_DESIGN.md §4.6 puts this under Settings ▸
+         Appearance and §8.1-4 requires it to be reversible in one click from
+         a control that does not require hunting; both arrive with the shell
+         (M2) and the Settings regroup (M6). Until then it lives here, where a
+         user can at least find and change it.
+
+         The four invariants it must never break are in §8.1: it changes what
+         is DISPLAYED and never what happens, it never hides money, risk or a
+         warning, it never gates a safety mechanism, and it is reversible in
+         both directions. -->
+    <div class="panel" id="sl-settings" aria-labelledby="sl-title">
+      <h2 id="sl-title">How much to show</h2>
+      <p class="hint">Changes what is on screen — never what the app does.
+        Prices, risk and warnings are shown at every level, and every safety
+        check runs at every level. Switch back any time.</p>
+      <div class="seg" id="sl-levels" role="group" aria-label="Surface level">
+        <button data-level="1" title="The essentials, explained">Guided</button>
+        <button data-level="2" title="A little more detail">Focused</button>
+        <button data-level="3" title="Everything this app measures">Full</button>
+        <button data-level="4" title="Everything, at maximum density">Pro</button>
+      </div>
+      <p class="hint" id="sl-what" role="status" aria-live="polite"></p>
+    </div>
     <div class="panel" id="runtime-settings" aria-labelledby="runtime-settings-title">
       <h2 id="runtime-settings-title">Background &amp; startup</h2>
       <p class="hint">OptionsPilot can keep essential monitoring alive while the window is hidden.</p>
@@ -3473,10 +3497,56 @@ window.Ctx = (() => {
     return CH.tf;
   }
 
+  /* Surface Level (M1-C6). §4.5-5: "One Surface Level, applied uniformly.
+     There is no destination that is 'advanced' while another is 'simple'."
+
+     Held here rather than in `CH` because it is not chart state, and read
+     through a function rather than exported as a variable so that a consumer
+     cannot cache it into a stale copy. Unlike the symbol and the timeframe it
+     is NOT in localStorage: it is device-scoped server state, and the one
+     legitimate use of localStorage in this app is a synchronous fast path
+     over a server-owned value the client already has. There is nothing to be
+     fast about here — the level arrives with the workspace on first paint,
+     and the default until it does is the same 3 the server defaults to. */
+  let level = 3;
+  const surfaceLevel = () => level;
+
+  function setSurfaceLevel(next, {push = true} = {}) {
+    const n = Number(next);
+    if (!(n >= 1 && n <= 4) || n === level) { renderLevel(); return level; }
+    level = n;
+    renderLevel();
+    // Every consumer re-renders itself; there is no partial application of a
+    // level, because "one Surface Level applied uniformly" is the guarantee.
+    try { if (tkChain) renderChain(); } catch (e) {
+      console.debug("could not re-render the chain", e);
+    }
+    if (push && window.Workspace) Workspace.push({surface_level: level});
+    return level;
+  }
+
+  const LEVEL_BLURB = {
+    1: "Guided — strikes and prices, with the jargon left out.",
+    2: "Focused — adds delta, so you can see how a contract responds.",
+    3: "Full — every measurement the chain carries.",
+    4: "Pro — everything, at maximum density.",
+  };
+
+  function renderLevel() {
+    for (const b of document.querySelectorAll("#sl-levels button"))
+      b.classList.toggle("active", +b.dataset.level === level);
+    const what = $("sl-what");
+    if (what) what.textContent = LEVEL_BLURB[level] || "";
+  }
+
   return {symbol, setSymbol, render, timeframe, setTimeframe,
+          surfaceLevel, setSurfaceLevel, renderLevel,
           onChange: fn => listeners.push(fn),
           get inputs() { return INPUTS.slice(); }};
 })();
+document.querySelectorAll("#sl-levels button").forEach(b => b.onclick = () => {
+  Ctx.setSurfaceLevel(b.dataset.level);
+});
 // The three boxes ship with `value="SPY"` in the markup; the restored context
 // usually is not SPY. Painting once here is what makes the Trade and Research
 // boxes correct before anyone visits those tabs — previously only the chart's
@@ -5712,8 +5782,49 @@ function renderExpPills() {
   if (active) active.scrollIntoView({inline: "center", block: "nearest"});
 }
 
+/* The chain's column set, by Surface Level (M1-C6) — the first consumer of
+   the level, and the example UI_V2_DESIGN.md §8.2 leads with.
+
+   Two rules bind this table and neither is negotiable. **Money is never
+   hidden** (§8.1-2): Strike, Bid, Ask and Mid are in every level's set, so a
+   Guided user sees exactly what a contract costs. And **nothing here changes
+   behaviour** (§8.1-1): this list decides which columns are DRAWN, and the
+   same row selects the same contract at every level.
+
+   §8.2's full progression names columns this chain does not carry yet —
+   breakeven and "chance ITM" at Level 1, volume at Level 2, the remaining
+   Greeks at Level 3. Those are computed and added in M4-C5, where the chain
+   is rebuilt; adding them here would be building the Trade destination one
+   milestone early. Level 4 is deliberately identical to Level 3 until the
+   custom column set exists — a Pro user is not shown LESS, they are simply
+   not yet offered the extra choice. */
+const CHAIN_COLUMNS = [
+  {key: "strike", label: "Strike", min: 1},
+  {key: "bid",    label: "Bid",    min: 1, learn: "spread"},
+  {key: "ask",    label: "Ask",    min: 1, learn: "spread"},
+  {key: "mid",    label: "Mid",    min: 1},
+  {key: "delta",  label: "Delta",  min: 2, learn: "delta"},
+  {key: "iv",     label: "IV",     min: 3, learn: "iv"},
+  {key: "oi",     label: "OI",     min: 3, learn: "oi"},
+  {key: "liq",    label: "Liq",    min: 3, learn: "liquidity"},
+];
+
+const CHAIN_CELL = {
+  strike: r => `<b>${r.strike}</b>`,
+  bid:    r => r.bid.toFixed(2),
+  ask:    r => r.ask.toFixed(2),
+  mid:    r => r.mid.toFixed(2),
+  delta:  r => r.delta.toFixed(2),
+  iv:     r => `${(r.iv * 100).toFixed(1)}%`,
+  oi:     r => `${r.open_interest}`,
+  liq:    r => r.liquidity.toFixed(0),
+};
+
+const CHAIN_CELL_CLASS = {bid: "bid", ask: "ask"};
+
 function renderChain(scrollToATM = false) {
   if (!tkChain) return;
+  const cols = CHAIN_COLUMNS.filter(c => Ctx.surfaceLevel() >= c.min);
   const rows = tkChain.chain.filter(r => r.right === tkRight)
       .sort((a, b) => a.strike - b.strike);
   // insert the "spot" marker between the strikes bracketing the underlying
@@ -5722,28 +5833,18 @@ function renderChain(scrollToATM = false) {
     if (rows[i].strike <= tkChain.spot && tkChain.spot < rows[i + 1].strike)
       { markerAfter = i; break; }
   $("tk-chain").innerHTML = `<table>
-    <tr><th scope="col" class="num">Strike</th>
-    <th scope="col" class="num lrn" data-learn="spread">Bid</th>
-    <th scope="col" class="num lrn" data-learn="spread">Ask</th>
-    <th scope="col" class="num">Mid</th>
-    <th scope="col" class="num lrn" data-learn="delta">Delta</th>
-    <th scope="col" class="num lrn" data-learn="iv">IV</th>
-    <th scope="col" class="num lrn" data-learn="oi">OI</th>
-    <th scope="col" class="num lrn" data-learn="liquidity">Liq</th></tr>` +
+    <tr>${cols.map(c =>
+      `<th scope="col" class="num${c.learn ? " lrn" : ""}"` +
+      `${c.learn ? ` data-learn="${c.learn}"` : ""}>${c.label}</th>`).join("")}</tr>` +
     rows.map((r, i) => {
       const sel = tkSel && tkSel.strike === r.strike && tkSel.right === r.right;
       const marker = i === markerAfter
-        ? `<tr class="atm-marker" id="atm-row"><td colspan="8">${tkChain.symbol} $${tkChain.spot.toFixed(2)}</td></tr>`
+        ? `<tr class="atm-marker" id="atm-row"><td colspan="${cols.length}">${tkChain.symbol} $${tkChain.spot.toFixed(2)}</td></tr>`
         : "";
-      return `<tr class="${sel ? "selrow" : ""}" data-strike="${r.strike}">
-        <td class="num"><b>${r.strike}</b></td>
-        <td class="num bid">${r.bid.toFixed(2)}</td>
-        <td class="num ask">${r.ask.toFixed(2)}</td>
-        <td class="num">${r.mid.toFixed(2)}</td>
-        <td class="num">${r.delta.toFixed(2)}</td>
-        <td class="num">${(r.iv * 100).toFixed(1)}%</td>
-        <td class="num">${r.open_interest}</td>
-        <td class="num">${r.liquidity.toFixed(0)}</td></tr>` + marker;
+      return `<tr class="${sel ? "selrow" : ""}" data-strike="${r.strike}">` +
+        cols.map(c => `<td class="num${CHAIN_CELL_CLASS[c.key]
+          ? " " + CHAIN_CELL_CLASS[c.key] : ""}">${CHAIN_CELL[c.key](r)}</td>`).join("") +
+        `</tr>` + marker;
     }).join("") + "</table>";
   document.querySelectorAll("#tk-chain tr[data-strike]").forEach(tr =>
     tr.onclick = () => selectContract(+tr.dataset.strike));
@@ -8494,6 +8595,13 @@ window.Workspace = (() => {
       }
     } catch (e) { console.debug("workspace unavailable", e); }
     ready = true;
+    // Surface Level is adopted on EVERY launch, not only a virgin one, and
+    // that asymmetry is the point of it being device-scoped server state
+    // rather than a workspace field: this client has no local copy to defend,
+    // so the server's answer is simply the answer. `push:false` because
+    // echoing it straight back would make the first request of every launch a
+    // redundant write to settings.json.
+    if (doc) Ctx.setSurfaceLevel(doc.surface_level, {push: false});
     if (doc && (virgin || restorePrevious)) adopt(doc);
     else if (doc) push(fromLocal()); // teach the server what this client has
     // Events may have been queued before either startup fetch returned.  This

@@ -68,6 +68,28 @@ def wait_for(url: str, timeout: float = 25.0) -> bool:
     return False
 
 
+#: The ONE stubbed response, added with the M1-C6 Surface Level checks and
+#: fulfilled at the HTTP boundary exactly as `guide_check.py` does it: the
+#: chain's column set cannot be asserted without an option chain, and an option
+#: chain cannot be fetched without a network. Everything downstream of this
+#: payload — the column filter, the rendering, the row selection — is real.
+CHAIN = {
+    "symbol": "SPY",
+    "expiration": "2026-08-21",
+    "expirations": ["2026-08-21", "2026-09-18"],
+    "spot": 500.0,
+    "chain": [
+        {"symbol": f"SPY260821{'C' if right == 'call' else 'P'}{strike:05d}000",
+         "underlying": "SPY", "expiration": "2026-08-21", "strike": float(strike),
+         "right": right, "bid": 4.80, "ask": 5.20, "mid": 5.00,
+         "delta": 0.50 if right == "call" else -0.50, "gamma": 0.02,
+         "theta": -0.08, "vega": 0.15, "iv": 0.22, "open_interest": 4200,
+         "volume": 900, "liquidity": 88.0, "dte": 24}
+        for strike in range(490, 511, 5) for right in ("call", "put")
+    ],
+}
+
+
 def workspace(base: str) -> dict:
     return json.loads(urllib.request.urlopen(base + "/api/workspace").read())
 
@@ -304,12 +326,91 @@ def run_checks(page, base: str, c: Checks) -> None:
     c.check("a workspace write leaves the watchlist alone",
             isinstance(status["watchlist"], list) and status["watchlist"])
 
+    # ── Surface Level (UI V2 M1-C6) ──────────────────────────────────────────
+    # §8's four invariants are what these assert, in the order they matter:
+    # the level changes what is DISPLAYED, it never hides money, it is
+    # reversible in both directions, and it is one level applied uniformly.
+    page.click('nav button[data-tab="settings"]')
+    page.wait_for_selector("#sl-levels", state="visible")
+    active = page.eval_on_selector_all(
+        "#sl-levels button.active", "els => els.map(e => e.dataset.level)")
+    c.check("Surface Level defaults to Full for an existing install",
+            active == ["3"], str(active))
+
+    def chain_headers():
+        page.click('nav button[data-tab="trade"]')
+        page.wait_for_selector("#tk-chain table", timeout=15000)
+        return page.eval_on_selector_all(
+            "#tk-chain th", "els => els.map(e => e.textContent.trim())")
+
+    def chain_rows():
+        return page.eval_on_selector_all(
+            "#tk-chain tr[data-strike]", "els => els.length")
+
+    def set_level(n):
+        page.click('nav button[data-tab="settings"]')
+        page.wait_for_selector("#sl-levels", state="visible")
+        page.click(f'#sl-levels button[data-level="{n}"]')
+        settle(page, 1200)
+
+    full = chain_headers()
+    full_rows = chain_rows()
+    c.check("at Full the chain carries every column it measures",
+            {"IV", "OI", "Delta"} <= set(full), str(full))
+
+    set_level(1)
+    guided = chain_headers()
+    c.check("Guided hides the columns a first-time trader has no use for",
+            not ({"IV", "OI", "Delta"} & set(guided)), str(guided))
+    # The invariant that makes this progressive disclosure rather than a
+    # crippled edition. Guided hides COMPLEXITY, never CONSEQUENCE.
+    c.check("but never the money — strike and price are shown at every level",
+            {"Strike", "Bid", "Ask", "Mid"} <= set(guided), str(guided))
+    # §8.1-1: the level changes what is displayed, never what is available.
+    # Hiding a column must not hide a contract.
+    c.check("and every strike is still there to select",
+            chain_rows() == full_rows and full_rows > 0,
+            f"{chain_rows()} rows at Guided vs {full_rows} at Full")
+
+    set_level(2)
+    focused = chain_headers()
+    c.check("Focused adds delta and nothing beyond it",
+            "Delta" in focused and "IV" not in focused, str(focused))
+
+    set_level(3)
+    c.check("and the change is reversible in both directions",
+            set(chain_headers()) == set(full), str(chain_headers()))
+
+    set_level(1)
+    settle(page, 1500)
+    c.check("the level reaches the server",
+            workspace(base)["surface_level"] == 1,
+            str(workspace(base)["surface_level"]))
+
+    page.reload()
+    page.wait_for_selector('nav button[data-tab="settings"]', timeout=25000)
+    page.wait_for_timeout(2500)
+    page.click('nav button[data-tab="settings"]')
+    page.wait_for_selector("#sl-levels", state="visible")
+    active = page.eval_on_selector_all(
+        "#sl-levels button.active", "els => els.map(e => e.dataset.level)")
+    c.check("and survives a reload, on a client that keeps no local copy",
+            active == ["1"], str(active))
+    c.check("the chain comes back at the restored level too",
+            not ({"IV", "OI", "Delta"} & set(chain_headers())),
+            str(chain_headers()))
+
+    # Back to Full so the reset assertion below reads the shipped state.
+    set_level(3)
+
     # ── 16: reset ────────────────────────────────────────────────────────────
     req = urllib.request.Request(base + "/api/workspace", method="DELETE")
     reset = json.loads(urllib.request.urlopen(req).read())
     c.check("reset returns to the shipped defaults",
             reset["symbol"] == "SPY" and reset["layouts"] == {},
             f"{reset['symbol']} {reset['layouts']}")
+    c.check("but leaves Surface Level alone — it is not part of the document",
+            reset["surface_level"] == 3, str(reset["surface_level"]))
 
 
 def main() -> int:
@@ -353,6 +454,9 @@ def main() -> int:
             page.on("console",
                     lambda m: console.append(m.text) if m.type == "error" else None)
             page.on("pageerror", lambda e: console.append(str(e)))
+            page.route("**/api/chain*", lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(CHAIN)))
             page.goto(base)
             page.wait_for_selector("#hero", timeout=25000)
             page.wait_for_timeout(1200)
