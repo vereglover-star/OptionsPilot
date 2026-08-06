@@ -1673,6 +1673,23 @@ html.gd-nomotion #gd-ring::after { display:none; }
          is DISPLAYED and never what happens, it never hides money, risk or a
          warning, it never gates a safety mechanism, and it is reversible in
          both directions. -->
+    <!-- ── The UI V2 shell switch (M2-C1) ──────────────────────────────────
+         The rollback path for the whole shell migration, which is why it is a
+         live setting rather than a build-time one: `ROADMAP-UI-V2.md` §2.1.
+         It is deliberately plain and slightly technical — this is a migration
+         control, not a feature, and it disappears entirely at M9-C7. -->
+    <div class="panel" id="shell-settings" aria-labelledby="shell-title">
+      <h2 id="shell-title">Navigation</h2>
+      <p class="hint">The new navigation groups the nine tabs into five places
+        plus Settings, and adds a command palette (<b>Ctrl+K</b>). Everything
+        that exists today is still here — several things by their old names.
+        Switch back any time; nothing about your account or your trading
+        changes either way.</p>
+      <div class="upd-settings-row"><label>
+        <input type="checkbox" id="shell-toggle"> Use the new navigation
+      </label></div>
+      <span class="hint" id="shell-note" role="status" aria-live="polite"></span>
+    </div>
     <div class="panel" id="sl-settings" aria-labelledby="sl-title">
       <h2 id="sl-title">How much to show</h2>
       <p class="hint">Changes what is on screen — never what the app does.
@@ -3547,6 +3564,57 @@ window.Ctx = (() => {
 document.querySelectorAll("#sl-levels button").forEach(b => b.onclick = () => {
   Ctx.setSurfaceLevel(b.dataset.level);
 });
+
+/* ── the UI V2 shell (M2) ──────────────────────────────────────────────────
+   `ROADMAP-UI-V2.md` §2.1: one flag, live-editable, because it is the rollback
+   path for the whole migration and a rollback that needs a restart is not a
+   rollback.
+
+   This module owns exactly two things — whether the shell is on, and putting
+   the page into the matching state. Everything the shell DRAWS is built on top
+   of it in later commits, so that the switch itself stays small enough to
+   reason about at the moment someone needs to use it in anger.
+
+   Attached to `window` and always read as `window.Shell`: `typeof Shell` does
+   NOT protect against a temporal dead zone for a `const` declared later in the
+   same scope, which is a trap this file has already been caught by. */
+window.Shell = (() => {
+  let on = false;
+
+  const enabled = () => on;
+
+  function apply() {
+    // One class, one layout. Everything the shell adds is scoped under it, so
+    // turning it off restores the legacy page exactly rather than approximately
+    // — the difference between a rollback and a repair.
+    document.body.classList.toggle("shell-v2", on);
+    const box = $("shell-toggle");
+    if (box) box.checked = on;
+  }
+
+  function adopt(value) {
+    on = value === true;
+    apply();
+  }
+
+  function setEnabled(value) {
+    const next = value === true;
+    if (next === on) return on;
+    on = next;
+    apply();
+    if (window.Workspace) Workspace.push({shell_v2: on});
+    const note = $("shell-note");
+    if (note) {
+      note.textContent = on
+        ? "New navigation on. Press Ctrl+K to go anywhere by name."
+        : "Back to the original nine tabs.";
+    }
+    return on;
+  }
+
+  return {enabled, setEnabled, adopt, apply};
+})();
+$("shell-toggle").onchange = e => Shell.setEnabled(e.target.checked);
 // The three boxes ship with `value="SPY"` in the markup; the restored context
 // usually is not SPY. Painting once here is what makes the Trade and Research
 // boxes correct before anyone visits those tabs — previously only the chart's
@@ -8628,6 +8696,10 @@ window.Workspace = (() => {
     // echoing it straight back would make the first request of every launch a
     // redundant write to settings.json.
     if (doc) Ctx.setSurfaceLevel(doc.surface_level, {push: false});
+    // Adopted on EVERY launch, virgin or not, for the same reason as the
+    // Surface Level above: this client keeps no local copy to defend, so the
+    // server's answer is simply the answer.
+    if (doc && window.Shell) Shell.adopt(doc.shell_v2);
     // Held for the first chain load that matches it — see takeSelection. The
     // server has already validated the shape and dropped it if it no longer
     // belongs to the workspace symbol, so anything present here is usable.

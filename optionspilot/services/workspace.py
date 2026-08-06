@@ -343,26 +343,34 @@ def merge(current: dict | None, patch: dict | None, *, now: str | None = None) -
     return merged
 
 
-def view(state: dict | None, surface_level: int) -> WorkspaceView:
-    """The normalized document, plus the one context fact stored beside it.
+def view(state: dict | None, surface_level: int, shell_v2: bool) -> WorkspaceView:
+    """The normalized document, plus the shell facts stored beside it.
 
-    `surface_level` is passed in rather than read here because this module is
-    pure and the level lives in `RuntimeSettings` under its own key — see the
-    field's note in `viewmodels.py` for why transport and storage differ.
+    `surface_level` and `shell_v2` are passed in rather than read here because
+    this module is pure and both live in `RuntimeSettings` under their own keys
+    — see the fields' notes in `viewmodels.py` for why transport and storage
+    differ. Both are presentation state that decides the FIRST frame, which is
+    why they ride with the context rather than costing a second round trip.
     """
     doc = normalize(state)
-    return WorkspaceView(**doc, surface_level=surface_level)
+    return WorkspaceView(**doc, surface_level=surface_level, shell_v2=shell_v2)
 
 
 class WorkspaceService:
     """The stateful face of the above, over an injected preferences store.
 
     The store is duck-typed to `workspace_state()` / `set_workspace_state(dict)`
-    plus, since M1-C3, `surface_level()` / `set_surface_level(int)` —
-    `RuntimeSettings` satisfies all four, and so would anything a future mobile
-    backend host wanted to put underneath, which is the point of not importing
-    it here.
+    plus, since M1-C3, `surface_level()` / `set_surface_level(int)`, plus, since
+    M2-C1, `shell_v2()` / `set_shell_v2(bool)` — `RuntimeSettings` satisfies all
+    six, and so would anything a future mobile backend host wanted to put
+    underneath, which is the point of not importing it here.
     """
+
+    #: Fields this service owns but the workspace DOCUMENT does not: they are
+    #: stored under their own `settings.json` keys with their own sync policies,
+    #: and are applied through the store rather than merged into the document.
+    #: Listing them once is what stops `update` growing a branch per field.
+    SHELL_FIELDS = ("surface_level", "shell_v2")
 
     def __init__(self, store, *, clock=None):
         self._store = store
@@ -374,26 +382,31 @@ class WorkspaceService:
         stamp = self._clock()
         return stamp.isoformat() if hasattr(stamp, "isoformat") else str(stamp)
 
+    def _shell(self) -> dict:
+        return {name: getattr(self._store, name)() for name in self.SHELL_FIELDS}
+
     def get(self) -> WorkspaceView:
-        return view(self._store.workspace_state(), self._store.surface_level())
+        return view(self._store.workspace_state(), **self._shell())
 
     def update(self, patch: dict | None) -> WorkspaceView:
         incoming = patch if isinstance(patch, dict) else {}
-        if "surface_level" in incoming:
-            # The one field written to a different key, so it is applied
-            # separately — and the store's setter is STRICT while this endpoint
-            # is FORGIVING, which is a service decision rather than an
-            # inconsistency. `/api/workspace` records where someone was
-            # looking; 4xx-ing it mid-scroll is a worse outcome than ignoring
-            # one unusable value, exactly as it is for `timeframe`. The strict
-            # setter still protects every other caller.
+        for name in self.SHELL_FIELDS:
+            if name not in incoming:
+                continue
+            # Written to a different key, so applied separately — and the
+            # store's setters are STRICT while this endpoint is FORGIVING,
+            # which is a service decision rather than an inconsistency.
+            # `/api/workspace` records where someone was looking; 4xx-ing it
+            # mid-scroll is a worse outcome than ignoring one unusable value,
+            # exactly as it is for `timeframe`. The strict setters still
+            # protect every other caller.
             try:
-                self._store.set_surface_level(incoming["surface_level"])
+                getattr(self._store, f"set_{name}")(incoming[name])
             except ValueError:
                 pass
         merged = merge(self._store.workspace_state(), patch, now=self._now())
         self._store.set_workspace_state(merged)
-        return view(merged, self._store.surface_level())
+        return view(merged, **self._shell())
 
     def reset(self) -> WorkspaceView:
         """Back to the shipped defaults.
@@ -403,14 +416,14 @@ class WorkspaceService:
         "reset doesn't work". If layouts are ever worth keeping across a reset,
         that is a separate, named action.
 
-        Surface Level is NOT reset, and that is the same judgement read the
-        other way: it is stored outside this document, it is closer to an
+        The SHELL_FIELDS are NOT reset, and that is the same judgement read the
+        other way: they are stored outside this document, they are closer to an
         accessibility setting than to a panel arrangement, and someone tidying
         their layout has not asked to be shown nineteen columns they chose not
-        to see.
+        to see — nor to be dropped back into the old navigation.
         """
         fresh = normalize(None)
         if self._clock is not None:
             fresh["updated"] = self._now()
         self._store.set_workspace_state(fresh)
-        return view(fresh, self._store.surface_level())
+        return view(fresh, **self._shell())

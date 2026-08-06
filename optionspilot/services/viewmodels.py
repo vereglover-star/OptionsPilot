@@ -216,6 +216,12 @@ class WorkspaceView(ViewModel):
     #: here would be a second copy of `config.runtime.DEFAULT_SURFACE_LEVEL`
     #: that could disagree with the first.
     surface_level: int
+    #: Whether this device renders the UI V2 shell (M2). Served here for the
+    #: same reason as `surface_level` and one stronger one: it decides which
+    #: frame the client draws at all, so a second round trip for it would mean
+    #: rendering the old shell and then replacing it — a visible flash on every
+    #: launch. Stored device-locally, outside the workspace document.
+    shell_v2: bool
     updated: str | None = None
 
 

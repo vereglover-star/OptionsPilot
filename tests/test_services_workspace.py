@@ -30,10 +30,11 @@ class FakeStore:
     and a lenient double would test the decision away.
     """
 
-    def __init__(self, doc=None, surface_level=3):
+    def __init__(self, doc=None, surface_level=3, shell_v2=False):
         self.doc = doc if doc is not None else {}
         self.writes = 0
         self.level = surface_level
+        self.shell = shell_v2
 
     def workspace_state(self):
         return dict(self.doc)
@@ -52,6 +53,15 @@ class FakeStore:
                              f"got {level!r}")
         self.level = level
         return level
+
+    def shell_v2(self):
+        return self.shell
+
+    def set_shell_v2(self, enabled):
+        if not isinstance(enabled, bool):
+            raise ValueError(f"shell_v2 must be true or false, got {enabled!r}")
+        self.shell = enabled
+        return enabled
 
 
 class TestNormalize:
@@ -300,6 +310,58 @@ class TestSurfaceLevelOnTheWorkspace:
     def test_it_survives_the_wire(self):
         doc = WorkspaceService(FakeStore(surface_level=4)).get().to_dict()
         assert json.loads(json.dumps(doc, allow_nan=False))["surface_level"] == 4
+
+
+class TestShellFlag:
+    """UI V2 M2-C1. The rollback path for the whole shell migration.
+
+    It rides the workspace payload for the same reason Surface Level does, and
+    one stronger: it decides which frame the client draws at all, so fetching
+    it separately would mean rendering the old shell and replacing it — a
+    visible flash on every launch.
+    """
+
+    def test_it_is_off_by_default(self):
+        assert WorkspaceService(FakeStore()).get().shell_v2 is False
+
+    def test_it_is_served_with_the_workspace(self):
+        assert WorkspaceService(FakeStore(shell_v2=True)).get().shell_v2 is True
+
+    def test_it_can_be_set_through_the_workspace_patch(self):
+        store = FakeStore()
+        assert WorkspaceService(store).update({"shell_v2": True}).shell_v2 is True
+        assert store.shell is True
+
+    def test_it_is_not_written_into_the_workspace_document(self):
+        """Its own key, its own DEVICE_ONLY sync policy: a rollback that
+        propagates to every device is not a rollback, it is an outage."""
+        store = FakeStore()
+        WorkspaceService(store).update({"shell_v2": True})
+        assert "shell_v2" not in store.doc
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0, None, "yes", []])
+    def test_an_unusable_value_is_ignored_rather_than_4xxd(self, bad):
+        store = FakeStore(shell_v2=True)
+        assert WorkspaceService(store).update({"shell_v2": bad}).shell_v2 is True
+
+    @pytest.mark.parametrize("bad", ["true", 1, 0, None])
+    def test_the_stores_setter_is_still_strict(self, bad):
+        with pytest.raises(ValueError):
+            FakeStore().set_shell_v2(bad)
+
+    def test_a_workspace_reset_does_not_flip_it(self):
+        """Resetting a layout must not silently move someone between two
+        navigations."""
+        store = FakeStore({"symbol": "QQQ"}, shell_v2=True)
+        assert WorkspaceService(store).reset().shell_v2 is True
+
+    def test_both_shell_fields_travel_together(self):
+        store = FakeStore()
+        view = WorkspaceService(store).update({"shell_v2": True,
+                                               "surface_level": 1,
+                                               "symbol": "NVDA"})
+        assert (view.shell_v2, view.surface_level, view.symbol) == (True, 1, "NVDA")
+        assert set(ws.WorkspaceService.SHELL_FIELDS) == {"surface_level", "shell_v2"}
 
 
 class TestMerge:

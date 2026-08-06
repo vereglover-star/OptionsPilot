@@ -88,6 +88,17 @@ SURFACE_LEVELS = (1, 2, 3, 4)
 # that "the system never lowers a user's level. Only the user does."
 DEFAULT_SURFACE_LEVEL = 3
 
+# The UI V2 shell (M2). Live-editable and device-local, exactly like
+# surface_level above, and for the same two reasons: it decides what the client
+# renders rather than what the app does, and a phone and a desktop may
+# legitimately want different answers.
+#
+# It is the ROLLBACK PATH for the whole shell migration, which is why it lives
+# here and not in `config/settings.py`: a rollback that needs a restart is not a
+# rollback. `docs/ROADMAP-UI-V2.md` §2.1 gives its lifecycle — introduced off in
+# M2-C1, defaulted on in M2-C11, and removed with its branches in M9-C7.
+DEFAULT_SHELL_V2 = False
+
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
     "min_confidence": ("engine", "min_confidence"),
@@ -359,6 +370,29 @@ class RuntimeSettings:
                 f"surface_level must be one of {list(SURFACE_LEVELS)}, "
                 f"got {value!r}")
         return DEFAULT_SURFACE_LEVEL
+
+    def shell_v2(self) -> bool:
+        """Whether this device renders the UI V2 shell. Never raises."""
+        with self._lock:
+            value = self._doc.get("shell_v2")
+            return value if isinstance(value, bool) else DEFAULT_SHELL_V2
+
+    def set_shell_v2(self, enabled) -> bool:
+        """Validate, persist and return the new shell setting.
+
+        Strict about the type for the same reason `set_surface_level` is: a
+        client sending `"true"` has a bug, and coercing it would hide the bug
+        while appearing to work. Note the asymmetry with the reader above,
+        which is the house pattern — a hand-edited `settings.json` costs a
+        preference, never a startup.
+        """
+        if not isinstance(enabled, bool):
+            raise ValueError(f"shell_v2 must be true or false, got {enabled!r}")
+        with self._lock:
+            self._doc["shell_v2"] = enabled
+            self._save()
+        log.info("UI V2 shell %s", "enabled" if enabled else "disabled")
+        return enabled
 
     # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
     #

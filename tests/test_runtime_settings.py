@@ -122,6 +122,51 @@ class TestSurfaceLevel:
         assert doc["watchlist"] == ["SPY"]
 
 
+class TestShellV2:
+    """UI V2 M2-C1. Live-editable because it is the migration's rollback path,
+    and a rollback that needs a restart is not a rollback."""
+
+    def test_the_shell_is_off_until_a_device_opts_in(self, tmp_path):
+        _, rt = make(tmp_path)
+        assert rt.shell_v2() is False
+
+    def test_it_round_trips_through_a_restart(self, tmp_path):
+        _, rt = make(tmp_path)
+        assert rt.set_shell_v2(True) is True
+        _, rt2 = make(tmp_path)
+        assert rt2.shell_v2() is True
+        rt2.set_shell_v2(False)
+        _, rt3 = make(tmp_path)
+        assert rt3.shell_v2() is False
+
+    @pytest.mark.parametrize("bad", ["true", "1", 1, 0, None, [], {}])
+    def test_a_client_sending_a_non_boolean_is_rejected(self, tmp_path, bad):
+        _, rt = make(tmp_path)
+        with pytest.raises(ValueError, match="shell_v2"):
+            rt.set_shell_v2(bad)
+
+    @pytest.mark.parametrize("bad", ["true", 1, None, [], "on"])
+    def test_a_hand_edited_file_falls_back_and_never_raises(self, tmp_path, bad):
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"shell_v2": bad}), encoding="utf-8")
+        cfg, rt = make(tmp_path)
+        rt.apply(cfg)
+        assert rt.shell_v2() is False
+
+    def test_it_leaves_every_other_axis_alone(self, tmp_path):
+        """A fourth presentation flag must not disturb the three that exist."""
+        cfg, rt = make(tmp_path)
+        rt.set_mode(cfg, "high_risk")
+        rt.set_operating_mode(cfg, "human")
+        rt.set_surface_level(2)
+        before = cfg.model_dump()
+        rt.set_shell_v2(True)
+        assert cfg.model_dump() == before
+        assert rt.surface_level() == 2
+        assert cfg.engine.trading_mode == "high_risk"
+        assert cfg.engine.operating_mode == "human"
+
+
 class TestWatchlist:
     def test_set_and_persist(self, tmp_path):
         cfg, rt = make(tmp_path)

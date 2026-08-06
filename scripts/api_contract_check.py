@@ -40,7 +40,8 @@ def validate_openapi(document: dict) -> None:
 
 # Every context fact `UI_V2_DESIGN.md` §4.5 guarantees, as the workspace
 # payload must name them. A rename here is a breaking change for any client.
-CONTEXT_FIELDS = ("symbol", "timeframe", "expiry", "contract", "surface_level")
+CONTEXT_FIELDS = ("symbol", "timeframe", "expiry", "contract", "surface_level",
+                  "shell_v2")
 
 
 def check_workspace(client) -> None:
@@ -77,6 +78,16 @@ def check_workspace(client) -> None:
         raise SystemExit("workspace reset did not return the shipped defaults")
     if reset["surface_level"] != 2:
         raise SystemExit("workspace reset cleared Surface Level, which it does "
+                         "not own")
+
+    # The shell flag is the migration's rollback path. A reset that silently
+    # moved a device between two navigations would be the worst possible
+    # moment to discover that reset owns more than it should.
+    client.post("/api/v1/workspace", json={"shell_v2": True})
+    if client.get("/api/v1/workspace").json()["data"]["shell_v2"] is not True:
+        raise SystemExit("the shell flag did not round trip")
+    if client.delete("/api/v1/workspace").json()["data"]["shell_v2"] is not True:
+        raise SystemExit("workspace reset flipped the shell flag, which it does "
                          "not own")
     json.dumps(reset, allow_nan=False)
 

@@ -211,6 +211,17 @@ INVENTORY: tuple[PersistedObject, ...] = (
         shared_writer=True,
     ),
     PersistedObject(
+        "data/settings.json#shell_v2", SyncDomain.PREFERENCES,
+        SyncPolicy.DEVICE_ONLY,
+        "whether this device renders the UI V2 shell",
+        "DEVICE_ONLY for the same reason as `#surface_level` below, plus one "
+        "specific to it: this flag is the ROLLBACK PATH for the shell "
+        "migration, and a rollback that propagates to every device is not a "
+        "rollback, it is an outage. Turning the old navigation back on for one "
+        "machine must stay a decision about that machine.",
+        shared_writer=True,
+    ),
+    PersistedObject(
         "data/settings.json#surface_level", SyncDomain.PREFERENCES,
         SyncPolicy.DEVICE_ONLY,
         "how much of the interface is revealed (1 Guided - 4 Pro)",
