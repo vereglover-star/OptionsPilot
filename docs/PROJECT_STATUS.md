@@ -31,7 +31,7 @@ remain manual/CI (see `docs/AUTO_UPDATER.md`). See `PROJECT_STATE.md`.
 
 ## Current version
 
-`0.12.2` — single source of truth: `optionspilot/__init__.py::__version__`
+`0.12.3` — single source of truth: `optionspilot/__init__.py::__version__`
 (pyproject derives it dynamically). Pre-1.0, actively developed. A `v*` tag
 publishes both `OptionsPilot-Setup-vX.Y.Z.exe` (installer) and
 `OptionsPilot-vX.Y.Z.zip` (portable) via GitHub Actions, and the installed app
