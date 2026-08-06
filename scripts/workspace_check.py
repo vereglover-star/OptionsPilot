@@ -33,6 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from shell_nav import goto, ready  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -137,7 +138,7 @@ def run_checks(page, base: str, c: Checks) -> None:
             doc["tab"])
 
     # ── 4-6: the client mirrors real interactions up ─────────────────────────
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     settle(page)
     c.check("switching tab is mirrored to the server",
@@ -176,7 +177,7 @@ def run_checks(page, base: str, c: Checks) -> None:
 
     # And the other direction: any box may commit the context, not just the
     # chart's. `change` is the backtest box's commit (blur or Enter).
-    page.click('nav button[data-tab="backtest"]')
+    goto(page, "backtest")
     page.wait_for_selector("#tab-backtest", state="visible")
     page.fill("#bt-symbol", "IWM")
     page.press("#bt-symbol", "Enter")
@@ -195,7 +196,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # commits on `change`, and a browser fires `change` on blur, so for that
     # box leaving it IS committing it. Writing this check the other way round
     # is what established that: it failed, and it was the test that was wrong.
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.fill("#ch-symbol", "TSL")
     page.press("#ch-symbol", "Tab")        # blur without pressing Enter
@@ -229,7 +230,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # chart, it is THE chart relocated into a second slot, so its timeframe
     # control is the same control. A test that read a copied value would pass
     # just as happily against two charts that agreed by luck.
-    page.click('nav button[data-tab="trade"]')
+    goto(page, "trade")
     page.wait_for_selector("#tab-trade", state="visible")
     expanded = page.get_attribute("#tk-chart-toggle", "aria-expanded")
     if expanded != "true":
@@ -258,7 +259,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # it returns is what caught M1-C4's staleness bug: the late response
     # adopted its own symbol and dragged the whole workspace back to it. The
     # storage-loss checks below are what noticed, several assertions later.
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.fill("#ch-symbol", "QQQ")
     page.press("#ch-symbol", "Enter")
@@ -282,7 +283,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     page.reload()
     # NOT `#hero`: it lives on the dashboard, and the whole point of this
     # reload is that adoption may land the user back on the Charts tab.
-    page.wait_for_selector('nav button[data-tab="charts"]', timeout=25000)
+    ready(page, timeout=25000)
     page.wait_for_timeout(3000)
 
     # Read what is ON SCREEN, not what CH holds — the standing rule.
@@ -310,7 +311,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # that already has state must teach the server, never be overwritten by it.
     page.evaluate("localStorage.setItem('chSym', 'IWM')")
     page.reload()
-    page.wait_for_selector('nav button[data-tab="charts"]', timeout=25000)
+    ready(page, timeout=25000)
     page.wait_for_timeout(3000)
 
     # An established profile lands on the Dashboard, exactly as it did before
@@ -321,7 +322,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     c.check("an established profile still lands on the Dashboard (unchanged "
             "desktop behaviour)", page.is_visible("#tab-dashboard"))
 
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.wait_for_timeout(1500)
     c.check("an established profile keeps its OWN state and pushes it up",
@@ -345,7 +346,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # §8's four invariants are what these assert, in the order they matter:
     # the level changes what is DISPLAYED, it never hides money, it is
     # reversible in both directions, and it is one level applied uniformly.
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#sl-levels", state="visible")
     active = page.eval_on_selector_all(
         "#sl-levels button.active", "els => els.map(e => e.dataset.level)")
@@ -353,7 +354,7 @@ def run_checks(page, base: str, c: Checks) -> None:
             active == ["3"], str(active))
 
     def chain_headers():
-        page.click('nav button[data-tab="trade"]')
+        goto(page, "trade")
         page.wait_for_selector("#tk-chain table", timeout=15000)
         return page.eval_on_selector_all(
             "#tk-chain th", "els => els.map(e => e.textContent.trim())")
@@ -363,7 +364,7 @@ def run_checks(page, base: str, c: Checks) -> None:
             "#tk-chain tr[data-strike]", "els => els.length")
 
     def set_level(n):
-        page.click('nav button[data-tab="settings"]')
+        goto(page, "settings")
         page.wait_for_selector("#sl-levels", state="visible")
         page.click(f'#sl-levels button[data-level="{n}"]')
         settle(page, 1200)
@@ -403,9 +404,9 @@ def run_checks(page, base: str, c: Checks) -> None:
             str(workspace(base)["surface_level"]))
 
     page.reload()
-    page.wait_for_selector('nav button[data-tab="settings"]', timeout=25000)
+    ready(page, timeout=25000)
     page.wait_for_timeout(2500)
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#sl-levels", state="visible")
     active = page.eval_on_selector_all(
         "#sl-levels button.active", "els => els.map(e => e.dataset.level)")
@@ -429,7 +430,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # EXTENSION of these assertions rather than a second test of the same
     # claim. The rule below is what makes the whole thing meaningful: after the
     # single `fill`, no assertion may type a symbol anywhere.
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.fill("#ch-symbol", "AMD")                  # ← the ONE time it is typed
     page.press("#ch-symbol", "Enter")
@@ -443,7 +444,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # it reported the previous symbol's spot, which was true at the moment it
     # looked.
     with page.expect_response(lambda r: "/api/chain" in r.url, timeout=20000):
-        page.click('nav button[data-tab="trade"]')
+        goto(page, "trade")
     page.wait_for_selector("#tk-chain table", timeout=15000)
     page.wait_for_timeout(800)
     spot = page.text_content("#tk-spot") or ""
@@ -463,9 +464,9 @@ def run_checks(page, base: str, c: Checks) -> None:
 
     # §4.5-3, the half that is easy to lose: "...and remains selected if the
     # user visits Research and returns."
-    page.click('nav button[data-tab="journal"]')
+    goto(page, "journal")
     page.wait_for_selector("#tab-journal", state="visible")
-    page.click('nav button[data-tab="trade"]')
+    goto(page, "trade")
     page.wait_for_selector("#tk-form", state="visible", timeout=10000)
     c.check("LOOP: and it is still selected after leaving and coming back",
             "AMD" in (page.text_content("#tk-selected") or ""),
@@ -478,9 +479,9 @@ def run_checks(page, base: str, c: Checks) -> None:
     strike_before = stored.get("strike")
     page.evaluate("localStorage.clear()")
     page.reload()
-    page.wait_for_selector('nav button[data-tab="trade"]', timeout=25000)
+    ready(page, timeout=25000)
     page.wait_for_timeout(3000)
-    page.click('nav button[data-tab="trade"]')
+    goto(page, "trade")
     page.wait_for_selector("#tk-chain table", timeout=15000)
     page.wait_for_timeout(1500)
     restored_sel = page.text_content("#tk-selected") or ""
@@ -491,7 +492,7 @@ def run_checks(page, base: str, c: Checks) -> None:
     # And the rule that keeps the loop honest in the other direction: a
     # contract belongs to an underlying. The server enforces this too — two
     # gates, one rule.
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.fill("#ch-symbol", "NVDA")
     page.press("#ch-symbol", "Enter")

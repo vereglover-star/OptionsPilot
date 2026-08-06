@@ -145,6 +145,15 @@ def register_v1_routes(app: FastAPI, server) -> None:
             "items": [n.to_dict() for n in server.services.notifications.recent(limit)]
         })
 
+    # Read state (M2-C6). Here rather than in `ui/server.py` because that file
+    # has a line ceiling whose whole point is that new surface goes elsewhere.
+    @app.post("/api/v1/notifications/read", tags=["notifications"])
+    def notifications_read(request: Request, payload: dict | None = None):
+        ids = (payload or {}).get("ids") or []
+        return _mutation(request, server, "notifications.read",
+                         lambda: {"read": server.services.notifications.mark_read(ids)},
+                         payload)
+
     @app.post("/api/v1/notifications/{event_id}/dismiss", tags=["notifications"])
     def notification_dismiss(request: Request, event_id: str):
         return _mutation(request, server, "notification.dismiss:" + event_id, lambda: {

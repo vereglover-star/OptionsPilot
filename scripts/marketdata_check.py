@@ -39,6 +39,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from shell_nav import goto  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -134,7 +135,7 @@ def main() -> int:  # noqa: C901 — a flat sequence of independent checks reads
 
             page.goto(base)
             page.wait_for_selector("#hero", timeout=20000)
-            page.click('nav button[data-tab="settings"]')
+            goto(page, "settings")
             page.wait_for_selector("#md-panel", state="visible", timeout=10000)
 
             def cards() -> int:
@@ -478,7 +479,7 @@ def main() -> int:  # noqa: C901 — a flat sequence of independent checks reads
             # ── 27. polling stops when the panel is off screen ───────────────
             # A settings page that keeps fetching from a background tab becomes
             # a meaningful share of the traffic in the system it reports on.
-            page.click('nav button[data-tab="dashboard"]')
+            goto(page, "dashboard")
             page.wait_for_timeout(200)
             before = page.evaluate("""async () => {
                  window.__mdCount = 0;
@@ -503,7 +504,7 @@ def main() -> int:  # noqa: C901 — a flat sequence of independent checks reads
                }""")
             page.reload()
             page.wait_for_selector("#hero", timeout=20000)
-            page.click('nav button[data-tab="settings"]')
+            goto(page, "settings")
             wait_render()
             page.wait_for_function(
                 """() => document.querySelector('#md-mode button[data-mode=static]')

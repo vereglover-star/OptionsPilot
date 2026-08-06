@@ -33,6 +33,7 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from shell_nav import goto  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -326,7 +327,7 @@ def run_checks(page, base: str, c: Checks) -> None:
         c.check("timeline: no invented entries", True)
 
     # ── 27–36: the Coach tab ─────────────────────────────────────────────
-    page.click('nav button[data-tab="coach"]')
+    goto(page, "coach")
     page.wait_for_selector("#intel-coach", state="visible", timeout=20000)
 
     behaviors = text_of(page, "#intel-behaviors")
@@ -391,7 +392,7 @@ def run_checks(page, base: str, c: Checks) -> None:
         c.check("coach: no invented section", True)
 
     # ── 37–41: the Journal tab ───────────────────────────────────────────
-    page.click('nav button[data-tab="journal"]')
+    goto(page, "journal")
     page.wait_for_selector("#journal-table table", timeout=20000)
     journal = json.loads(urllib.request.urlopen(
         base + "/api/journal?last=200").read())
@@ -415,7 +416,7 @@ def run_checks(page, base: str, c: Checks) -> None:
             not contains(insight, "nan") and not contains(insight, "undefined"), insight[:200])
 
     # ── 42–46: the Learning tab ──────────────────────────────────────────
-    page.click('nav button[data-tab="learning"]')
+    goto(page, "learning")
     page.wait_for_selector("#tab-learning", state="visible", timeout=20000)
     page.wait_for_timeout(900)
     lessons = text_of(page, "#intel-lessons")
@@ -439,7 +440,7 @@ def run_checks(page, base: str, c: Checks) -> None:
             c.check(label, True)
 
     # ── 47–50: cross-cutting honesty ─────────────────────────────────────
-    page.click('nav button[data-tab="dashboard"]')
+    goto(page, "dashboard")
     page.wait_for_timeout(400)
     whole = text_of(page, "#intel-panel")
     c.check("no 'undefined' anywhere in the intelligence UI",

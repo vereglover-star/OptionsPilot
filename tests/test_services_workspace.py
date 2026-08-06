@@ -30,7 +30,7 @@ class FakeStore:
     and a lenient double would test the decision away.
     """
 
-    def __init__(self, doc=None, surface_level=3, shell_v2=False):
+    def __init__(self, doc=None, surface_level=3, shell_v2=True):
         self.doc = doc if doc is not None else {}
         self.writes = 0
         self.level = surface_level
@@ -321,28 +321,29 @@ class TestShellFlag:
     visible flash on every launch.
     """
 
-    def test_it_is_off_by_default(self):
-        assert WorkspaceService(FakeStore()).get().shell_v2 is False
+    def test_it_is_on_by_default_since_m2_c11(self):
+        assert WorkspaceService(FakeStore()).get().shell_v2 is True
 
     def test_it_is_served_with_the_workspace(self):
-        assert WorkspaceService(FakeStore(shell_v2=True)).get().shell_v2 is True
+        assert WorkspaceService(FakeStore(shell_v2=False)).get().shell_v2 is False
 
-    def test_it_can_be_set_through_the_workspace_patch(self):
+    def test_it_can_be_turned_off_through_the_workspace_patch(self):
+        """The rollback, over the wire."""
         store = FakeStore()
-        assert WorkspaceService(store).update({"shell_v2": True}).shell_v2 is True
-        assert store.shell is True
+        assert WorkspaceService(store).update({"shell_v2": False}).shell_v2 is False
+        assert store.shell is False
 
     def test_it_is_not_written_into_the_workspace_document(self):
         """Its own key, its own DEVICE_ONLY sync policy: a rollback that
         propagates to every device is not a rollback, it is an outage."""
         store = FakeStore()
-        WorkspaceService(store).update({"shell_v2": True})
+        WorkspaceService(store).update({"shell_v2": False})
         assert "shell_v2" not in store.doc
 
     @pytest.mark.parametrize("bad", ["true", 1, 0, None, "yes", []])
     def test_an_unusable_value_is_ignored_rather_than_4xxd(self, bad):
-        store = FakeStore(shell_v2=True)
-        assert WorkspaceService(store).update({"shell_v2": bad}).shell_v2 is True
+        store = FakeStore(shell_v2=False)
+        assert WorkspaceService(store).update({"shell_v2": bad}).shell_v2 is False
 
     @pytest.mark.parametrize("bad", ["true", 1, 0, None])
     def test_the_stores_setter_is_still_strict(self, bad):
@@ -352,15 +353,15 @@ class TestShellFlag:
     def test_a_workspace_reset_does_not_flip_it(self):
         """Resetting a layout must not silently move someone between two
         navigations."""
-        store = FakeStore({"symbol": "QQQ"}, shell_v2=True)
-        assert WorkspaceService(store).reset().shell_v2 is True
+        store = FakeStore({"symbol": "QQQ"}, shell_v2=False)
+        assert WorkspaceService(store).reset().shell_v2 is False
 
     def test_both_shell_fields_travel_together(self):
         store = FakeStore()
-        view = WorkspaceService(store).update({"shell_v2": True,
+        view = WorkspaceService(store).update({"shell_v2": False,
                                                "surface_level": 1,
                                                "symbol": "NVDA"})
-        assert (view.shell_v2, view.surface_level, view.symbol) == (True, 1, "NVDA")
+        assert (view.shell_v2, view.surface_level, view.symbol) == (False, 1, "NVDA")
         assert set(ws.WorkspaceService.SHELL_FIELDS) == {"surface_level", "shell_v2"}
 
 

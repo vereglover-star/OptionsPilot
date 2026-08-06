@@ -42,10 +42,30 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+from shell_nav import goto  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def open_diagnostics(page) -> None:
+    """Open Market data diagnostics, whichever navigation is on.
+
+    The Help menu lives in the legacy chrome; `UI_MIGRATION_TRACKER.md` §3
+    maps its six items to palette entries, so under the shell this is a
+    command by name rather than a hidden menu.
+    """
+    if not page.evaluate("() => document.body.classList.contains('shell-v2')"):
+        page.click("#help-btn")
+        page.click("#help-diagnostics")
+        return
+    page.keyboard.press("Control+k")
+    page.wait_for_selector("#palette", state="visible", timeout=8000)
+    page.fill("#palette-input", "market data diagnostics")
+    page.wait_for_timeout(400)
+    page.click('.pal-row:has(.pal-name:text-is("Market data diagnostics"))')
+    page.wait_for_timeout(300)
 
 
 def wait_for(url: str, timeout: float = 25.0) -> bool:
@@ -153,7 +173,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
 
             page.goto(base)
             page.wait_for_selector("#hero", timeout=20000)
-            page.click('nav button[data-tab="charts"]')
+            goto(page, "charts")
 
             def wait_loaded(sym: str, tf: str, timeout: int = 30000) -> None:
                 page.wait_for_function(
@@ -318,7 +338,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             saved = page.evaluate("() => JSON.parse(localStorage.getItem('chDraw:QQQ')).items.length")
             page.reload()
             page.wait_for_selector("#hero", timeout=20000)
-            page.click('nav button[data-tab="charts"]')
+            goto(page, "charts")
             page.wait_for_function("() => CH.data && CH.candle && DRAW.items.length > 0",
                                    timeout=30000)
             check(page.evaluate("() => DRAW.items.length") == saved,
@@ -664,7 +684,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
                           "localStorage.setItem('chInds', 'garbage'); }")
             page.reload()
             page.wait_for_selector("#hero", timeout=20000)
-            page.click('nav button[data-tab="charts"]')
+            goto(page, "charts")
             try:
                 wait_loaded("QQQ", "1d")
                 recovered = not page.evaluate(
@@ -1279,8 +1299,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             #     backend tests: the payload can be perfect while the page
             #     throws. Any console error here fails the whole run (see the
             #     `errors` collector), so this drives it like a user would.
-            page.click("#help-btn")
-            page.click("#help-diagnostics")
+            open_diagnostics(page)
             page.wait_for_selector("#diag-overlay.show", timeout=5000)
             page.wait_for_function(
                 "() => !$('diag-body').textContent.includes('Loading')",

@@ -35,6 +35,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from shell_nav import goto, shell_on, visible as reachable  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -121,6 +122,54 @@ def guide_state(base: str) -> dict:
     return json.loads(urllib.request.urlopen(base + "/api/guide").read())
 
 
+def run_command(page, name: str) -> None:
+    """Run a palette command by its exact name.
+
+    Clicks the matching ROW rather than pressing Enter on whatever happens to
+    be highlighted: a check that silently ran a different command than it
+    intended is worse than one that fails.
+    """
+    page.keyboard.press("Control+k")
+    page.wait_for_selector("#palette", state="visible", timeout=8000)
+    page.fill("#palette-input", name.lower())
+    page.wait_for_timeout(400)
+    row = page.query_selector(f'.pal-row:has(.pal-name:text-is("{name}"))')
+    if row is None:
+        raise AssertionError(
+            f"the palette offers no command called {name!r} — "
+            f"saw {page.eval_on_selector_all('.pal-name', 'e=>e.map(x=>x.textContent)')}")
+    row.click()
+    page.wait_for_timeout(300)
+
+
+def start_full_tour(page) -> None:
+    """Start the whole-app tour, whichever shell is on.
+
+    `#help-btn` and its menu live in the legacy chrome;
+    `UI_MIGRATION_TRACKER.md` §3 maps the six Help items to palette entries, so
+    under the shell this drives the palette rather than a hidden menu.
+    """
+    if not shell_on(page):
+        page.click("#help-btn")
+        page.click("#help-tour")
+        return
+    run_command(page, "Replay the guided tour")
+
+
+def learn_here(page) -> None:
+    """Start the current screen's walkthrough, whichever shell is on.
+
+    The header's `Learn` button lives in the legacy chrome. `UI_V2_DESIGN.md`
+    §4.4 relocates it to "contextual help plus a palette command", so under the
+    shell this drives the palette — the real control a user would use, not
+    `Guide.learnHere()` through `evaluate`.
+    """
+    if not shell_on(page):
+        page.click("#learn-btn")
+        return
+    run_command(page, "Learn this screen")
+
+
 def dismiss_welcome(page) -> None:
     if page.is_visible("#gd-welcome.show"):
         page.click("#gd-w-skip")
@@ -128,7 +177,7 @@ def dismiss_welcome(page) -> None:
 
 
 def open_trade_with_chain(page) -> None:
-    page.click('nav button[data-tab="trade"]')
+    goto(page, "trade")
     page.wait_for_selector("#tab-trade", state="visible")
     page.fill("#tk-symbol", "SPY")
     page.click("#tk-load")
@@ -167,9 +216,9 @@ def check_spotlight(page, c: Checks) -> None:
     the card is not covering it. A tour that dims the screen and points at the
     wrong place is worse than no tour."""
     dismiss_welcome(page)
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     page.wait_for_timeout(400)
 
@@ -222,7 +271,7 @@ def check_navigation(page, c: Checks) -> None:
     # The page must stay usable during a tour — the whole reason the overlay is
     # pointer-events:none rather than a modal.
     c.check("navigation: the app stays interactive during a walkthrough",
-            page.is_enabled('nav button[data-tab="journal"]'))
+            reachable(page, "journal"))
     page.keyboard.press("Escape")
     page.wait_for_timeout(250)
     c.check("navigation: Escape pauses the walkthrough",
@@ -234,8 +283,7 @@ def check_navigation(page, c: Checks) -> None:
 def check_interaction_step(page, c: Checks) -> None:
     """A step that asks the user to click something must advance BECAUSE they
     clicked it, not because they pressed Next."""
-    page.click("#help-btn")
-    page.click("#help-tour")
+    start_full_tour(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     # Walk to the first step that asks for an interaction.
     found = False
@@ -255,7 +303,9 @@ def check_interaction_step(page, c: Checks) -> None:
             "skip step" in (page.inner_text("#gd-next") or "").lower(),
             page.inner_text("#gd-next"))
     before = step_number(page)
-    page.click('nav button[data-tab="charts"]')     # the real control
+    # The real control, whichever navigation is on: the rail item under the
+    # shell, the nav button otherwise. `goto` is exactly that decision.
+    goto(page, "charts")
     page.wait_for_timeout(500)
     c.check("interaction: clicking the highlighted control advances the tour",
             step_number(page) == before + 1, f"{before} -> {step_number(page)}")
@@ -264,9 +314,9 @@ def check_interaction_step(page, c: Checks) -> None:
 
 
 def check_completion(page, base: str, c: Checks) -> None:
-    page.click('nav button[data-tab="backtest"]')
+    goto(page, "backtest")
     page.wait_for_selector("#tab-backtest", state="visible")
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     total = int(text_of(page, "#gd-progress").split(" of ")[1])
     for _ in range(total - 1):
@@ -287,7 +337,7 @@ def check_completion(page, base: str, c: Checks) -> None:
     c.check("completion: it is recorded server-side, not in localStorage",
             "backtest" in state["completed"], str(state["completed"]))
 
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.wait_for_timeout(400)
     item = page.query_selector('#gd-catalogue [data-tutorial="backtest"]')
@@ -299,9 +349,9 @@ def check_completion(page, base: str, c: Checks) -> None:
 
 
 def check_skip_and_resume(page, base: str, c: Checks) -> None:
-    page.click('nav button[data-tab="learning"]')
+    goto(page, "learning")
     page.wait_for_selector("#tab-learning", state="visible")
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     page.click("#gd-skip")
     page.wait_for_timeout(600)
@@ -313,9 +363,9 @@ def check_skip_and_resume(page, base: str, c: Checks) -> None:
             "learning" not in state["completed"])
 
     # Resume: pause part-way, reload, and the offer must name the step.
-    page.click('nav button[data-tab="watchlist"]')
+    goto(page, "watchlist")
     page.wait_for_selector("#tab-watchlist", state="visible")
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     page.click("#gd-next")
     page.wait_for_timeout(250)
@@ -331,17 +381,25 @@ def check_skip_and_resume(page, base: str, c: Checks) -> None:
 
 def check_contextual_help(page, c: Checks) -> None:
     for tab in TABS:
-        page.click(f'nav button[data-tab="{tab}"]')
+        goto(page, tab)
         page.wait_for_selector(f"#tab-{tab}", state="visible")
         page.wait_for_timeout(120)
-        label = (page.inner_text("#learn-btn") or "").lower()
-        c.check(f"contextual help: the Learn button names the {tab} screen",
-                len(label) > 6 and "learn:" in label, label)
+        # The legacy header names the screen on its button; the shell names it
+        # in the frame's destination. Both are "the app tells you where you
+        # are", asserted against whichever one is on screen.
+        if shell_on(page):
+            label = (page.inner_text("#sf-dest-name") or "").lower()
+            c.check(f"contextual help: the frame names the {tab} destination",
+                    len(label) > 3, label)
+        else:
+            label = (page.inner_text("#learn-btn") or "").lower()
+            c.check(f"contextual help: the Learn button names the {tab} screen",
+                    len(label) > 6 and "learn:" in label, label)
     dismiss_welcome(page)
 
-    page.click('nav button[data-tab="journal"]')
+    goto(page, "journal")
     page.wait_for_selector("#tab-journal", state="visible")
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     c.check("contextual help: it starts THIS screen's walkthrough",
             "journal" in text_of(page, "#gd-progress"),
@@ -350,7 +408,7 @@ def check_contextual_help(page, c: Checks) -> None:
     page.wait_for_timeout(200)
 
     # A panel-level "?" reaches a tutorial the header button cannot.
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.click('.panel-help[data-tutorial="marketdata"]')
     page.wait_for_selector("#gd-card.show", timeout=8000)
@@ -375,7 +433,7 @@ def check_catalogue_integrity(page, c: Checks) -> None:
     broken = []
     for tid, tab, selectors, title, blurb in spec:
         if tab:
-            page.click(f'nav button[data-tab="{tab}"]')
+            goto(page, tab)
             page.wait_for_timeout(80)
         for sel in selectors:
             if sel and not page.query_selector(sel):
@@ -387,7 +445,7 @@ def check_catalogue_integrity(page, c: Checks) -> None:
     c.check("catalogue: no tutorial is a single-step stub",
             all(len(s) >= 3 for _, _, s, _, _ in spec),
             str([(i, len(s)) for i, _, s, _, _ in spec if len(s) < 3]))
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.wait_for_timeout(300)
     cards = page.query_selector_all("#gd-catalogue .gd-item")
@@ -401,9 +459,24 @@ def check_help_centre(page, c: Checks) -> None:
     c.check("help centre: ? opens it", page.is_visible("#gd-help.show"))
     page.keyboard.press("Escape")
     page.wait_for_timeout(200)
+    # Ctrl+K moved. It opened the help centre from V0.6.1; UI_V2_WIREFRAMES.md
+    # §1.5 gives it to the command palette, and the help centre keeps `?` and
+    # gains a palette entry. Both halves are asserted, because "the key changed
+    # owner" is only safe if the old owner is still reachable.
     page.keyboard.press("Control+k")
-    page.wait_for_selector("#gd-help.show", timeout=5000)
-    c.check("help centre: Ctrl+K opens it", page.is_visible("#gd-help.show"))
+    page.wait_for_timeout(400)
+    if shell_on(page):
+        c.check("help centre: Ctrl+K now opens the command palette instead",
+                page.is_visible("#palette") and not page.is_visible("#gd-help.show"))
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        run_command(page, "Search help")
+        page.wait_for_selector("#gd-help.show", timeout=5000)
+        c.check("help centre: and it is still reachable, by name",
+                page.is_visible("#gd-help.show"))
+    else:
+        page.wait_for_selector("#gd-help.show", timeout=5000)
+        c.check("help centre: Ctrl+K opens it", page.is_visible("#gd-help.show"))
 
     page.fill("#gd-help-input", "stop loss")
     page.wait_for_timeout(250)
@@ -434,6 +507,11 @@ def check_help_centre(page, c: Checks) -> None:
     else:
         c.check("help centre: it opens the right term", False, "opened a tutorial")
         page.keyboard.press("Escape")
+    # Leave nothing open. An overlay left showing here intercepts every later
+    # click on the rail — which the legacy nav never noticed, because it sat
+    # outside the overlay entirely.
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(250)
     page.wait_for_timeout(200)
 
     page.keyboard.press("?")
@@ -486,7 +564,7 @@ def check_glossary(page, c: Checks) -> None:
 
     # A control that already does something must not be hijacked by the
     # glossary: hovering the EMA pill explains it, clicking it toggles EMA.
-    page.click('nav button[data-tab="charts"]')
+    goto(page, "charts")
     page.wait_for_selector("#tab-charts", state="visible")
     page.hover('#ch-inds button[data-ind="rsi"]')
     page.wait_for_timeout(350)
@@ -589,7 +667,7 @@ def check_order_guardrails(page, c: Checks) -> None:
 
 
 def check_empty_states(page, c: Checks) -> None:
-    page.click('nav button[data-tab="journal"]')
+    goto(page, "journal")
     page.wait_for_selector("#tab-journal", state="visible")
     page.wait_for_timeout(500)
     txt = text_of(page, "#journal-table")
@@ -602,7 +680,7 @@ def check_empty_states(page, c: Checks) -> None:
     c.check("empty states: it does not just say 'no data'",
             "no data" not in txt)
 
-    page.click('nav button[data-tab="trade"]')
+    goto(page, "trade")
     page.wait_for_selector("#tab-trade", state="visible")
     page.wait_for_timeout(600)
     working = text_of(page, "#tk-working")
@@ -615,7 +693,7 @@ def check_empty_states(page, c: Checks) -> None:
     c.check("empty states: an empty position list says how one appears",
             "nothing open" in positions, positions[:120])
 
-    page.click('nav button[data-tab="dashboard"]')
+    goto(page, "dashboard")
     page.wait_for_selector("#tab-dashboard", state="visible")
     page.wait_for_timeout(400)
     notifs = text_of(page, "#notifs")
@@ -632,7 +710,7 @@ def check_recommendations(page, base: str, c: Checks) -> None:
     # dialog is itself a state change, and comparing a payload fetched before
     # it against a screen rendered after it compares two different moments.
     api = guide_state(base)
-    page.click('nav button[data-tab="coach"]')
+    goto(page, "coach")
     page.wait_for_selector("#tab-coach", state="visible")
     page.wait_for_timeout(700)
 
@@ -669,7 +747,7 @@ def check_recommendations(page, base: str, c: Checks) -> None:
 
 
 def check_accessibility(page, base: str, c: Checks) -> None:
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.wait_for_timeout(400)
 
@@ -699,7 +777,7 @@ def check_accessibility(page, base: str, c: Checks) -> None:
             guide_state(base)["state"]["reduce_motion"] is True)
 
     # …and the walkthrough still works with motion off.
-    page.click("#learn-btn")
+    learn_here(page)
     page.wait_for_selector("#gd-card.show", timeout=8000)
     page.wait_for_timeout(200)
     ring = rect(page, "#gd-ring")
@@ -718,7 +796,7 @@ def check_accessibility(page, base: str, c: Checks) -> None:
             page.evaluate(
                 "document.documentElement.classList.contains('gd-nomotion')"))
 
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.wait_for_timeout(400)
     page.uncheck("#gd-motion")
@@ -786,13 +864,20 @@ def check_accessibility(page, base: str, c: Checks) -> None:
     # Hover explanations can be switched off, and then stay off.
     page.uncheck("#gd-tips")
     page.wait_for_timeout(400)
-    # The sidebar badge, not a ticket label: the ticket form is hidden until a
-    # contract is selected and this runs after a reload.
-    page.hover('nav .badge[data-learn="paper"]')
+    # The PAPER badge, wherever it lives: the legacy sidebar, or Flight Status
+    # since M2-C5 (UI_MIGRATION_TRACKER.md §3 moves it there because it is a
+    # status and status has one owner). Not a ticket label — the ticket form is
+    # hidden until a contract is selected and this runs after a reload.
+    if shell_on(page):
+        page.click("#sf-status")
+        page.wait_for_selector("#flight-status", state="visible")
+        page.hover('#flight-status [data-learn="paper"]')
+    else:
+        page.hover('nav .badge[data-learn="paper"]')
     page.wait_for_timeout(400)
     c.check("a11y: hover explanations can be switched off",
             not page.is_visible("#gd-tip.show"))
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_timeout(300)
     page.check("#gd-tips")
     page.wait_for_timeout(400)
@@ -800,11 +885,26 @@ def check_accessibility(page, base: str, c: Checks) -> None:
 
 def check_responsive(page, c: Checks) -> None:
     for width, height in ((1280, 800), (1024, 720), (900, 700)):
+        # Leave no walkthrough running between iterations. The legacy nav sat
+        # outside the tour's dimming layer so a stale tour never blocked it;
+        # the rail is inside the page, so it can be — a difference that only
+        # shows up once the shell is the thing being driven.
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
         page.set_viewport_size({"width": width, "height": height})
-        page.wait_for_timeout(250)
-        page.click('nav button[data-tab="dashboard"]')
+        page.wait_for_timeout(300)
+        # 1024px is the shell's supported minimum (DESIGN_SYSTEM_V2.md §5.3).
+        # Below it the documented answer is a MESSAGE, not a degraded layout,
+        # so that is what gets asserted rather than a card that fits a window
+        # the product says it does not support.
+        if shell_on(page) and width < 1024:
+            c.check(f"responsive: below the supported minimum ({width}px) the "
+                    f"shell says so rather than degrading",
+                    page.is_visible("#shell-toosmall"))
+            continue
+        goto(page, "dashboard")
         page.wait_for_selector("#tab-dashboard", state="visible")
-        page.click("#learn-btn")
+        learn_here(page)
         page.wait_for_selector("#gd-card.show", timeout=8000)
         page.wait_for_timeout(450)
         card = rect(page, "#gd-card")
@@ -824,7 +924,7 @@ def check_responsive(page, c: Checks) -> None:
 
 
 def check_reset(page, base: str, c: Checks) -> None:
-    page.click('nav button[data-tab="settings"]')
+    goto(page, "settings")
     page.wait_for_selector("#tab-settings", state="visible")
     page.wait_for_timeout(400)
     before = guide_state(base)["state"]

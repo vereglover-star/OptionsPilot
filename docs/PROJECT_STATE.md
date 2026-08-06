@@ -5,12 +5,12 @@ what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-05, on closing **UI V2 · M1 — workspace context and
 Surface Level** (branch `V3-ui`, committed `d665ad0`…`ace7a75`). 2493 →
-**2623 tests** (+71). Full detail: **`docs/CHANGELOG.md`**.
+**2624 tests** (+71). Full detail: **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0 and M1 are complete and nothing is in
-progress.** `verify.ps1` is green across all **15** gates at **2623 tests**.
+progress.** `verify.ps1` is green across all **15** gates at **2624 tests**.
 
 ### The UI V2 redesign (2026-08-05 —)
 

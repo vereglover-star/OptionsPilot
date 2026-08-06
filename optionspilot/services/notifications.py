@@ -117,12 +117,17 @@ class NotificationView:
     event_id: str = ""
     action: dict | None = None
     dismissed: bool = False
+    #: Whether the user has seen it (M2-C6). Server-owned, because
+    #: `localStorage` would mark a month of notifications unread again after a
+    #: cleared profile, and because two clients disagreeing about an unread
+    #: count is worse than having no count at all.
+    read: bool = False
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "title": self.title, "body": self.body,
                 "ts": self.ts, "severity": self.severity,
                 "event_id": self.event_id, "action": self.action,
-                "dismissed": self.dismissed}
+                "dismissed": self.dismissed, "read": self.read}
 
 
 def severity_of(kind: str) -> str:
@@ -199,6 +204,7 @@ class NotificationService:
         except Exception:  # noqa: BLE001 — a broken history must not break a page
             log.debug("notification history unreadable", exc_info=True)
             return []
+        read_ids = set(self._read_ids())
         views = [
             NotificationView(
                 kind=event.kind, title=event.title, body=event.body,
@@ -207,6 +213,7 @@ class NotificationService:
                 severity=severity_of(event.kind),
                 event_id=getattr(event, "event_id", ""),
                 action=getattr(event, "action", None),
+                read=getattr(event, "event_id", "") in read_ids,
             )
             for event in history
         ]
@@ -223,6 +230,54 @@ class NotificationService:
             views = [v for v in views if v.severity in allowed or
                      v.kind in {"update_available", "goal_achieved", "provider_offline"}]
         return views[::-1]
+
+    # ── read state (M2-C6) ───────────────────────────────────────────────────
+    #
+    # The store is duck-typed exactly like `center` above: anything with
+    # `notifications_read()` / `mark_notifications_read(ids)` satisfies it, so
+    # this service still imports no config and a test double is two methods.
+
+    def _read_ids(self) -> list[str]:
+        if self._runtime is None:
+            return []
+        try:
+            return list(self._runtime.notifications_read())
+        except Exception:  # noqa: BLE001 — a lost read mark is not an outage
+            log.debug("notification read state unreadable", exc_info=True)
+            return []
+
+    def mark_read(self, ids) -> int:
+        """Mark ids read. Returns how many are now known-read.
+
+        Never raises for the same reason nothing else here does: a notification
+        subsystem that can break the caller is worse than one that forgets.
+        """
+        if self._runtime is None:
+            return 0
+        try:
+            return len(self._runtime.mark_notifications_read(ids))
+        except Exception:  # noqa: BLE001
+            log.debug("could not persist notification read state", exc_info=True)
+            return 0
+
+    def unread_count(self, limit: int = 50) -> int:
+        """How many of the recent notifications have not been seen."""
+        return sum(1 for view in self.recent(limit) if not view.read)
+
+    def highest_unread_severity(self, limit: int = 50) -> str | None:
+        """The most severe unread severity, or None.
+
+        The strip shows a count AND a glyph (`UI_V2_WIREFRAMES.md` §1.4), and
+        the glyph is the half that says whether the count is worth interrupting
+        for. Ranked here rather than in the client so two clients cannot
+        disagree about which of three unread events is the loud one.
+        """
+        order = ["critical", "important", "notice", "info"]
+        unread = [v.severity for v in self.recent(limit) if not v.read]
+        for severity in order:
+            if severity in unread:
+                return severity
+        return None
 
     def dismiss(self, event_id: str) -> bool:
         """Dismiss one durable event when the backing center supports it."""

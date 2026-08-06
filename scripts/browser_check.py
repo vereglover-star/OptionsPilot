@@ -27,9 +27,13 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
+from shell_nav import goto, shell_on  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
-TABS = ["dashboard", "charts", "trade", "coach", "watchlist",
+# Every legacy section, including the one the shell added (M2-C9). `portfolio`
+# has no legacy nav button — it is reached from the rail — which is precisely
+# why the suite goes through `shell_nav.goto` rather than a selector.
+TABS = ["dashboard", "portfolio", "charts", "trade", "coach", "watchlist",
         "journal", "backtest", "learning", "settings"]
 
 
@@ -98,7 +102,9 @@ def main() -> int:
             page.wait_for_selector("#gd-welcome.show", state="hidden",
                                    timeout=5000)
             for tab in TABS:
-                page.click(f'nav button[data-tab="{tab}"]')
+                if tab == "portfolio" and not shell_on(page):
+                    continue      # no legacy route to it; the shell owns it
+                goto(page, tab)
                 page.wait_for_selector(f"#tab-{tab}", state="visible", timeout=10000)
                 page.wait_for_timeout(250)
             browser.close()

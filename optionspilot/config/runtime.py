@@ -96,8 +96,13 @@ DEFAULT_SURFACE_LEVEL = 3
 # It is the ROLLBACK PATH for the whole shell migration, which is why it lives
 # here and not in `config/settings.py`: a rollback that needs a restart is not a
 # rollback. `docs/ROADMAP-UI-V2.md` §2.1 gives its lifecycle — introduced off in
-# M2-C1, defaulted on in M2-C11, and removed with its branches in M9-C7.
-DEFAULT_SHELL_V2 = False
+# M2-C1, defaulted ON here in M2-C11, and removed with its branches in M9-C7.
+#
+# Default ON since M2-C11. The old navigation remains one toggle away in
+# Settings for one release (`UI_V2_DESIGN.md` §16 Phase 2), and M3-C10 deletes
+# it once that release has elapsed. Anyone who had explicitly turned it off
+# keeps their choice: this is a DEFAULT, and a stored `false` still wins.
+DEFAULT_SHELL_V2 = True
 
 # Custom-mode knobs: (section, field)
 CUSTOM_FIELDS = {
@@ -393,6 +398,48 @@ class RuntimeSettings:
             self._save()
         log.info("UI V2 shell %s", "enabled" if enabled else "disabled")
         return enabled
+
+    # ── notification read state (UI V2 M2-C6) ────────────────────────────────
+    #
+    # Server-owned rather than client-owned, and for the reason V0.6.1 and
+    # V0.7.0 both arrived at: `localStorage` is a cache, so a cleared WebView
+    # profile would mark a month of notifications unread again. It is also the
+    # one piece of notification state a second client must agree with — an
+    # inbox that says "3 unread" on the desktop and "17 unread" on a phone is
+    # worse than no badge at all.
+    #
+    # Bounded, because it is written from a client and lands in the same file
+    # the trading mode lives in. The cap is generous relative to the history
+    # the notification centre keeps, so in practice nothing is forgotten while
+    # it is still visible.
+    MAX_READ_IDS = 500
+
+    def notifications_read(self) -> list[str]:
+        """Ids the user has seen. Never raises; a bad file loses read marks."""
+        with self._lock:
+            stored = self._doc.get("notifications_read")
+            if not isinstance(stored, list):
+                return []
+            return [x for x in stored if isinstance(x, str) and x][:self.MAX_READ_IDS]
+
+    def mark_notifications_read(self, ids) -> list[str]:
+        """Merge ids into the read set, newest kept, and persist.
+
+        Merge rather than replace: two surfaces can mark things read (the inbox
+        and, later, a phone), and a replace would let the slower one resurrect
+        what the faster one had already cleared.
+        """
+        if isinstance(ids, str):
+            ids = [ids]
+        if not isinstance(ids, (list, tuple, set)):
+            raise ValueError("notification ids must be a list")
+        fresh = [str(x) for x in ids if isinstance(x, str) and x]
+        with self._lock:
+            current = self.notifications_read()
+            merged = fresh + [x for x in current if x not in set(fresh)]
+            self._doc["notifications_read"] = merged[:self.MAX_READ_IDS]
+            self._save()
+            return list(self._doc["notifications_read"])
 
     # ── guided-onboarding state (V0.6.1) ─────────────────────────────────────
     #

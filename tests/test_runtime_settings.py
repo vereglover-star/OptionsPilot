@@ -126,7 +126,15 @@ class TestShellV2:
     """UI V2 M2-C1. Live-editable because it is the migration's rollback path,
     and a rollback that needs a restart is not a rollback."""
 
-    def test_the_shell_is_off_until_a_device_opts_in(self, tmp_path):
+    def test_the_shell_is_on_by_default_since_m2_c11(self, tmp_path):
+        _, rt = make(tmp_path)
+        assert rt.shell_v2() is True
+
+    def test_a_device_that_opted_out_keeps_its_choice(self, tmp_path):
+        """A default is not an override. Someone who turned the new
+        navigation off must not be moved back by a release."""
+        (tmp_path / "settings.json").write_text(
+            json.dumps({"shell_v2": False}), encoding="utf-8")
         _, rt = make(tmp_path)
         assert rt.shell_v2() is False
 
@@ -151,7 +159,7 @@ class TestShellV2:
             json.dumps({"shell_v2": bad}), encoding="utf-8")
         cfg, rt = make(tmp_path)
         rt.apply(cfg)
-        assert rt.shell_v2() is False
+        assert rt.shell_v2() is True
 
     def test_it_leaves_every_other_axis_alone(self, tmp_path):
         """A fourth presentation flag must not disturb the three that exist."""
