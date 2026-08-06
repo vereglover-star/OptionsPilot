@@ -4,7 +4,7 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] — Fix: the in-app updater hung on "Installing…"
+## [2026-08-06] — Fix: the in-app updater hung on "Installing…" (v0.12.1)
 
 *One line of behaviour. A hang reported from a real installed build.*
 
@@ -58,6 +58,13 @@ the shutdown ran on a worker (a race it won by luck), and it composed against a
 tray that had never started — the one configuration in which the bug cannot
 happen, because `on_closing` exits outright without a tray.
 
+Not touched: the release monitoring fix below already shipped in v0.12.0, and
+`apply_update`'s validate → back up → launch → shut down order is unchanged.
+The browser `serve` path (no desktop shell, no tray, no locked exe) never sets
+an install hook and is a separate, lower-priority gap, not fixed here.
+
+12 new/strengthened tests. 16 gates, 2,636 tests.
+
 ## [2026-08-06] — UI V2 M2: the shell (V0.12.0)
 
 *Eleven commits. The first milestone a user sees the moment they launch.*
@@ -109,7 +116,7 @@ opened with focus in the wrong box.
 navigation helper that clicks real controls and reads the destination from the
 application's own registry. 16 gates, 2,624 tests.
 
-## [Uncommitted] — Release monitoring: two 64-bit hazards on a path never yet run
+## [2026-08-05] — Release monitoring: two 64-bit hazards on a path never yet run (V0.12.0)
 
 *Infrastructure only. No application code, no trading behaviour, no UI.*
 
