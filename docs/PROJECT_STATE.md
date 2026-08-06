@@ -4,13 +4,13 @@ Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
-`V3-ui`, committed `b380141`…`12510b3`). **2624 tests.** Full detail:
+`V3-ui`, committed `b380141`…`12510b3`). **2630 tests.** Full detail:
 **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0, M1 and M2 are complete and nothing is
-in progress.** `verify.ps1` is green across all **16** gates at **2624 tests**,
+in progress.** `verify.ps1` is green across all **16** gates at **2630 tests**,
 with the new shell ON by default.
 
 ### The UI V2 redesign (2026-08-05 —)

@@ -4,7 +4,37 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] — UI V2 M2: the shell (V0.12.0)
+## [Uncommitted] — Fix: the in-app updater hung on "Installing…"
+
+*One line of behaviour. A hang reported from a real installed build.*
+
+Pressing **Install & Restart** validated the download, took the mandatory
+backup, launched the silent installer — and then the application never closed.
+The installer cannot replace an exe the running process still holds open, so it
+gave up, and the dialog sat on "Installing…" forever.
+
+**The cause is a close request that was refused.** `window.destroy()` is not a
+command, it is a *request*: on Windows it reaches `Form.Close()`, which raises
+`FormClosing`, which runs `_DesktopController.on_closing` — and that handler
+cancels every close it did not sanction, by design. It recognises a sanctioned
+one by `allow_close`, which only `exit()` sets. The updater's hook destroyed
+the window directly, so the close was cancelled and the *close-button policy*
+ran instead: with the default preferences (close to tray, tray running) the
+update quietly became **hide to tray**.
+
+The updater now asks the lifecycle owner to shut down rather than reaching for
+the window, so the tray stops, the server closes, the port is released and the
+window actually goes — which is what lets the installer proceed. The work is
+deferred to a worker for the reason V0.8.1 established: the hook runs on the
+HTTP thread serving `POST /api/update/apply`, and shutting down inline would
+hold that response open across the shutdown of the server writing it.
+
+Six tests, and the window double now models the part that mattered: its
+`destroy()` re-enters the closing handler and honours a cancellation, exactly
+as `Form.Close()` does. The old double marked itself destroyed unconditionally,
+which is precisely why a shutdown that never happened looked correct.
+
+## [2026-08-06] — UI V2 M2: the shell (V0.12.0)
 
 *Eleven commits. The first milestone a user sees the moment they launch.*
 

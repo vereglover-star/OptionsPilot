@@ -256,12 +256,18 @@ class DesktopApplication:
                 pass
 
     def _on_install_launched(self) -> None:
+        """The installer is running and waiting for this exe to be released.
+
+        Goes through the lifecycle owner rather than destroying windows
+        directly: a bare `window.destroy()` is a REQUEST to close, and
+        `_DesktopController.on_closing` refuses every request it did not
+        sanction. Bypassing it turned the update into a hide-to-tray.
+        """
         self.transport.should_exit = True
         try:
-            for window in list(self.webview.windows):
-                window.destroy()
+            self.controller.shutdown_for_install()
         except Exception:  # noqa: BLE001 - best-effort shutdown
-            pass
+            log.exception("could not shut down for the installer")
 
     def run(self) -> None:
         # `create_app` owns the effective settings object when the launcher was
@@ -439,6 +445,34 @@ class _DesktopController:
             log.debug("close prompt could not be raised", exc_info=True)
             self._prompt_shown = False
             self.hide_to_tray()
+
+    def shutdown_for_install(self):
+        """Close for an installer that is waiting to replace this exe.
+
+        `on_closing` cancels every platform close except one a shutdown already
+        in flight is asking for, and it recognises that by `allow_close`. An
+        installer holding a lock on the running binary IS such a shutdown, so
+        the flag is set here before the close is requested.
+
+        Without it the updater's `window.destroy()` reached `on_closing` with
+        `allow_close` still False, which cancelled the close and deferred
+        "hide to tray" instead — the default preferences send every ordinary
+        install down exactly that branch. The window went to the tray, the
+        process kept the exe locked, the silent installer could never replace
+        it, and the dialog sat on "Installing..." forever.
+
+        `exit()` sets `allow_close` itself, which is why this routes through it
+        rather than setting the flag and destroying the window here: the flag
+        stays owned by the one method that also stops the tray, closes the
+        server and releases the port. A second owner would be a second thing to
+        keep in step.
+
+        Deferred for the same reason `_exit_from_close_button` is: this runs on
+        the HTTP worker thread serving `POST /api/update/apply`, and `exit()`
+        joins the tray and the scheduler for several seconds — inline it would
+        hold that response open across the shutdown of the server writing it.
+        """
+        self._defer("desktop-install-exit", self.exit)
 
     def _exit_from_close_button(self):
         """Acknowledge the click before the (slow) shutdown starts.

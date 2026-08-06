@@ -748,6 +748,20 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   hazard through `Control.Invoke`, and `server.close()` + `tray.stop()` hold the
   pump for ~7s of thread joins, which alone is past the 5s the shell ghosts a
   window at. **A close handler decides and returns; the work goes to a worker.**
+- **`window.destroy()` is a REQUEST to close, and this app refuses most of
+  them.** `_DesktopController.on_closing` cancels every platform close it did
+  not sanction — that is the whole close-to-tray feature — and it recognises a
+  sanctioned one by `allow_close`, which only `exit()` sets. The updater's
+  install hook destroyed the window directly, so the close was cancelled and
+  the close-BUTTON policy ran instead: with the default preferences the update
+  silently became "hide to tray", the process kept the exe locked, the silent
+  installer could never replace it, and the dialog sat on "Installing…"
+  forever. Anything that needs the app to actually go away calls the lifecycle
+  owner; reaching for the window is asking a handler whose job is to say no.
+  The test that was supposed to cover this asserted the hook FIRED, never what
+  it DID — and the window double marked itself destroyed unconditionally, so a
+  shutdown that never happened looked correct for two milestones. A double that
+  cannot refuse cannot catch a refusal.
 - **Replacing a library's default callback silently discards what the default
   DID.** `pystray.Icon.run(setup=...)` is an if/else: supply a `setup` and you
   lose `self.visible = True`, which is the only path to `_show()`, which is the

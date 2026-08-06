@@ -1327,3 +1327,115 @@ class TestTrayMenuShape:
         """Without a default, left-clicking a Windows tray icon does nothing."""
         controller = _DesktopController(_Window(), _Server(), NullTray())
         assert [i.id for i in controller.menu() if i.default] == ["open"]
+
+
+class _ClosableWindow(_Window):
+    """A window whose ``destroy()`` behaves like ``Form.Close()``.
+
+    The base double marks itself destroyed unconditionally, which is what let
+    the updater's shutdown look correct for two milestones. The real call goes
+    ``Control.Invoke`` -> ``Form.Close()`` -> ``FormClosing`` -> pywebview's
+    handler -> ours, and **a handler that returns False sets
+    ``args.Cancel = True`` and the window stays open**. That cancellation is
+    the entire bug this class exists to expose, so it is modelled rather than
+    assumed away.
+    """
+
+    def __init__(self, controller_ref):
+        super().__init__()
+        self._controller = controller_ref
+        self.close_attempts = 0
+
+    def destroy(self):
+        self._check_thread("window.destroy")
+        self.close_attempts += 1
+        controller = self._controller()
+        # `FormClosing` runs its handlers ON the pump.
+        previous, self.gui_thread = self.gui_thread, threading.get_ident()
+        try:
+            allowed = controller.on_closing()
+        finally:
+            self.gui_thread = previous
+        if allowed:
+            self.destroyed = True
+
+
+class TestUpdateShutdownActuallyCloses:
+    """The installer is waiting to replace an exe this process holds open.
+
+    `on_closing` cancels every close except one a shutdown already in flight
+    is asking for, and it recognises that by `allow_close`. The updater's hook
+    destroyed the window without setting it, so the close was cancelled and
+    converted into "hide to tray" — the app stayed alive, the exe stayed
+    locked, and the dialog sat on "Installing..." forever. The default
+    preferences (`close_behavior: "tray"`, a started tray) send every ordinary
+    install straight down that branch.
+    """
+
+    @staticmethod
+    def _controller(**prefs):
+        holder = {}
+        tray = NullTray()
+        window = _ClosableWindow(lambda: holder["c"])
+        controller = _DesktopController(window, _Server(**prefs), tray)
+        controller.tray_started = True
+        holder["c"] = controller
+        return controller, window
+
+    def test_destroying_without_a_sanctioned_shutdown_is_cancelled(self):
+        """The mechanism, stated once: this is what the bug looked like.
+
+        It is also why the fix routes through `exit()` rather than setting
+        `allow_close` at the call site — `exit()` owns that flag along with
+        stopping the tray, closing the server and releasing the port.
+        """
+        controller, window = self._controller()
+        window.destroy()
+        assert window.close_attempts == 1
+        assert window.destroyed is False, (
+            "on_closing cancels a close it did not sanction — which is correct, "
+            "and is why the updater has to sanction it")
+        controller.join_pending(5.0)
+
+    def test_an_install_shutdown_really_closes_the_window(self):
+        controller, window = self._controller()
+        controller.shutdown_for_install()
+        controller.join_pending(5.0)
+        assert window.destroyed is True, (
+            "the installer cannot replace an exe this process still holds open")
+
+    def test_it_closes_even_with_close_to_tray_configured(self):
+        """The default. Hiding to tray is the right answer to the close BUTTON
+        and the wrong answer to an installer that is waiting."""
+        controller, window = self._controller(close_behavior="tray",
+                                              close_prompt_dismissed=False)
+        controller.shutdown_for_install()
+        controller.join_pending(5.0)
+        assert window.destroyed is True
+        assert window.hidden is False, "hidden instead of closed"
+
+    def test_the_server_is_closed_so_the_port_is_released(self):
+        controller, window = self._controller()
+        controller.shutdown_for_install()
+        controller.join_pending(5.0)
+        assert controller.server.closed == 1
+
+    def test_it_does_not_block_the_caller(self):
+        """The hook runs on the HTTP worker thread serving
+        `POST /api/update/apply`. `exit()` joins the tray and the scheduler for
+        seconds; doing that inline would hold the response open across the
+        shutdown of the very server writing it."""
+        controller, window = self._controller()
+        controller.server.on_close = lambda: time.sleep(0.6)
+        started = time.monotonic()
+        controller.shutdown_for_install()
+        assert time.monotonic() - started < 0.3, "the hook blocked its caller"
+        controller.join_pending(5.0)
+        assert window.destroyed is True
+
+    def test_it_is_safe_to_ask_twice(self):
+        controller, window = self._controller()
+        controller.shutdown_for_install()
+        controller.shutdown_for_install()
+        controller.join_pending(5.0)
+        assert controller.server.closed == 1
