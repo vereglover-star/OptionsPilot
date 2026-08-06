@@ -105,6 +105,13 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: server-owned workspace check"
     & $python "$PSScriptRoot\workspace_check.py" @browserArgs
     $results["Workspace persistence check"] = ($LASTEXITCODE -eq 0)
+
+    # UI V2 shell (M2-C10). Drives the shell with the flag ON — every other
+    # suite runs with it off — and ends by asserting the rollback, which is the
+    # whole safety argument for shipping a shell mid-migration.
+    Write-Step "Bonus: UI V2 shell check"
+    & $python "$PSScriptRoot\shell_check.py" @browserArgs
+    $results["UI V2 shell check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

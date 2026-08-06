@@ -534,11 +534,35 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
-### Next milestone — M2 · V0.12.0 The shell
+### Active milestone — M2 · V0.12.0 The shell
 
-Not started. C1–C11 per §6. Two things carry into it from M1: the three
-symbol boxes are retired by **M2-C4** in favour of the `/` symbol jump, and
-Surface Level moves out of its temporary Settings home into the shell.
+**In progress: 6 of 11 commits.** The shell exists, is complete enough to
+use, and is **off by default** — every other suite runs with the flag off and
+passes, which is the property that makes the remaining work safe to do
+incrementally.
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | `ui.shell_v2` in `RuntimeSettings`, default off, Settings toggle | `b380141` |
+| C2 | ✅ | Frame, nav rail, system strip, destination registry, one router | `0048d60` |
+| C3 | ✅ | Command palette: destinations, actions, settings, MOVED aliases | `7a1e355` |
+| C4 | ✅ | Symbol jump (`/`) as the single symbol editor | `43e988e` |
+| C5 | ✅ | Flight Status popover; both mode segments moved into it | `43e988e` |
+| C6 | ⬜ | Notification inbox with persisted read state; toast stacking | — |
+| C7 | ⬜ | The keyboard map and the `?` reference overlay | — |
+| C8 | ⬜ | Guided tour retargeted — 18 step targets | — |
+| C9 | ⬜ | One destination-resolving helper per browser suite; 38 refs | — |
+| C10 | ✅ | `scripts/shell_check.py`, wired as the 7th browser suite (33 checks) | `pending` |
+| C11 | ⬜ | Flag default flipped **on** — **blocked on C9** | — |
+
+**C10 was brought forward deliberately**, out of the §6 order. It is the only
+commit that protects everything the other ten build, and running the shell
+without it would have meant five commits of new surface with no automated
+coverage at all. Its last three assertions are the rollback itself.
+
+**C11 cannot land before C9.** Flipping the default on while 38 `data-tab`
+references still drive the legacy navigation would break all six existing
+suites at once — which is precisely what C9 exists to prevent.
 
 ### M1 · V0.11.0 Workspace context and Surface Level — complete
 
