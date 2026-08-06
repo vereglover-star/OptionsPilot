@@ -5740,6 +5740,10 @@ async function loadChain() {
   const symbol = Ctx.symbol();
   if (!symbol) return;
   $("tk-chain").innerHTML = skel(9);
+  // The spot label names a symbol, so it must not keep naming the previous one
+  // while the new chain is in flight. Reachable only since M1-C4 made entering
+  // the Trade tab reload the chain for a symbol chosen elsewhere.
+  $("tk-spot").textContent = "";
   const resp = await fetch(`/api/chain?symbol=${encodeURIComponent(symbol)}` +
                            (tkExp ? `&expiration=${tkExp}` : ""));
   const d = await resp.json();
@@ -5764,6 +5768,20 @@ async function loadChain() {
   renderExpPills();
   $("tk-spot").textContent = `${d.symbol} $${d.spot.toFixed(2)}`;
   renderChain(true);
+  // §4.5-3: a contract "remains selected if the user visits Research and
+  // returns" — and, since the workspace is server-owned, if they restart.
+  // Applied here rather than at adoption because selecting a contract needs a
+  // loaded chain, and loading one is a request nobody had asked for yet.
+  if (!tkSel && window.Workspace) {
+    const keep = Workspace.takeSelection(d.symbol, d.expiration);
+    if (keep) {
+      tkRight = keep.right;
+      document.querySelectorAll("#tk-right button").forEach(x =>
+        x.classList.toggle("active", x.dataset.right === keep.right));
+      renderChain();
+      selectContract(keep.strike);
+    }
+  }
   if (!tkSel) hideTicket();   // placeholder gains the ATM quick-pick buttons
 }
 
@@ -5898,6 +5916,14 @@ function selectContract(strike) {
   tkSyncTicket();          // a new contract can invalidate the armed side/type
   updateEstimate();
   renderChain();
+  // §4.5-3: one contract selection, and §4.5-8: it survives a restart. The
+  // server already validates and stores this shape, and drops it by itself
+  // when the symbol moves — see `services/workspace.py::_contract`.
+  if (window.Workspace) Workspace.push({
+    expiry: tkChain.expiration,
+    contract: {symbol: tkChain.symbol, expiry: tkChain.expiration,
+               strike: row.strike, right: row.right},
+  });
 }
 
 function updateEstimate() {
@@ -8602,6 +8628,14 @@ window.Workspace = (() => {
     // echoing it straight back would make the first request of every launch a
     // redundant write to settings.json.
     if (doc) Ctx.setSurfaceLevel(doc.surface_level, {push: false});
+    // Held for the first chain load that matches it — see takeSelection. The
+    // server has already validated the shape and dropped it if it no longer
+    // belongs to the workspace symbol, so anything present here is usable.
+    if (doc && doc.contract) restored = doc.contract;
+    // The expiry has to be restored too, or the first chain load asks for the
+    // provider's default expiration and the stored selection — which is for a
+    // specific one — never matches anything to be restored into.
+    if (doc && doc.expiry) { try { tkExp = doc.expiry; } catch { /* not yet */ } }
     if (doc && (virgin || restorePrevious)) adopt(doc);
     else if (doc) push(fromLocal()); // teach the server what this client has
     // Events may have been queued before either startup fetch returned.  This
@@ -8609,7 +8643,22 @@ window.Workspace = (() => {
     flushSoon();
   }
 
-  return {init, push, get tracked() { return TRACKED; }};
+  /* The selected contract (M1-C7) is restored differently from everything
+     else here, because it cannot be applied at adoption time: selecting it
+     needs a loaded option chain, and loading one is a network request nobody
+     has asked for yet. So it is held and handed to the first chain load that
+     matches it, once. `take` rather than `get` — a restore is a one-off, and
+     a value that could be applied twice would re-select a contract the user
+     had deliberately deselected. */
+  let restored = null;
+  function takeSelection(symbol, expiry) {
+    const sel = restored;
+    if (!sel || sel.symbol !== symbol || sel.expiry !== expiry) return null;
+    restored = null;
+    return sel;
+  }
+
+  return {init, push, takeSelection, get tracked() { return TRACKED; }};
 })();
 
 // pywebview does not change document.visibilityState when the native window is

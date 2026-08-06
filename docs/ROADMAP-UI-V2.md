@@ -543,7 +543,7 @@ mapping.
 | C3 | ✅ | The workspace endpoint carries all five context facts | `334311c` |
 | C4 | ✅ | One symbol context; the three boxes become renders of it | `2ee27d4` |
 | C5 | ✅ | One timeframe context; found and fixed a stale-response bug | `fb42fcd` |
-| C6 | ⬜ | The Surface Level control, chain columns its first consumer | — |
+| C6 | ✅ | The Surface Level control, chain columns its first consumer | `a05d718` |
 | C7 | ⬜ | `workspace_check.py` extended with the loop test | — |
 
 ### M0 · V0.10.0 Foundation — complete

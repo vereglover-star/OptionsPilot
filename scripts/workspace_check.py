@@ -30,6 +30,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -73,21 +74,35 @@ def wait_for(url: str, timeout: float = 25.0) -> bool:
 #: chain's column set cannot be asserted without an option chain, and an option
 #: chain cannot be fetched without a network. Everything downstream of this
 #: payload — the column filter, the rendering, the row selection — is real.
-CHAIN = {
-    "symbol": "SPY",
-    "expiration": "2026-08-21",
-    "expirations": ["2026-08-21", "2026-09-18"],
-    "spot": 500.0,
-    "chain": [
-        {"symbol": f"SPY260821{'C' if right == 'call' else 'P'}{strike:05d}000",
-         "underlying": "SPY", "expiration": "2026-08-21", "strike": float(strike),
-         "right": right, "bid": 4.80, "ask": 5.20, "mid": 5.00,
-         "delta": 0.50 if right == "call" else -0.50, "gamma": 0.02,
-         "theta": -0.08, "vega": 0.15, "iv": 0.22, "open_interest": 4200,
-         "volume": 900, "liquidity": 88.0, "dte": 24}
-        for strike in range(490, 511, 5) for right in ("call", "put")
-    ],
-}
+#:
+#: It answers about the symbol it was ASKED about, which matters more than it
+#: looks: `loadChain` adopts the served symbol into the context, so a stub that
+#: always said SPY would quietly drag the workspace to SPY and the loop test
+#: below would be asserting the stub rather than the app.
+def chain_for(symbol: str) -> dict:
+    return {
+        "symbol": symbol,
+        "expiration": "2026-08-21",
+        "expirations": ["2026-08-21", "2026-09-18"],
+        "spot": 500.0,
+        "chain": [
+            {"symbol": f"{symbol}260821{'C' if right == 'call' else 'P'}{strike:05d}000",
+             "underlying": symbol, "expiration": "2026-08-21",
+             "strike": float(strike), "right": right,
+             "bid": 4.80, "ask": 5.20, "mid": 5.00,
+             "delta": 0.50 if right == "call" else -0.50, "gamma": 0.02,
+             "theta": -0.08, "vega": 0.15, "iv": 0.22, "open_interest": 4200,
+             "volume": 900, "liquidity": 88.0, "dte": 24}
+            for strike in range(490, 511, 5) for right in ("call", "put")
+        ],
+    }
+
+
+def serve_chain(route):
+    query = urllib.parse.urlparse(route.request.url).query
+    symbol = urllib.parse.parse_qs(query).get("symbol", ["SPY"])[0].upper()
+    route.fulfill(status=200, content_type="application/json",
+                  body=json.dumps(chain_for(symbol)))
 
 
 def workspace(base: str) -> dict:
@@ -403,6 +418,88 @@ def run_checks(page, base: str, c: Checks) -> None:
     # Back to Full so the reset assertion below reads the shipped state.
     set_level(3)
 
+    # ── THE LOOP TEST (UI V2 M1-C7) ──────────────────────────────────────────
+    # §4.5 states its own test, and this is it: "Type a symbol once at launch.
+    # Complete a full loop — chart it, chain it, ticket it, review it, hold it,
+    # journal it — and never type that symbol again. If the user has to retype
+    # it, the workspace is not one workspace."
+    #
+    # M1 can reach chart → chain → ticket. Review, hold and journal are M4's
+    # commit gesture and are added to this loop there, deliberately as an
+    # EXTENSION of these assertions rather than a second test of the same
+    # claim. The rule below is what makes the whole thing meaningful: after the
+    # single `fill`, no assertion may type a symbol anywhere.
+    page.click('nav button[data-tab="charts"]')
+    page.wait_for_selector("#tab-charts", state="visible")
+    page.fill("#ch-symbol", "AMD")                  # ← the ONE time it is typed
+    page.press("#ch-symbol", "Enter")
+    page.wait_for_timeout(3000)
+    c.check("LOOP: charted it", page.input_value("#ch-symbol").upper() == "AMD",
+            page.input_value("#ch-symbol"))
+
+    # Waited on the RESPONSE, not on the table: a table from the previous
+    # symbol is already on screen, so `wait_for_selector` returns instantly and
+    # the assertion reads the old render. That is how this check first failed —
+    # it reported the previous symbol's spot, which was true at the moment it
+    # looked.
+    with page.expect_response(lambda r: "/api/chain" in r.url, timeout=20000):
+        page.click('nav button[data-tab="trade"]')
+    page.wait_for_selector("#tk-chain table", timeout=15000)
+    page.wait_for_timeout(800)
+    spot = page.text_content("#tk-spot") or ""
+    c.check("LOOP: chained it, without typing it again", "AMD" in spot, spot)
+
+    page.click("#tk-chain tr[data-strike]")
+    page.wait_for_selector("#tk-form", state="visible", timeout=10000)
+    selected = page.text_content("#tk-selected") or ""
+    c.check("LOOP: ticketed it, still without typing it again",
+            "AMD" in selected, selected.strip()[:60])
+
+    settle(page, 2000)
+    stored = workspace(base).get("contract") or {}
+    c.check("the selection is server-owned, like everything else here",
+            stored.get("symbol") == "AMD" and stored.get("strike"),
+            str(stored))
+
+    # §4.5-3, the half that is easy to lose: "...and remains selected if the
+    # user visits Research and returns."
+    page.click('nav button[data-tab="journal"]')
+    page.wait_for_selector("#tab-journal", state="visible")
+    page.click('nav button[data-tab="trade"]')
+    page.wait_for_selector("#tk-form", state="visible", timeout=10000)
+    c.check("LOOP: and it is still selected after leaving and coming back",
+            "AMD" in (page.text_content("#tk-selected") or ""),
+            (page.text_content("#tk-selected") or "").strip()[:60])
+
+    # §4.5-8: all of the above is server-owned state, so it survives the loss
+    # of the client. This is the assertion that would fail if the selection had
+    # been kept in `localStorage` — which is where every fact in this file used
+    # to live, and why this suite exists.
+    strike_before = stored.get("strike")
+    page.evaluate("localStorage.clear()")
+    page.reload()
+    page.wait_for_selector('nav button[data-tab="trade"]', timeout=25000)
+    page.wait_for_timeout(3000)
+    page.click('nav button[data-tab="trade"]')
+    page.wait_for_selector("#tk-chain table", timeout=15000)
+    page.wait_for_timeout(1500)
+    restored_sel = page.text_content("#tk-selected") or ""
+    c.check("LOOP: the contract comes back after client storage is wiped",
+            "AMD" in restored_sel and str(int(strike_before)) in restored_sel,
+            restored_sel.strip()[:70])
+
+    # And the rule that keeps the loop honest in the other direction: a
+    # contract belongs to an underlying. The server enforces this too — two
+    # gates, one rule.
+    page.click('nav button[data-tab="charts"]')
+    page.wait_for_selector("#tab-charts", state="visible")
+    page.fill("#ch-symbol", "NVDA")
+    page.press("#ch-symbol", "Enter")
+    settle(page, 2500)
+    c.check("moving the symbol drops the selection, on the server too",
+            workspace(base).get("contract") is None,
+            str(workspace(base).get("contract")))
+
     # ── 16: reset ────────────────────────────────────────────────────────────
     req = urllib.request.Request(base + "/api/workspace", method="DELETE")
     reset = json.loads(urllib.request.urlopen(req).read())
@@ -454,9 +551,7 @@ def main() -> int:
             page.on("console",
                     lambda m: console.append(m.text) if m.type == "error" else None)
             page.on("pageerror", lambda e: console.append(str(e)))
-            page.route("**/api/chain*", lambda route: route.fulfill(
-                status=200, content_type="application/json",
-                body=json.dumps(CHAIN)))
+            page.route("**/api/chain*", serve_chain)
             page.goto(base)
             page.wait_for_selector("#hero", timeout=25000)
             page.wait_for_timeout(1200)
