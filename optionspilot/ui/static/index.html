@@ -8099,7 +8099,7 @@ const Updater = (() => {
     $("help-check-update").onclick = () => { closeMenu(); checkNow(true); };
     $("help-diagnostics").onclick = () => { closeMenu(); Diagnostics.open(); };
     $("help-about").onclick = () => { closeMenu();
-      toast("Hello from v" + (snap ? snap.current_version : "?") + "!"); };
+      toast("OptionsPilot — v" + (snap ? snap.current_version : "?")); };
     document.addEventListener("keydown", e => {
       if (e.key === "Escape" && isOpen()) close(); });
   }
