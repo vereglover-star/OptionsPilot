@@ -1377,7 +1377,7 @@ html.gd-nomotion #gd-ring::after { display:none; }
       <button class="tk-chart-toggle" id="tk-chart-toggle" aria-expanded="false"
               aria-controls="tk-chart-slot">
         <span id="tk-chart-caret">▸</span> Chart
-        <span class="hint" style="display:inline">— synced to the ticket symbol; drawings &amp; indicators shared with the Charts tab</span>
+        <span class="hint" style="display:inline">— the same symbol, drawings and indicators as the Charts tab</span>
       </button>
       <div id="tk-chart-slot" style="display:none"></div>
     </div>
@@ -2573,7 +2573,10 @@ $("bt-form").onsubmit = async e => {
   e.preventDefault();
   $("bt-run").disabled = true;
   $("bt-status").textContent = "starting…";
-  const body = { symbol: $("bt-symbol").value, days: +$("bt-days").value };
+  // The context, not the box — the box is a render of it (§4.5-1). Reading it
+  // here also means a backtest can never run on a symbol the user last saw
+  // somewhere else in the app.
+  const body = { symbol: Ctx.symbol(), days: +$("bt-days").value };
   if ($("bt-conf").value) body.min_confidence = +$("bt-conf").value;
   await fetch("/api/backtest", { method: "POST",
     headers: {"Content-Type": "application/json"}, body: JSON.stringify(body) });
@@ -3370,6 +3373,87 @@ const CH = {
   earliest: null,                  // oldest bar any provider can serve for this tf
 };
 
+/* ── the one symbol context (UI V2 M1-C4) ──────────────────────────────────
+   `UI_V2_DESIGN.md` §4.5-1: "There is exactly one active symbol for the
+   workspace. Setting it on the chart sets it for the chain, the ticket,
+   Research and Home's context strip."
+
+   Before this, three inputs each owned a symbol and each defaulted to SPY:
+   #ch-symbol drove the chart, #tk-symbol drove the option chain, #bt-symbol
+   drove the backtest, and nothing connected them — so charting NVDA and then
+   opening the Trade tab silently offered you a SPY chain. Only the chart's
+   copy was ever persisted, and even that only on a SUCCESSFUL render, which
+   meant the symbol you were looking at when a provider failed was not the one
+   you came back to.
+
+   Now `CH.sym` is the single value and the three inputs are RENDERS of it.
+   They stay as three boxes for one more milestone: M2-C4 replaces all of them
+   with the `/` symbol jump, and doing both at once would mean the navigation
+   and the context changed in the same breath, with no way to tell which broke
+   a check. This module is the seam that commit takes over.
+
+   Consumers register with `onChange` rather than having the setter reach into
+   their state: the ticket clears its own chain because a chain belongs to an
+   underlying, and that rule reads better next to the ticket than inside a
+   context module that would then need to know what a ticket is. */
+window.Ctx = (() => {
+  const INPUTS = ["ch-symbol", "tk-symbol", "bt-symbol"];
+  const listeners = [];
+
+  const symbol = () => CH.sym;
+
+  function render() {
+    for (const id of INPUTS) {
+      const el = $(id);
+      // Never write to the box the user is typing in — the settings panel
+      // learned this the expensive way (a poll landing mid-paste wiped an API
+      // key). Its value is re-asserted when it loses focus, below.
+      if (el && el !== document.activeElement && el.value !== CH.sym)
+        el.value = CH.sym;
+    }
+  }
+
+  function setSymbol(next) {
+    const sym = String(next == null ? "" : next).trim().toUpperCase();
+    // An empty box is not a request to have no symbol — it is a half-finished
+    // edit. Re-render rather than clearing the context out from under the
+    // chart, the chain and the backtest at once.
+    if (!sym || sym === CH.sym) { render(); return CH.sym; }
+    CH.sym = sym;
+    // The Workspace module intercepts this write and mirrors it to the server,
+    // which is why the context persists from HERE rather than from a
+    // successful render: the symbol you were looking at when a provider failed
+    // is the one you should come back to.
+    try { localStorage.setItem("chSym", sym); } catch (e) {
+      console.debug("could not persist symbol", e);
+    }
+    for (const fn of listeners) {
+      // One listener throwing must not strand the others, and must not stop
+      // the render below: the boxes on screen would then disagree with the
+      // context, which is the exact failure this module exists to end.
+      try { fn(sym); } catch (e) { console.debug("context listener failed", e); }
+    }
+    render();
+    return CH.sym;
+  }
+
+  // A box the user abandoned half-edited shows a symbol that is not the
+  // context. Restoring on blur is what makes "these are renders" true rather
+  // than merely intended.
+  document.addEventListener("focusout", e => {
+    if (INPUTS.includes(e.target?.id)) render();
+  });
+
+  return {symbol, setSymbol, render,
+          onChange: fn => listeners.push(fn),
+          get inputs() { return INPUTS.slice(); }};
+})();
+// The three boxes ship with `value="SPY"` in the markup; the restored context
+// usually is not SPY. Painting once here is what makes the Trade and Research
+// boxes correct before anyone visits those tabs — previously only the chart's
+// box was ever corrected, and only when a chart loaded.
+Ctx.render();
+
 /* ── The chart load state machine (V0.5.2) ─────────────────────────────────
    The chart used to INFER its state from whatever the last fetch happened to
    leave behind: an empty candles array meant "error", a stuck flag meant
@@ -4048,7 +4132,8 @@ function chRenderData(d, {key = chKey(), keepLogical = false, time = null,
   CH.dataKey = key;
   CH.dataSig = chSig(d);
   CH.timeIndex = new Map(d.candles.map((c, i) => [c.time, i]));
-  localStorage.setItem("chSym", CH.sym);
+  // chSym is NOT written here: `Ctx.setSymbol` owns it, and a second writer of
+  // one fact is how this codebase has produced drift three times over.
   localStorage.setItem("chTf", CH.tf);
   // The whole setData + viewport-restore sequence is ONE chMoveViewport call
   // (Bug 4 — a single controller, not a convention every caller has to
@@ -4394,8 +4479,9 @@ function chMaybeLoadHistory(range) {
 }
 
 async function loadChart(symbol) {
-  if (symbol) CH.sym = String(symbol).toUpperCase();
-  $("ch-symbol").value = CH.sym;
+  // One context, one setter. `loadChart()` with no argument is a reload of the
+  // current symbol, so it re-renders the boxes without announcing a change.
+  Ctx.setSymbol(symbol || CH.sym);
   chInit();
   chPaintControls();
   chArmRefresh();     // (re)arm the live poll to THIS timeframe's cadence (Issue 1):
@@ -5434,6 +5520,9 @@ $("ch-draw-bar").querySelectorAll("button[data-act]").forEach(b =>
 $("ch-symbol").addEventListener("keydown", e => {
   if (e.key === "Enter") { e.preventDefault(); loadChart($("ch-symbol").value.trim()); }
 });
+// Committing a symbol anywhere commits it everywhere (§4.5-1). The backtest
+// box has no load button of its own, so `change` (blur or Enter) is its commit.
+$("bt-symbol").addEventListener("change", () => Ctx.setSymbol($("bt-symbol").value));
 $("ch-note-text").addEventListener("keydown", e => {
   if (e.key === "Enter") {
     e.preventDefault();
@@ -5469,7 +5558,9 @@ $("ch-follow").classList.toggle("active", CH.autoFollow);
 $("ch-overlay-retry").onclick = () => loadChart();
 $("ch-stale-retry").onclick = () => loadChart();
 $("ch-trade").onclick = () => {
-  $("tk-symbol").value = CH.sym;
+  // No symbol hand-off any more: the ticket already renders the one context.
+  // Clearing the chain is still right — this is an explicit "trade THIS"
+  // request, and a stale chain would be the previous expiry's.
   tkChain = null; tkExp = ""; tkSel = null;
   switchTab("trade");
   loadChain();
@@ -5494,7 +5585,7 @@ function tkChartApply() {
   $("tk-chart-slot").style.display = tkChartOpen ? "" : "none";
   if (onTrade && tkChartOpen) {
     chReparent($("tk-chart-slot"));
-    loadChart(($("tk-symbol").value || CH.sym).trim().toUpperCase());  // sync to ticket
+    loadChart();          // one context: nothing to sync, just render it
   }
 }
 function tkToggleChart() {
@@ -5545,7 +5636,10 @@ async function loadMetrics() {
 let tkExp = "";   // selected expiration (ISO date), "" = provider default
 
 async function loadChain() {
-  const symbol = $("tk-symbol").value.trim().toUpperCase();
+  // Reads the context, not the box next to it. The box is a render of the
+  // same value, so this is the same symbol the chart is on — which is the
+  // whole of §4.5-1 in one line.
+  const symbol = Ctx.symbol();
   if (!symbol) return;
   $("tk-chain").innerHTML = skel(9);
   const resp = await fetch(`/api/chain?symbol=${encodeURIComponent(symbol)}` +
@@ -5553,14 +5647,17 @@ async function loadChain() {
   const d = await resp.json();
   if (d.error) { toast(d.error, false); $("tk-chain").innerHTML =
     `<div class="empty">${esc(d.error)}</div>`; return; }
+  // A provider may answer about a different symbol than it was asked about,
+  // and it is the authority on what it served — so its answer becomes the
+  // context. This runs BEFORE the ticket state is assigned, because moving the
+  // context clears the ticket's chain (a chain belongs to an underlying) and
+  // doing it afterwards would erase the response that caused the move.
+  if (d.symbol && d.symbol !== CH.sym) loadChart(d.symbol);
   tkChain = d;
   tkExp = d.expiration;
   renderExpPills();
   $("tk-spot").textContent = `${d.symbol} $${d.spot.toFixed(2)}`;
   renderChain(true);
-  // keep the Trade-tab chart on the ticket's symbol
-  if (tkChartOpen && $("tab-trade").style.display !== "none" && d.symbol !== CH.sym)
-    loadChart(d.symbol);
   if (!tkSel) hideTicket();   // placeholder gains the ATM quick-pick buttons
 }
 
@@ -5813,7 +5910,9 @@ function setSide(side) {
 async function prefillClose(i) {
   const p = (lastStatus?.positions || [])[i];
   if (!p) return;
-  $("tk-symbol").value = p.underlying;
+  // Moving the context, not just the box — closing a position takes the whole
+  // workspace to that position's underlying, chart included.
+  Ctx.setSymbol(p.underlying);
   tkRight = p.right;
   document.querySelectorAll("#tk-right button").forEach(x =>
     x.classList.toggle("active", x.dataset.right === p.right));
@@ -5851,7 +5950,26 @@ function renderTkPositions() {
 
 $("tk-load").onclick = e => { e.preventDefault(); tkExp = ""; loadChain(); };
 $("tk-symbol").addEventListener("keydown", e => {
-  if (e.key === "Enter") { e.preventDefault(); tkChain = null; tkExp = ""; tkSel = null; hideTicket(); loadChain(); }
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  // Commit to the ONE context, then load. If the symbol actually changed the
+  // listener below has already cleared the chain; if it did not, this is a
+  // deliberate reload and clearing the expiry is what the user asked for.
+  Ctx.setSymbol($("tk-symbol").value);
+  tkExp = "";
+  loadChain();
+});
+
+/* A chain, an expiry and a selected contract all belong to an underlying, so
+   moving the symbol — from ANY of the three boxes, or from a position's Close
+   button — invalidates them. The rule lives here rather than in `Ctx` because
+   it is a fact about tickets, and the server enforces the same one on the
+   stored workspace: `services/workspace.py` drops a contract whose symbol is
+   not the workspace symbol. Two enforcement points, one rule, deliberately —
+   a UI guardrail is a SECOND gate, never a replacement for the first. */
+Ctx.onChange(() => {
+  tkChain = null; tkExp = ""; tkSel = null;
+  if ($("tk-form")) hideTicket();
 });
 document.querySelectorAll("#tk-right button").forEach(b => b.onclick = () => {
   tkRight = b.dataset.right;
@@ -8302,6 +8420,10 @@ window.Workspace = (() => {
     CH.inds = listToInds(doc.indicators);
     wlSort = doc.watchlist_sort;
     try { chPaintControls(); } catch {}
+    // The three symbol boxes are renders of CH.sym, which adoption has just
+    // replaced. Without this the server's symbol is in the context and the
+    // page still shows SPY — the divergence M1-C4 exists to end.
+    try { Ctx.render(); } catch (e) { console.debug("could not render context", e); }
     if (doc.tab && doc.tab !== "dashboard") switchTab(doc.tab);
     adopting = false;
   }

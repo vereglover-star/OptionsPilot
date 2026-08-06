@@ -540,7 +540,7 @@ mapping.
 | --- | --- | --- | --- |
 | C1 | ✅ | `surface_level` in `RuntimeSettings`, device-only, total on read | `d665ad0` |
 | C2 | ✅ | Workspace expiry + selected-contract context, one cross-field invariant | `e250826` |
-| C3 | ⬜ | The workspace endpoint extended | — |
+| C3 | ✅ | The workspace endpoint carries all five context facts | `334311c` |
 | C4 | ⬜ | One symbol context | — |
 | C5 | ⬜ | One timeframe context | — |
 | C6 | ⬜ | The Surface Level control, chain columns its first consumer | — |

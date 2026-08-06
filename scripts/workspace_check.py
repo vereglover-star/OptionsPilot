@@ -120,6 +120,62 @@ def run_checks(page, base: str, c: Checks) -> None:
     c.check("the symbol is promoted into the recents list",
             doc["recent_symbols"][:1] == ["QQQ"], str(doc["recent_symbols"]))
 
+    # ── one symbol context (UI V2 M1-C4) ─────────────────────────────────────
+    # §4.5-1: "There is exactly one active symbol for the workspace. Setting it
+    # on the chart sets it for the chain, the ticket, Research and Home's
+    # context strip." Before M1-C4 these were three independent boxes that each
+    # defaulted to SPY, so charting NVDA and opening Trade offered a SPY chain.
+    #
+    # Asserted from the BOXES rather than from `Ctx.symbol()`, because the
+    # claim is about what the user sees. Driven through the chart box and the
+    # backtest box, neither of which fetches an option chain — the chain path
+    # is a network call and this suite is meant to be reproducible offline.
+    c.check("a chart symbol renders into the ticket's box",
+            page.input_value("#tk-symbol").upper() == "QQQ",
+            page.input_value("#tk-symbol"))
+    c.check("and into the backtest's box",
+            page.input_value("#bt-symbol").upper() == "QQQ",
+            page.input_value("#bt-symbol"))
+
+    # And the other direction: any box may commit the context, not just the
+    # chart's. `change` is the backtest box's commit (blur or Enter).
+    page.click('nav button[data-tab="backtest"]')
+    page.wait_for_selector("#tab-backtest", state="visible")
+    page.fill("#bt-symbol", "IWM")
+    page.press("#bt-symbol", "Enter")
+    settle(page, 2000)
+    c.check("committing a symbol elsewhere moves the chart's box too",
+            page.input_value("#ch-symbol").upper() == "IWM",
+            page.input_value("#ch-symbol"))
+    c.check("and the ticket's",
+            page.input_value("#tk-symbol").upper() == "IWM",
+            page.input_value("#tk-symbol"))
+    c.check("and it reaches the server without a chart ever loading",
+            workspace(base)["symbol"] == "IWM", workspace(base)["symbol"])
+
+    # A box left half-edited must not sit there disagreeing with the context.
+    # Asserted on `#ch-symbol`, which commits on Enter only — `#bt-symbol`
+    # commits on `change`, and a browser fires `change` on blur, so for that
+    # box leaving it IS committing it. Writing this check the other way round
+    # is what established that: it failed, and it was the test that was wrong.
+    page.click('nav button[data-tab="charts"]')
+    page.wait_for_selector("#tab-charts", state="visible")
+    page.fill("#ch-symbol", "TSL")
+    page.press("#ch-symbol", "Tab")        # blur without pressing Enter
+    settle(page)
+    c.check("an abandoned half-edit is restored from the context on blur",
+            page.input_value("#ch-symbol").upper() == "IWM",
+            page.input_value("#ch-symbol"))
+    c.check("and the abandoned text never reached the server",
+            workspace(base)["symbol"] == "IWM", workspace(base)["symbol"])
+
+    # Back to QQQ, so the storage-loss checks below read exactly what they did
+    # before this block existed.
+    page.fill("#ch-symbol", "QQQ")
+    page.press("#ch-symbol", "Enter")
+    page.wait_for_timeout(2500)
+    settle(page, 2500)
+
     # ── 7: an indicator toggle, which is a translated field ──────────────────
     before = set(workspace(base)["indicators"])
     page.click('#ch-inds button[data-ind="rsi"]')
