@@ -11,7 +11,13 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 
 **Start UI V2 · M3 — Home**, the first Flight Deck destination.
 `docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
-`verify.ps1` is green across **16 gates** at 2630 tests.
+`verify.ps1` is green across **16 gates** at 2636 tests.
+
+**Owed first, and it needs a human:** the updater fix (`76c1059` and its
+follow-up) sits after the `v0.12.0` tag, so the released build still hangs on
+"Installing…". Nothing in CI launches the packaged desktop shell, so the only
+proof is `.\scripts\build.ps1`, installing it, and running an update against a
+newer release. Everything else about the fix is covered by tests.
 
 Three things M3 inherits and must honour:
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import gc
 import importlib
+import inspect
 import sys
 import threading
 import time
@@ -19,6 +21,13 @@ from optionspilot.notify.base import NotificationEvent
 from optionspilot.ui import desktop
 from optionspilot.ui.desktop import _DesktopController
 from optionspilot.ui.tray import NullTray, PystrayTray, TrayAdapter, TrayMenuItem
+from optionspilot.update.downloader import Downloader
+from optionspilot.update.github_api import GitHubReleases
+from optionspilot.update.installer import InstallerLauncher
+from optionspilot.update.service import InMemoryPrefs, UpdateService
+from tests.update_helpers import (
+    FakeOpener, FakeResponse, release_json, releases_response,
+)
 
 
 class GuiThreadViolation(BaseException):
@@ -566,13 +575,20 @@ def test_desktop_notifier_exposes_optional_adapter_symbol_without_notify_extra(
 
 
 class _FakeWebview:
-    """Enough of pywebview to compose against, with no GUI."""
+    """Enough of pywebview to compose against, with no GUI.
 
-    def __init__(self, events):
+    ``window_factory`` exists so a test can compose against a window that
+    *refuses* a close it did not sanction (`_ClosableWindow`) rather than the
+    recorder, which accepts every one. The difference is not cosmetic: it is
+    the whole of the updater bug fixed in V0.12.1.
+    """
+
+    def __init__(self, events, window_factory=None):
         self.windows = []
         self.started_with = []
         self._events = events
         self.html_windows = []
+        self._window_factory = window_factory or _Window
 
     def create_window(self, title, url=None, **kwargs):
         self._events.append("window-created")
@@ -591,7 +607,7 @@ class _FakeWebview:
                 self.handlers.append(handler)
                 return self
 
-        window = _Window()
+        window = self._window_factory()
         window.title = title
         window.url = url
         window.js_api = kwargs.get("js_api")
@@ -634,12 +650,12 @@ class _WiringServer(_Server):
 
 
 def _application(events=None, *, tray=None, lock=object(), prefs=None,
-                 app_server=None):
+                 app_server=None, window_factory=None):
     """A `DesktopApplication` wired entirely to doubles."""
     events = events if events is not None else []
     server = app_server or _WiringServer(**(prefs or {}))
     app = SimpleNamespace(state=SimpleNamespace(server=server))
-    fake_webview = _FakeWebview(events)
+    fake_webview = _FakeWebview(events, window_factory=window_factory)
     return desktop.DesktopApplication(
         SimpleNamespace(), runtime=None, data_dir=None,
         webview=fake_webview,
@@ -703,12 +719,29 @@ class TestDesktopApplicationWiring:
         assert server.action_handler == app.controller.handle_notification_action
 
     def test_the_install_hook_stops_the_transport_and_closes_windows(self):
-        app, server, webview, _events = _application()
+        """Composed against a window that can REFUSE, with a tray that is up,
+        and settled before asserting. All three were missing and all three
+        mattered.
+
+        The recorder accepted every `destroy()`, so this passed throughout the
+        two releases in which the hook's close was being cancelled. The
+        shutdown is deferred to a worker, so reading `destroyed` on the calling
+        thread was racing it. And a tray that never started is the ONE
+        configuration in which the bug could not happen — `on_closing` exits
+        outright without one — so the default `NullTray` was quietly testing
+        the safe case.
+        """
+        holder = {}
+        app, server, webview, _events = _application(
+            tray=_LiveTray(),
+            window_factory=lambda: _ClosableWindow(lambda: holder["app"].controller))
+        holder["app"] = app
         app.acquire()
         app.build()
         assert server.install_hook is not None
         server.install_hook()
         assert app.transport.should_exit is True
+        app.controller.join_pending(5.0)
         assert all(w.destroyed for w in webview.windows)
 
     def test_the_tray_status_task_is_registered_only_when_the_tray_started(self):
@@ -1439,3 +1472,240 @@ class TestUpdateShutdownActuallyCloses:
         controller.shutdown_for_install()
         controller.join_pending(5.0)
         assert controller.server.closed == 1
+
+
+class _LiveTray(NullTray):
+    """A tray that really came up — the only configuration in which the bug
+    could happen, because `on_closing` exits outright without one."""
+
+    def __init__(self):
+        super().__init__()
+        self.stops = 0
+
+    def start(self):
+        self._lifecycle_state = "active"
+        return True
+
+    def stop(self):
+        self.stops += 1
+        super().stop()
+
+
+class _UpdatingServer(_WiringServer):
+    """A `_WiringServer` whose ``updater`` is a real :class:`UpdateService`."""
+
+    def __init__(self, updater, **prefs):
+        super().__init__(**prefs)
+        self.updater = updater
+
+
+def _ready_update_service(tmp_path, spawned, *, backup=None):
+    """A real `UpdateService` holding a validated download, ready to install.
+
+    Everything below the service is a fake — the GitHub client, the HTTP
+    transport, the process spawn and the backup — but the service itself, its
+    state machine, its validation and its install hook are the shipped code.
+    """
+    body = b"x" * 1000
+    client = GitHubReleases(
+        "owner/repo", api_base="https://api.test",
+        opener=FakeOpener({"/releases": releases_response(
+            release_json("v0.99.0", installer_size=len(body)))}),
+        sleep=lambda _s: None)
+    service = UpdateService(
+        "0.12.0", InMemoryPrefs(), client=client,
+        downloader=Downloader(opener=FakeOpener(default=FakeResponse(
+            body, headers={"Content-Length": str(len(body))})), chunk_size=128),
+        launcher=InstallerLauncher(
+            spawn=spawned.append,
+            backup=backup or (lambda _paths, _label: tmp_path / "backup")),
+        download_dir=tmp_path)
+    service.check_now()
+    assert service.start_download()
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and service.snapshot()["phase"] != "downloaded":
+        time.sleep(0.01)
+    assert service.snapshot()["phase"] == "downloaded"
+    return service
+
+
+class TestUpdateEndToEnd:
+    """Install & Restart, from the service call to a closed window.
+
+    `TestUpdateShutdownActuallyCloses` pins the controller in isolation. This
+    drives the composed application — a real `UpdateService` on a real
+    `DesktopApplication`, wired by the real `build()` — because the defect was
+    never in either piece. It was in the join between them: the hook reached
+    for the window instead of the lifecycle owner, and every unit on both sides
+    of that line was correct and passing.
+
+    The phase legitimately *stays* `installing`; nothing ever moves it, because
+    the process is meant to die and be replaced. So "not stuck" cannot be
+    asserted on the phase, and asserting it there would be theatre. What must
+    be true is that the application is on its way out while the phase says
+    installing — the window closed, the port released, the tray gone — and that
+    it did not divert into the tray on the way.
+    """
+
+    @staticmethod
+    def _compose(tmp_path, **prefs):
+        spawned: list = []
+        service = _ready_update_service(tmp_path, spawned)
+        holder: dict = {}
+        tray = _LiveTray()
+        app, server, webview, events = _application(
+            app_server=_UpdatingServer(service, **prefs), tray=tray,
+            window_factory=lambda: _ClosableWindow(
+                lambda: holder["app"].controller))
+        holder["app"] = app
+        app.acquire()
+        app.build()
+        return SimpleNamespace(app=app, server=server, tray=tray,
+                               service=service, spawned=spawned,
+                               window=webview.windows[0])
+
+    def test_install_and_restart_launches_the_installer_and_closes_the_app(
+            self, tmp_path):
+        """The whole reported failure, in one test.
+
+        Update requested -> installer launched -> shutdown initiated -> the
+        close handler allows the exit -> the app is gone, with the exe free for
+        the installer to replace.
+        """
+        ctx = self._compose(tmp_path)
+        result = ctx.service.apply_update()
+
+        assert result["ok"], result
+        assert ctx.spawned, "the installer was never launched"
+        assert "/VERYSILENT" in ctx.spawned[0]
+        assert ctx.service.snapshot()["phase"] == "installing"
+
+        ctx.app.controller.join_pending(5.0)
+        assert ctx.window.destroyed is True, (
+            "the window survived the update — the installer cannot replace an "
+            "exe this process still holds open")
+        assert ctx.window.hidden is False, "hidden to tray instead of closed"
+        assert ctx.app.transport.should_exit is True, "the HTTP port was held"
+        assert ctx.server.closed == 1
+        assert ctx.tray.stops == 1, "the tray icon outlived the application"
+
+    def test_the_default_preferences_do_not_divert_it_into_the_tray(
+            self, tmp_path):
+        """`close_behavior: "tray"` with the prompt not yet dismissed is what a
+        fresh install ships, and it is the branch the bug lived on: the close
+        was cancelled and re-read as a close-BUTTON press, which hides.
+
+        `set_background_visibility(False)` is `hide_to_tray`'s first statement
+        and nothing else in this flow calls it, so its absence is the evidence
+        that no hide happened anywhere — not merely that the window ended up
+        destroyed afterwards.
+        """
+        ctx = self._compose(tmp_path, close_behavior="tray",
+                            close_prompt_dismissed=False)
+        assert ctx.app.controller.tray_started is True
+        ctx.service.apply_update()
+        ctx.app.controller.join_pending(5.0)
+        assert False not in ctx.server.visible, (
+            "the update hid to the tray while the phase said installing")
+        assert ctx.window.destroyed is True
+        assert ctx.window.scripts == [], (
+            "the close prompt was raised at the page — an installer is not a "
+            "question for the user, it is already running")
+
+    def test_it_still_exits_when_the_app_was_already_in_the_tray(self, tmp_path):
+        """`start_minimized_to_tray` means the window is hidden before the
+        update is ever applied, which is the same end state the bug produced.
+        Reaching it legitimately must not stop the shutdown."""
+        ctx = self._compose(tmp_path, start_minimized_to_tray=True)
+        ctx.app.run()
+        assert ctx.window.hidden is True
+        ctx.service.apply_update()
+        ctx.app.controller.join_pending(5.0)
+        assert ctx.window.destroyed is True
+        assert ctx.server.closed == 1
+
+    def test_a_failed_install_leaves_the_application_running(self, tmp_path):
+        """The other half of the contract. `apply_update` shuts the app down
+        only after the installer is confirmed launched, so a backup that fails
+        must leave a usable application behind rather than a closed one and no
+        installer."""
+        def no_backup(_paths, _label):
+            raise OSError("disk full")
+
+        spawned: list = []
+        service = _ready_update_service(tmp_path, spawned, backup=no_backup)
+        holder: dict = {}
+        app, server, webview, _events = _application(
+            app_server=_UpdatingServer(service), tray=_LiveTray(),
+            window_factory=lambda: _ClosableWindow(
+                lambda: holder["app"].controller))
+        holder["app"] = app
+        app.acquire()
+        app.build()
+
+        assert service.apply_update()["ok"] is False
+        app.controller.join_pending(2.0)
+        assert spawned == []
+        assert webview.windows[0].destroyed is False
+        assert server.closed == 0
+        assert service.snapshot()["phase"] == "error"
+
+
+def test_the_window_is_only_destroyed_by_the_one_method_that_may():
+    """`exit()` is the sole owner of the close, and `allow_close` with it.
+
+    The updater bug was a second place asking the window to go, and the audit
+    that followed it is only useful if it cannot silently stop being true. Any
+    new caller of `window.destroy()` reaches `on_closing` without the flag set
+    and is cancelled — which is not a crash, it is the app quietly staying
+    alive, which is exactly how this shipped twice.
+    """
+    source = Path(inspect.getfile(desktop)).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def asks_a_window_to_close(call):
+        """`destroy` on anything, `close` only on something window-shaped.
+
+        Unqualified for `destroy` because nothing else in this module has one,
+        and because the buggy version reached its window through a loop
+        variable rather than `self.window` — a receiver-matched rule would have
+        walked straight past the very code it was written to forbid.
+        """
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
+            return False
+        if call.func.attr == "destroy":
+            return True
+        receiver = call.func.value
+        name = (receiver.attr if isinstance(receiver, ast.Attribute)
+                else receiver.id if isinstance(receiver, ast.Name) else "")
+        return call.func.attr == "close" and "window" in name
+
+    owners: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if any(asks_a_window_to_close(call) for call in ast.walk(node)):
+            owners.append(node.name)
+    assert owners == ["exit"], (
+        f"{owners} ask a window to close; only `exit` may, because only "
+        f"`exit` sets `allow_close` and `on_closing` cancels every close it "
+        f"did not sanction")
+
+
+def test_allow_close_has_exactly_one_writer():
+    """Stated as a rule rather than left as a fact about today's code: the
+    fix routes through `exit()` precisely so the flag keeps one owner."""
+    source = Path(inspect.getfile(desktop)).read_text(encoding="utf-8")
+    writers = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for assign in ast.walk(node):
+            targets = (assign.targets if isinstance(assign, ast.Assign)
+                       else [assign.target] if isinstance(assign, ast.AnnAssign)
+                       else [])
+            for target in targets:
+                if (isinstance(target, ast.Attribute)
+                        and target.attr == "allow_close"):
+                    writers.append(node.name)
+    assert sorted(writers) == ["__init__", "exit"], writers

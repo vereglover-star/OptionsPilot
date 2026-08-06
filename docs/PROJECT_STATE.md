@@ -4,14 +4,25 @@ Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
-`V3-ui`, committed `b380141`…`12510b3`). **2630 tests.** Full detail:
+`V3-ui`, committed `b380141`…`12510b3`). **2636 tests.** Full detail:
 **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0, M1 and M2 are complete and nothing is
-in progress.** `verify.ps1` is green across all **16** gates at **2630 tests**,
+in progress.** `verify.ps1` is green across all **16** gates at **2636 tests**,
 with the new shell ON by default.
+
+**One bug fix sits on the branch after the `v0.12.0` tag and is therefore not
+in the released build**: the in-app updater hung on "Installing…" because its
+shutdown hook destroyed the window directly, and `_DesktopController.on_closing`
+cancels every close it did not sanction — so the update silently became a
+hide-to-tray, the process kept the exe locked, and the installer could never
+replace it. `76c1059` routes the hook through `exit()`, the one owner of
+`allow_close`; the follow-up adds end-to-end coverage over the composed
+application and two source-level rules that keep the audit from quietly ceasing
+to be true. **It has not been confirmed on a packaged install** — nothing in CI
+launches the desktop shell, so that check is owed to a real build.
 
 ### The UI V2 redesign (2026-08-05 —)
 

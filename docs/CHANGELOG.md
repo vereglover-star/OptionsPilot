@@ -34,6 +34,30 @@ Six tests, and the window double now models the part that mattered: its
 as `Form.Close()` does. The old double marked itself destroyed unconditionally,
 which is precisely why a shutdown that never happened looked correct.
 
+**Then the same question asked of the whole flow.** The unit tests pin the
+controller; they cannot see a join between two correct pieces, which is where
+this defect lived. Four more drive the composed application — a real
+`UpdateService` on a real `DesktopApplication`, wired by the real `build()` —
+from `apply_update()` to a closed window: the installer launched, the window
+destroyed rather than hidden, the port released, the tray stopped, and
+`hide_to_tray` demonstrably never reached. One runs the shipped fresh-install
+preferences, which is the exact branch the bug lived on. One starts from the
+tray, because a legitimately hidden window is the same end state the bug
+produced and must not stop the shutdown. One fails the install at the backup
+and asserts the application is still *running* afterwards, since the shutdown
+is only correct once an installer is confirmed launched.
+
+Two of the new tests are source-level rules rather than behaviour, because the
+audit that followed the fix is only worth anything if it cannot silently stop
+being true: `exit()` must remain the only method in `ui/desktop.py` that asks a
+window to close, and `allow_close` must keep exactly one writer. A second
+caller of `window.destroy()` does not crash — the app quietly stays alive,
+which is how this shipped twice. Three existing tests were also weakened in
+ways worth naming: the wiring test read `destroyed` on the calling thread while
+the shutdown ran on a worker (a race it won by luck), and it composed against a
+tray that had never started — the one configuration in which the bug cannot
+happen, because `on_closing` exits outright without a tray.
+
 ## [2026-08-06] — UI V2 M2: the shell (V0.12.0)
 
 *Eleven commits. The first milestone a user sees the moment they launch.*
