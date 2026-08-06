@@ -5,13 +5,14 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-08-05, **UI V2 · M1 — workspace context and Surface
-Level, CLOSED**. `verify.ps1` green across **all 15 gates**: full `pytest` suite
+**Last verified:** 2026-08-06, **UI V2 · M2 — the shell, CLOSED**.
+`verify.ps1` green across **all 16 gates**: full `pytest` suite
 (**2624 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
 checks, API contract check, pip check, `scripts/marketdata_stress.py` **88/88**
 offline, and the six browser suites (`browser_check`, `chart_check`,
-`marketdata_check`, `intelligence_check`, `guide_check`, `workspace_check` —
-now **50** assertions) in a real headless browser.
+`marketdata_check`, `intelligence_check`, `guide_check`, `workspace_check`,
+and the new `shell_check` — 33 assertions, the last three of which are the
+rollback) in a real headless browser, **with the new shell on by default**.
 
 **Two browser checks are known-flaky** and both are tracked in `TODO.md`:
 `chart_check` is the only gate that fetches from **live providers**, and two of
@@ -546,11 +547,31 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current milestone (in progress)
 
-**None.** UI V2 · M1 closed on 2026-08-05; **M2 — the shell** is next and has
-not started. The ten-milestone plan, its commit map and the six open design
+**None.** UI V2 · M2 closed on 2026-08-06; **M3 — Home** is next and has not
+started. The ten-milestone plan, its commit map and the six open design
 decisions are in `docs/ROADMAP-UI-V2.md`; `docs/UI_MIGRATION_TRACKER.md` §10
 carries the per-commit record. The sections below are the historical milestone
 narrative, newest first.
+
+### UI V2 · M2 — The shell (complete, `b380141`…`12510b3`)
+
+Eleven commits. Five destinations plus Settings over the nine existing
+sections, hosted **unchanged**: frame, nav rail, system strip, command palette
+(`Ctrl+K`), symbol jump (`/`), Flight Status with the orthogonality sentences,
+notification inbox with server-owned read state, a three-deep toast stack, one
+keyboard map generated from the registry, and a Pilot scaffold. `shell_check.py`
+is the 16th gate; its last three assertions turn the flag off and check the old
+navigation comes back.
+
+One registry (`DESTINATIONS`) feeds the rail, section rails, router, frame
+title, palette, keyboard map, tour retargeting and the suites' navigation
+helper. 53 `data-tab` references across six suites migrated to one shared
+`scripts/shell_nav.py`.
+
+Three defects found by the checks: the legacy `nav { width:200px }` element
+selector applied to the new rail, so content painted over it below 1440px; a
+palette command named a tutorial id that does not exist; and `Ctrl+K` was
+already bound to the help centre, so both dialogs answered it.
 
 ### UI V2 · M1 — Workspace context and Surface Level (complete, `d665ad0`…`ace7a75`)
 

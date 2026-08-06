@@ -5,7 +5,7 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — M0 and M1 complete; start M2 (V0.12.0, the shell).** The
+- [ ] **UI V2 — M0, M1 and M2 complete; start M3 (V0.13.0, Home).** The
       design is **frozen** across four documents; the implementation plan is
       written and **two of ten milestones are built**.
       **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
@@ -34,10 +34,14 @@ is. This file is the flat, actionable checklist version.
       blocks, and the frozen documents' recommendation is the default if none
       is taken.
 
-      **M2 (navigation) is the highest-risk milestone** and ships behind
-      `ui.shell_v2` for one release. It breaks 38 `data-tab` references across
-      six browser suites and 18 more in `index.html`'s guided tour at once;
-      M2-C9 migrates them once per file rather than once per reference. Standing rule: no commit ships a UI
+      **M2 shipped the shell and it is now the default.** Eleven commits,
+      `b380141`…`12510b3`: five destinations plus Settings over the nine
+      existing sections unchanged, command palette, symbol jump, Flight
+      Status, notification inbox, toast stack, keyboard map, Pilot scaffold,
+      and `shell_check.py` as the 16th gate. 53 `data-tab` references across
+      six suites migrated to one shared `scripts/shell_nav.py`. The old
+      navigation is one toggle away in Settings **for one release** —
+      **M3-C10 deletes it**. Standing rule: no commit ships a UI
       surface without its check, because `index.html` still has no automated
       coverage. The programme absorbs the still-open `ROADMAP-V3-UX.md`
       findings H5 (notification centre), N2 (chart↔chain) and N4 (toast

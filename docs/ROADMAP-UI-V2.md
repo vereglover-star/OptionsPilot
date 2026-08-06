@@ -534,12 +534,11 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
-### Active milestone — M2 · V0.12.0 The shell
+### M2 · V0.12.0 The shell — complete
 
-**In progress: 6 of 11 commits.** The shell exists, is complete enough to
-use, and is **off by default** — every other suite runs with the flag off and
-passes, which is the property that makes the remaining work safe to do
-incrementally.
+**Complete: 11 of 11 commits.** The shell is the default. The old navigation
+remains one toggle away in Settings for one release (`UI_V2_DESIGN.md` §16
+Phase 2); **M3-C10 deletes it**.
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
@@ -548,21 +547,27 @@ incrementally.
 | C3 | ✅ | Command palette: destinations, actions, settings, MOVED aliases | `7a1e355` |
 | C4 | ✅ | Symbol jump (`/`) as the single symbol editor | `43e988e` |
 | C5 | ✅ | Flight Status popover; both mode segments moved into it | `43e988e` |
-| C6 | ⬜ | Notification inbox with persisted read state; toast stacking | — |
-| C7 | ⬜ | The keyboard map and the `?` reference overlay | — |
-| C8 | ⬜ | Guided tour retargeted — 18 step targets | — |
-| C9 | ⬜ | One destination-resolving helper per browser suite; 38 refs | — |
-| C10 | ✅ | `scripts/shell_check.py`, wired as the 7th browser suite (33 checks) | `pending` |
-| C11 | ⬜ | Flag default flipped **on** — **blocked on C9** | — |
+| C6 | ✅ | Notification inbox with persisted read state; toast stacking | `12510b3` |
+| C7 | ✅ | The keyboard map and the `?` reference overlay | `12510b3` |
+| C8 | ✅ | Guided tour retargeted, from the registry | `12510b3` |
+| C9 | ✅ | One shared `shell_nav.py`; **53** refs migrated | `12510b3` |
+| C10 | ✅ | `scripts/shell_check.py`, wired as the 7th browser suite (33 checks) | `4dd2e2e` |
+| C11 | ✅ | Flag default flipped **on** | `12510b3` |
 
 **C10 was brought forward deliberately**, out of the §6 order. It is the only
 commit that protects everything the other ten build, and running the shell
 without it would have meant five commits of new surface with no automated
 coverage at all. Its last three assertions are the rollback itself.
 
-**C11 cannot land before C9.** Flipping the default on while 38 `data-tab`
-references still drive the legacy navigation would break all six existing
-suites at once — which is precisely what C9 exists to prevent.
+**C9 measured 53 references, not the 38 in §5.2.** That baseline was taken
+before M1 added 16 assertions to `workspace_check.py`. The number in a plan is
+a measurement with a date on it.
+
+**C9 shipped ONE helper, not one per suite.** §5.2 proposes one per file; six
+copies of one rule is six places for it to rot, and the rule is identical
+everywhere. `scripts/shell_nav.py` clicks real controls and reads the
+destination from the application's own registry, so M3–M6 moving a section
+between destinations needs no edit in any suite.
 
 ### M1 · V0.11.0 Workspace context and Surface Level — complete
 
@@ -596,7 +601,7 @@ suites at once — which is precisely what C9 exists to prevent.
 | --- | --- | --- | --- |
 | M0 · V0.10.0 Foundation | C1–C9 | ✅ **complete** | see above |
 | M1 · V0.11.0 Workspace context | C1–C7 | ✅ **complete** | see above |
-| M2 · V0.12.0 Shell | C1–C11 | ⬜ not started | — |
+| M2 · V0.12.0 Shell | C1–C11 | ✅ **complete** | `b380141`…`12510b3` |
 | M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |
 | M4 · V0.14.0 Trade | C1–C11 | ⬜ not started | — |
 | M5 · V0.15.0 Portfolio & Journal | C1–C9 | ⬜ not started | — |

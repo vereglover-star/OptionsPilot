@@ -5,39 +5,44 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-05, on closing **UI V2 · M1** (workspace context and
-Surface Level), C1…C7.
+**Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell**, C1…C11.
 
 ## What to do next
 
-**Start UI V2 · M2 — the shell.** `docs/ROADMAP-UI-V2.md` §12 is the authority
-for which commit comes next — read it first, not this file. `verify.ps1` is
-green across **15 gates** at 2624 tests.
+**Start UI V2 · M3 — Home**, the first Flight Deck destination.
+`docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
+`verify.ps1` is green across **16 gates** at 2624 tests.
 
-M2 is called out in the plan as **the highest-risk milestone in the
-programme**: it touches every screen and changes where everything is. Three
-things about it are worth knowing before starting.
+Three things M3 inherits and must honour:
 
-1. **It ships behind `ui.shell_v2`, default off**, in `RuntimeSettings` and not
-   `settings.py` — the flag is the rollback path and a restart-gated rollback
-   is not a rollback. C11 flips the default on.
-2. **The new navigation hosts the EXISTING section markup unchanged.** Six
-   destinations over nine untouched sections. That is what makes a milestone
-   this wide reviewable and releasable; do not start rebuilding interiors here
-   (M3–M6 do that, one destination each).
-3. **38 `data-tab` references across six browser suites and 18 more inside
-   `index.html`'s guided tour all break at once.** C9 introduces one
-   destination-resolving helper per suite so the retargeting happens once per
-   file rather than once per reference, and so both navigations stay drivable
-   during the overlap. Tutorial **ids** do not change, so
-   `tests/test_guide.py::TestCatalogueContract` keeps passing in both
-   directions.
+1. **M3-C10 deletes the legacy navigation and header.** The one release
+   `UI_V2_DESIGN.md` §16 Phase 2 requires has elapsed by then. `shell_check`'s
+   last three assertions are the rollback and they go with it; replace them
+   rather than deleting them, or the flag stops meaning anything.
+2. **Build from the registry.** `DESTINATIONS` in `index.html` is what the
+   rail, section rails, router, frame title, palette, keyboard map, tour
+   retargeting and `shell_nav.py` all read. Rebuilding Home is editing one row
+   plus new markup inside `#tab-dashboard` — nothing in the shell should need
+   to change.
+3. **Portfolio still BORROWS.** It relocates the ticket's
+   positions/working/history block on entry and returns it on exit. M5 gives it
+   real markup; until then, moving those ids breaks two destinations.
 
-Two things M1 leaves for M2 specifically: the three symbol boxes are retired by
-**M2-C4** in favour of the `/` symbol jump, and Surface Level moves out of its
-temporary Settings home into the shell.
+## What M2 delivered
 
-## What M1 delivered
+Eleven commits, `b380141`…`12510b3`. Five destinations plus Settings over the
+existing nine sections, unchanged; frame, nav rail and system strip; command
+palette, symbol jump, Flight Status, notification inbox, toast stack, keyboard
+map and a Pilot scaffold. The shell is the default; the old navigation is one
+toggle away in Settings for one release.
+
+**The checks found three defects that looking would not have**: the legacy
+`nav { width:200px }` element selector applied to the new rail and the content
+painted over it below 1440px; a palette command named a tutorial id that does
+not exist; and `Ctrl+K` was already bound to the help centre. Full detail:
+`docs/CHANGELOG.md`, and `docs/UI_MIGRATION_TRACKER.md` §10 per commit.
+
+## What M1 delivered (previous milestone)
 
 Seven commits, `d665ad0`…`ace7a75`. The first milestone a user can feel: type a
 symbol once and it is set everywhere — chart, chain, ticket and backtest are

@@ -4,6 +4,57 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2 M2: the shell (V0.12.0)
+
+*Eleven commits. The first milestone a user sees the moment they launch.*
+
+**Nine tabs become five destinations plus Settings.** Home, Trade, Portfolio,
+Research and Journal — each a question a user already has, rather than a
+feature the codebase contains. Charts is now Research › Explore, Coach is
+Journal › Review, Learning is Research › Engine, and every old name still
+works: type "coach" into the command palette and it takes you there **and
+shows you where it went**, so the rename teaches instead of stranding.
+
+Around them sits a fixed cockpit: a frame carrying the destination, the
+workspace symbol and one status button; a nav rail that never collapses to a
+hamburger; and a system strip with the data provider and its freshness, the
+Surface Level control, unread notifications and the version. Only the content
+scrolls. **`Ctrl+K`** opens a command palette over destinations, actions and
+settings; **`/`** changes the workspace symbol from anywhere; **`?`** lists
+every shortcut, generated from the same table the bindings come from.
+
+**Flight Status** collects what used to be eight controls competing with the
+content beneath them. Under each of the two mode segments is a sentence saying
+that it does not affect the other — the orthogonality invariant this codebase
+has always enforced in code, finally visible to the user, and now verified
+through the controls themselves rather than through the config.
+
+Notifications get a global inbox: grouped by day, coalesced by subject, with
+read state on the server so a cleared browser profile does not mark a month of
+them unread again. Toasts stack three deep and collapse to `+ N more`.
+
+**No destination interior was rebuilt.** The shell hosts the existing markup
+unchanged — that is the whole migration strategy, and it is why a milestone
+this wide could ship in eleven reviewable commits. M3–M6 rebuild the interiors
+one at a time.
+
+**The old navigation is one toggle away** in Settings and stays for one
+release. Every gate proves the rollback rather than asserting it: the new
+`shell_check.py` ends by turning the flag off and checking the old navigation
+comes back intact.
+
+**Three defects the checks found and looking would not have.** The legacy
+`nav { width:200px }` rule applied to the new rail — which is also a `<nav>` —
+pinning it to 200px inside a 72px track so the content painted over it at
+every width below 1440px, invisible at the size anyone would screenshot. A
+palette command pointed at a tutorial id that does not exist. And `Ctrl+K` was
+already taken by the help centre, so both dialogs answered it and the palette
+opened with focus in the wrong box.
+
+53 `data-tab` references across six browser suites now go through one shared
+navigation helper that clicks real controls and reads the destination from the
+application's own registry. 16 gates, 2,624 tests.
+
 ## [Uncommitted] — Release monitoring: two 64-bit hazards on a path never yet run
 
 *Infrastructure only. No application code, no trading behaviour, no UI.*

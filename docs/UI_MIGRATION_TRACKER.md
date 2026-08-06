@@ -8,7 +8,7 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-06, **M1 complete, M2 in progress (6 of 11 commits)**.
+**Last updated:** 2026-08-06, **M2 complete**. The shell is the default.
 
 ---
 
@@ -29,14 +29,14 @@ Re-measure at each milestone close.
 
 | Metric | At M0 start | Target | Now |
 | --- | --- | --- | --- |
-| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 8,735 |
+| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 10,340 |
 | Hardcoded `font-size: Npx` | 4 | 0 | **0** ✅ |
 | `font-size: var(--fs-*)` uses | 185 | all on roles | **0** — all renamed to `--text-*`; 51 on `--legacy-fs-md` |
 | `var(--space-*)` uses | 0 | all rhythm | **173** |
 | Off-scale rhythm occurrences (≤48px) | 321 | 0 | **313** — ratcheted, retired per destination in M3–M6 |
 | `var(--radius-*)` uses | 56 legacy | all radii | **53** on the new names; legacy deleted |
-| `data-tab` refs in browser suites | 38 | 0 | 38 |
-| `data-tab` refs in `index.html` | 18 | 0 | 18 |
+| `data-tab` refs in browser suites | 38 (53 by M2) | 0 | **0** ✅ |
+| `data-tab` refs in `index.html` | 18 | 0 | 21 — the legacy nav's own markup, deleted at M3-C10; the tour's now resolve through the registry at runtime |
 | `verify.ps1` gates | 13 | 20 | **16** |
 | `workspace_check.py` assertions | 21 | grows with the context | **50** |
 | Test count | 2,493 | grows | **2,623** |
@@ -57,20 +57,20 @@ sits in C6, not C5.
 | Operating-mode segment | `#op-seg` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `browser_check`, new `shell_check` |
 | Trading-mode segment | `#mode-seg` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `shell_check` (orthogonality) |
 | Market pill / cycle pill | `#market-pill`, `#cycle-pill` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `browser_check` |
-| Scan button | `#scan-btn` | Home primary action + palette + Flight Status | M2-C3 | ⬜ | M3-C10 | `browser_check` |
-| Learn button | `#learn-btn` | Contextual help + palette | M2-C3 | ⬜ | M3-C10 | `guide_check` |
-| Help menu (6 items) | `#help-menu` | Palette entries | M2-C3 | ⬜ | M3-C10 | `guide_check` |
-| Paper badge | `nav .paper-wrap` | Flight Status | M2-C5 | ⬜ | M3-C10 | `browser_check` |
+| Scan button | `#scan-btn` | Home primary action + palette + Flight Status | M2-C3 | ✅ | M3-C10 | `browser_check` |
+| Learn button | `#learn-btn` | Contextual help + palette | M2-C3 | ✅ | M3-C10 | `guide_check` |
+| Help menu (6 items) | `#help-menu` | Palette entries | M2-C3 | ✅ all six | M3-C10 | `guide_check` |
+| Paper badge | `nav .paper-wrap` | Flight Status | M2-C5 | ✅ | M3-C10 | `browser_check` |
 | Version indicator | `#ver` | System strip | M2-C2 | ✅ | M3-C10 | `browser_check` |
 | Halt banner | `#halt-banner` | App-scoped banner | M2-C2 | ✅ | M3-C10 | `browser_check` |
 | Command palette | ➖ new | `index.html` shell | M2-C3 | ✅ | ➖ | `shell_check` |
 | Symbol jump (`/`) | ➖ new | `index.html` shell | M2-C4 | ✅ | ➖ | `shell_check`, `workspace_check` |
 | System strip | ➖ new | `index.html` shell | M2-C2 | ✅ | ➖ | `shell_check` |
 | Surface Level control | ➖ new | System strip | M1-C6 → M2-C2 | ✅ | ➖ | `shell_check` |
-| Notification inbox | `#notifs` (dashboard panel) | Global inbox | M2-C6 | ⬜ | M3-C10 | `shell_check` |
-| Toasts | `.notif` / toast helpers | Toast stack, max 3 + `+N more` | M2-C6 | ⬜ | ➖ | `shell_check` |
-| Keyboard map + `?` overlay | scattered handlers | One map, one overlay | M2-C7 | ⬜ | ➖ | `shell_check` |
-| Pilot panel | ➖ new | `index.html` shell | M8-C3 | ⬜ | ➖ | `pilot_check` |
+| Notification inbox | `#notifs` (dashboard panel) | Global inbox | M2-C6 | ✅ | M3-C10 | `shell_check` |
+| Toasts | `.notif` / toast helpers | Toast stack, max 3 + `+N more` | M2-C6 | ✅ | ➖ | `shell_check` |
+| Keyboard map + `?` overlay | scattered handlers | One map, one overlay | M2-C7 | ✅ | ➖ | `shell_check` |
+| Pilot panel | ➖ new | `index.html` shell | M2-C2 scaffold / M8-C3 content | 🟡 scaffold | ➖ | `pilot_check` |
 
 ---
 
@@ -108,12 +108,12 @@ existing CSS class or id it replaces; blank means new.
 | 7 | Table | `.wl-*`, `.chain-wrap`, journal table | M4-C5 | ⬜ |
 | 8 | Chart | `#chart-panel`, `CH.*` | M4-C3 | ⬜ |
 | 9 | Navigation rail | `nav` | M2-C2 | ✅ |
-| 10 | Tabs (section rails) | ➖ | M6-C1 | ⬜ |
+| 10 | Tabs (section rails) | ➖ | M2-C2 | ✅ |
 | 11 | Command palette | ➖ | M2-C3 | ✅ |
 | 12 | Search | `#wl-filter`, `#jf-sym` | M6-C4 | ⬜ |
-| 13 | Badge | assorted inline | M2-C6 | ⬜ |
+| 13 | Badge | assorted inline | M2-C6 | ✅ |
 | 14 | Tag | `.chips` | M6-C4 | ⬜ |
-| 15 | Status pill | `.pill`, `.badge` | M2-C5 | ⬜ |
+| 15 | Status pill | `.pill`, `.badge` | M2-C5 | ✅ |
 | 16 | Tooltip | `title=` + `data-tip` | M7-C5 | ⬜ |
 | 17 | Popover | `.help-menu` | M2-C5 | ✅ Flight Status |
 | 18 | Modal | confirm dialogs | M4-C7 | ⬜ |
@@ -121,9 +121,9 @@ existing CSS class or id it replaces; blank means new.
 | 20 | Empty state | `.empty`, `.dash-empty` | M3-C8 | ⬜ |
 | 21 | Skeleton | skeleton loader rules | M3-C8 | ⬜ |
 | 22 | Progress indicator | `#bt-status` | M6-C3 | ⬜ |
-| 23 | Toast | `.notif` | M2-C6 | ⬜ |
+| 23 | Toast | `.notif` | M2-C6 | ✅ |
 | 24 | Banner | `#halt-banner` | M2-C2 | ✅ app-scoped |
-| 25 | Notification inbox | `#notifs` | M2-C6 | ⬜ |
+| 25 | Notification inbox | `#notifs` | M2-C6 | ✅ |
 | 26 | Pilot surfaces | `data-learn`, glossary | M8-C2 | ⬜ |
 | 27 | Chip / quick pick | `.chips`, `.exp-pills` | M4-C6 | ⬜ |
 
@@ -213,6 +213,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 
 | Date | Milestone | Change |
 | --- | --- | --- |
+| 2026-08-06 | M2-C6…C9, C11 | **M2 complete; the shell is the default.** Notification inbox with server-owned read state and a three-deep toast stack; one keyboard map rendered from the registry; the tour retargeted (selectors AND instruction text derived from `DESTINATIONS`); **53** `data-tab` references across six suites replaced by one shared `scripts/shell_nav.py` that clicks real controls. **Three defects found by the suites:** the legacy `nav { width:200px }` element selector was pinning the new rail to 200px inside a 72px track so content painted over it below 1440px (13 rules now scoped to `nav[aria-label="Main"]`); a palette command named a tutorial id that does not exist; three Help-menu items had no palette home. |
 | 2026-08-06 | M2-C1…C5, C10 | **The shell exists, behind a flag that is OFF by default.** Frame, nav rail and system strip as siblings of the legacy chrome, so `body.shell-v2` re-lays-out what is already on the page — no section moves and the flag is a true rollback, asserted as the gate's last three checks. One `DESTINATIONS` registry that the rail, section rails, router, frame title, keyboard map and gate all read. Command palette (Ctrl+K), symbol jump (`/`), Flight Status with the orthogonality sentences. `shell_check.py` landed as the 7th browser suite (33 checks), brought forward from C10's place in the order because it protects everything the rest builds. **Defects found: `Ctrl+K` was already bound to the help centre (V0.6.1) so both dialogs answered it; the shell rendered placeholder text when switched on mid-session because the websocket only pushes on change.** C6–C9 and C11 remain. |
 | 2026-08-05 | M1-C7 | The loop test: one `fill`, then charted, chained and ticketed with no further typing. Writing it found that C2/C3 had given the selected contract a server-owned home that **the client never wrote to** — `tkSel` lived and died in the page. `selectContract` now persists it and the first matching chain load restores it. Also fixed a stale `#tk-spot` that only became reachable in C4. `workspace_check.py` 43 → 50. **M1 complete: 7 commits, 15 gates, 2,564 tests.** |
 | 2026-08-05 | M1-C6 | Surface Level control (temporary home in Settings) with the chain's column set as its first consumer: Guided shows strike + prices, Focused adds delta, Full adds IV/OI/liquidity, Pro is deliberately identical to Full until a custom set exists. §8.1-2 asserted directly — hiding Mid at Guided fails the suite. `workspace_check.py` 32 → 43, and it gains the `/api/chain` stub. |

@@ -3,14 +3,15 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-08-05, on closing **UI V2 · M1 — workspace context and
-Surface Level** (branch `V3-ui`, committed `d665ad0`…`ace7a75`). 2493 →
-**2624 tests** (+71). Full detail: **`docs/CHANGELOG.md`**.
+**Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
+`V3-ui`, committed `b380141`…`12510b3`). **2624 tests.** Full detail:
+**`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0 and M1 are complete and nothing is in
-progress.** `verify.ps1` is green across all **15** gates at **2624 tests**.
+**The UI V2 programme is under way. M0, M1 and M2 are complete and nothing is
+in progress.** `verify.ps1` is green across all **16** gates at **2624 tests**,
+with the new shell ON by default.
 
 ### The UI V2 redesign (2026-08-05 —)
 
@@ -41,8 +42,17 @@ chain's column set as its first consumer. The browser suite now runs §4.5's own
 test — type a symbol once, then chart, chain and ticket it without typing it
 again — and grew from 21 assertions to 50.
 
-**Neither milestone has been released.** M0 contains nothing user-visible, so
-V0.11.0 is the release meant to carry both, and it has not been cut.
+**M2 · V0.12.0 — The shell.** Eleven commits, `b380141`…`12510b3`. Five
+destinations plus Settings over the nine existing sections, hosted unchanged;
+frame, nav rail, system strip, command palette (`Ctrl+K`), symbol jump (`/`),
+Flight Status, notification inbox with server-owned read state, toast stack,
+one keyboard map and a Pilot scaffold. `shell_check.py` is the 16th gate and
+its last three assertions are the rollback. **No destination interior was
+rebuilt** — that is M3–M6. The old navigation is one toggle away for one
+release; M3-C10 deletes it.
+
+**V0.11.0 was released** (tag `v0.11.0`) carrying M0 and M1. **V0.12.0 has not
+been cut** and is what M2 is for.
 
 ### Release automation (2026-08-04, standalone — not V0.9.3)
 
