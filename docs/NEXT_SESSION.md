@@ -12,7 +12,7 @@ Surface Level), C1…C7.
 
 **Start UI V2 · M2 — the shell.** `docs/ROADMAP-UI-V2.md` §12 is the authority
 for which commit comes next — read it first, not this file. `verify.ps1` is
-green across **15 gates** at 2564 tests.
+green across **15 gates** at 2592 tests.
 
 M2 is called out in the plan as **the highest-risk milestone in the
 programme**: it touches every screen and changes where everything is. Three

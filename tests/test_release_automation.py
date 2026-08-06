@@ -23,6 +23,8 @@ Two kinds of test:
 """
 
 import importlib.util
+import io
+import json
 import re
 import sys
 from pathlib import Path
@@ -327,6 +329,146 @@ def _step(name, conclusion, number):
             "conclusion": conclusion, "number": number}
 
 
+#: A realistic GitHub workflow-run id. These passed Int32 years ago — they are
+#: around 1.7e10 today — and every test below uses ids in this range on purpose,
+#: because the defect this class exists for was invisible to small numbers.
+BIG_ID = 17_592_186_044_416
+
+
+class TestNewestRun:
+    """Which of several runs for one head sha is the one just triggered.
+
+    A re-run of the same commit creates a second run against the same sha, so
+    this is a real question with an expensive wrong answer: the watcher reports
+    a stale run's conclusion as the outcome of the release just pushed.
+
+    It lived in PowerShell as `Sort-Object -Property {[int]$_.id}` until it was
+    moved here. `[int]` is `System.Int32`; the cast failed on every element; the
+    failure was NON-TERMINATING under the release script's own
+    `$ErrorActionPreference = "Continue"`; and `-Descending` over the resulting
+    null keys handed back GitHub's newest-first response REVERSED. The
+    monitoring therefore watched the oldest run and never said so.
+    """
+
+    @staticmethod
+    def _runs(*offsets):
+        return [{"id": BIG_ID + n, "run_number": n} for n in offsets]
+
+    def test_picks_the_largest_id(self):
+        assert support.newest_run(self._runs(2, 1, 0))["id"] == BIG_ID + 2
+
+    def test_picks_it_regardless_of_the_order_it_arrives_in(self):
+        for order in ((0, 1, 2), (2, 0, 1), (1, 2, 0)):
+            assert support.newest_run(self._runs(*order))["id"] == BIG_ID + 2
+
+    def test_a_re_run_beats_the_original(self):
+        """The case the sort existed for, and the one it got wrong."""
+        original, rerun = self._runs(0, 5)
+        assert support.newest_run([original, rerun])["run_number"] == 5
+
+    def test_ids_far_beyond_int32_are_ordered_numerically(self):
+        """Not lexically, and not truncated. 2^31-1 is 2_147_483_647; every id
+        here is four orders of magnitude past it."""
+        runs = [{"id": 9_999_999_999}, {"id": 17_592_186_044_416},
+                {"id": 2_147_483_648}]
+        assert support.newest_run(runs)["id"] == 17_592_186_044_416
+
+    def test_accepts_the_whole_api_response(self):
+        payload = {"total_count": 2, "workflow_runs": self._runs(0, 3)}
+        assert support.newest_run(payload)["id"] == BIG_ID + 3
+
+    def test_accepts_a_single_run_object(self):
+        """PowerShell's `ConvertTo-Json` unwraps a one-element array to a bare
+        object, and one run is the ORDINARY case — so this shape is not a
+        hypothetical, it is what most releases send."""
+        assert support.newest_run({"id": BIG_ID, "run_number": 7})["run_number"] == 7
+
+    def test_accepts_a_string_id(self):
+        runs = [{"id": str(BIG_ID)}, {"id": str(BIG_ID + 9)}]
+        assert support.newest_run(runs)["id"] == str(BIG_ID + 9)
+
+    def test_a_boolean_id_never_wins(self):
+        """`isinstance(True, int)` is True in Python, so an unguarded check
+        reads `"id": true` as run number 1 — which would then lose to every
+        real run, but only by accident."""
+        runs = [{"id": True}, {"id": BIG_ID}]
+        assert support.newest_run(runs)["id"] == BIG_ID
+
+    def test_an_unreadable_id_never_wins(self):
+        runs = [{"id": None}, {"id": "not-a-number"}, {"id": BIG_ID}, {}]
+        assert support.newest_run(runs)["id"] == BIG_ID
+
+    def test_falls_back_to_the_first_when_no_id_can_be_read(self):
+        """Stated behaviour, not an accident: the caller needs a run and the
+        response's own ordering is the only signal left."""
+        runs = [{"name": "first"}, {"name": "second"}]
+        assert support.newest_run(runs)["name"] == "first"
+
+    def test_a_tie_keeps_githubs_own_order(self):
+        runs = [{"id": BIG_ID, "n": "first"}, {"id": BIG_ID, "n": "second"}]
+        assert support.newest_run(runs)["n"] == "first"
+
+    @pytest.mark.parametrize("empty", [None, [], {}, "", 0, {"workflow_runs": []},
+                                       ["not a dict", 5], {"workflow_runs": None}])
+    def test_nothing_to_pick_is_none_rather_than_a_crash(self, empty):
+        assert support.newest_run(empty) is None
+
+    def test_the_chosen_run_survives_json_both_ways(self):
+        """The id crosses two process boundaries — Python to PowerShell and
+        back — and must arrive as the same integer, not as 1.7592186044416E+13.
+        """
+        chosen = support.newest_run(self._runs(0, 4))
+        text = json.dumps(chosen)
+        assert str(BIG_ID + 4) in text
+        assert json.loads(text)["id"] == BIG_ID + 4
+
+
+class TestStdinIsBomTolerant:
+    """PowerShell 5.1 prefixes a UTF-8 BOM onto a string piped to a native
+    process, and `json.load` refuses it outright.
+
+    Every sub-command that reads stdin was affected — `summarize-run` and
+    `summarize-release` as well as `pick-run` — and none of the tests around
+    them could see it, because pytest hands Python a clean string. It showed up
+    the first time the actual PowerShell → Python hand-off was executed rather
+    than reasoned about. No release had been cut with this script yet, so the
+    failure was waiting in the reporting path of the first real one.
+    """
+
+    BOM = "\ufeff"
+
+    @staticmethod
+    def _feed(monkeypatch, text: str):
+        monkeypatch.setattr(support.sys, "stdin", io.StringIO(text),
+                            raising=False)
+
+    def test_a_bom_prefixed_payload_parses(self, monkeypatch):
+        self._feed(monkeypatch, self.BOM + json.dumps({"id": BIG_ID}))
+        assert support.read_stdin_json() == {"id": BIG_ID}
+
+    def test_a_clean_payload_still_parses(self, monkeypatch):
+        self._feed(monkeypatch, json.dumps([{"id": BIG_ID}]))
+        assert support.read_stdin_json() == [{"id": BIG_ID}]
+
+    def test_empty_stdin_is_none_rather_than_a_crash(self, monkeypatch):
+        for blank in ("", "   ", "\n", self.BOM):
+            self._feed(monkeypatch, blank)
+            assert support.read_stdin_json() is None
+
+    def test_a_bom_does_not_reach_the_decision(self, monkeypatch):
+        """The end-to-end shape: BOM in, correct run out."""
+        payload = {"workflow_runs": [{"id": BIG_ID}, {"id": BIG_ID + 1}]}
+        self._feed(monkeypatch, self.BOM + json.dumps(payload))
+        assert support.newest_run(support.read_stdin_json())["id"] == BIG_ID + 1
+
+    def test_every_stdin_reader_goes_through_it(self):
+        """One reader, so a future sub-command cannot reintroduce the bug by
+        reaching for the obvious `json.load(sys.stdin)`."""
+        source = (LIB / "release_support.py").read_text(encoding="utf-8")
+        assert "json.load(sys.stdin)" not in source, \
+            "read stdin through read_stdin_json(), which tolerates a BOM"
+
+
 class TestSummarizeRun:
     def test_success(self):
         summary = support.summarize_run(_run(conclusion="success"), {"jobs": []})
@@ -584,6 +726,52 @@ class TestReleaseScriptStructure:
         a token would report a rate limit as a failed release."""
         github = (LIB / "ReleaseGitHub.ps1").read_text(encoding="utf-8")
         assert "Get-GitHubPollInterval" in github
+
+    def test_no_github_identifier_is_cast_to_int32(self):
+        """`[int]` in PowerShell is `System.Int32`, and every id GitHub issues
+        outgrew it years ago — runs and jobs are both around 1.7e10.
+
+        The specific failure is worse than an overflow crash: PowerShell's cast
+        failure inside a `Sort-Object` expression is NON-TERMINATING, and the
+        release script runs under `$ErrorActionPreference = "Continue"`, so the
+        sort silently returned an unsorted sequence and `-Descending` reversed
+        it. The watcher followed the OLDEST run for the tag and reported its
+        conclusion as the release's.
+
+        Timeouts, poll intervals, HTTP status codes and step counters are all
+        legitimately Int32 and are deliberately not swept up here — the rule is
+        about identifiers, because that is where the range actually matters.
+        """
+        pattern = re.compile(r"\[int\]\s*\$[^\s;)}]*\b(id|Id|ID)\b")
+        offenders = []
+        for name in LIB_FILES + ("release.ps1",):
+            path = LIB / name if name != "release.ps1" else RELEASE_PS1
+            for number, line in enumerate(
+                    self._code_only(path.read_text(encoding="utf-8")).splitlines(), 1):
+                if pattern.search(line):
+                    offenders.append(f"{name}:{number}: {line.strip()}")
+        assert not offenders, (
+            "GitHub ids must not be cast to [int] (Int32). Use [int64], or "
+            "better, decide it in release_support.py:\n  " + "\n  ".join(offenders))
+
+    def test_choosing_which_run_to_watch_is_decided_in_python(self):
+        """`release_support.py`'s own docstring says every *judgement* lives
+        there so pytest can reach it. Picking one run out of several for a head
+        sha is a judgement — it was inline PowerShell, it was wrong, and
+        nothing could have caught it there."""
+        github = (LIB / "ReleaseGitHub.ps1").read_text(encoding="utf-8")
+        assert "pick-run" in github, \
+            "Wait-GitHubWorkflowRun must delegate run selection to release_support.py"
+        assert "Sort-Object" not in self._code_only(github), \
+            "run selection belongs in release_support.py, not in a PowerShell sort"
+
+    def test_a_one_element_run_list_is_not_flattened_on_the_way_out(self):
+        """Piping a one-element array to `ConvertTo-Json` unwraps it to a bare
+        object. One run is the ORDINARY case, so the pipeline form would have
+        broken every release that was not a re-run."""
+        github = (LIB / "ReleaseGitHub.ps1").read_text(encoding="utf-8")
+        assert re.search(r"ConvertTo-Json\s+-InputObject\s+@\(", github), \
+            "serialise the runs with -InputObject @(...), not through the pipeline"
 
     def test_tls12_is_forced(self):
         """PowerShell 5.1 negotiates TLS 1.0 by default; api.github.com has

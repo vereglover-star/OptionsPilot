@@ -15,6 +15,7 @@ involves a *judgement* lives here, reachable from
   * whether one version is newer than another
   * which owner/repo a git remote URL points at
   * whether the CHANGELOG has a section for this release
+  * which of several workflow runs for one sha is the one just triggered
   * which job, which step, and which reason a failed workflow run failed at
 
 Stdlib only. Nothing here touches the network, and only `sync()` writes a file.
@@ -28,6 +29,7 @@ Sub-commands (see `main()`), all of which print ASCII-safe output:
     python scripts/lib/release_support.py check
     python scripts/lib/release_support.py repo-slug <url>
     python scripts/lib/release_support.py changelog-has X.Y.Z
+    python scripts/lib/release_support.py pick-run           < runs.json
     python scripts/lib/release_support.py summarize-run      < payload.json
     python scripts/lib/release_support.py summarize-release  < release.json
 """
@@ -312,6 +314,69 @@ def changelog_heading(root: Path, version: str) -> str | None:
 
 # ── reading a workflow run ───────────────────────────────────────────────────
 
+
+def _run_id(run: object) -> int | None:
+    """A workflow run's id as an integer, or None if it cannot be read.
+
+    Python integers are arbitrary precision, which is the entire reason this
+    lives here. GitHub's run ids passed 2^31 long ago — they are around 1.7e10
+    today and climbing — and the PowerShell that used to make this decision
+    cast them to `[int]`, which is `System.Int32`.
+
+    `bool` is rejected before `int` because `isinstance(True, int)` is True in
+    Python: a malformed `"id": true` would otherwise sort as run number 1.
+    A digit string is accepted because a JSON id is only conventionally a
+    number, and reading one costs nothing.
+    """
+    if not isinstance(run, dict):
+        return None
+    value = run.get("id")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
+
+
+def newest_run(runs: object) -> dict | None:
+    """The run just triggered, out of everything GitHub returned for one sha.
+
+    A re-run of the same commit creates a SECOND run against the same head sha,
+    so "which of these am I watching" is a real question with a real wrong
+    answer — and the wrong answer is expensive: the watcher reports a stale
+    run's conclusion as the outcome of the release that was just pushed.
+
+    The rule is the largest id, because ids increase monotonically and the
+    field GitHub sorts its own response by (`created_at`) has one-second
+    resolution that a re-run can tie. Ties on id break toward the earlier entry,
+    preserving GitHub's newest-first order.
+
+    A run whose id cannot be read cannot be shown to be the newest, so it never
+    wins. If NO entry has a readable id the first is returned, because the
+    caller needs a run and the response's own ordering is then the only signal
+    left — stated here rather than left as an accident, which is what the
+    previous implementation had.
+    """
+    # Three accepted shapes, because the caller is PowerShell: the whole API
+    # response, the bare list, or a single run. That last one is not
+    # hypothetical — piping a one-element array to `ConvertTo-Json` unwraps it
+    # to an object, and one run is the ordinary case.
+    if isinstance(runs, dict):
+        runs = runs.get("workflow_runs", [runs] if "id" in runs else [])
+    items = [r for r in (runs if isinstance(runs, (list, tuple)) else [])
+             if isinstance(r, dict)]
+    if not items:
+        return None
+    ranked = [(rid, -index, index)
+              for index, run in enumerate(items)
+              if (rid := _run_id(run)) is not None]
+    if not ranked:
+        return items[0]
+    return items[max(ranked)[2]]
+
+
 #: Conclusions that mean the job did not do its work. `skipped` and `neutral`
 #: are absent on purpose: `build` is legitimately skipped when `test` fails,
 #: and reporting the skipped job as the failure would name the consequence
@@ -429,6 +494,34 @@ def summarize_release(release: dict | None) -> dict:
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
+def read_stdin_json() -> object:
+    """Parse the JSON PowerShell pipes in — BOM and all.
+
+    **PowerShell 5.1 prefixes a UTF-8 BOM onto a string piped to a native
+    process**, and `json.load` refuses it outright: *"Unexpected UTF-8 BOM
+    (decode using utf-8-sig)"*. Nothing in this file's own tests could see it,
+    because pytest hands Python a clean string; it appears only when the caller
+    is the shell this whole module exists to serve.
+
+    This repository has met the same byte before — `ReleaseGit.ps1` writes
+    commit and tag messages to a temp file as UTF-8 *without* a BOM, because a
+    BOM otherwise becomes the first three characters of a commit subject. The
+    difference is where the fix belongs: there, one writer; here, one reader
+    that every sub-command shares, which is the cheaper place to be right.
+
+    Decoding is done from the byte stream rather than the text layer so the
+    result does not depend on what encoding Python guessed for the console.
+    """
+    stream = getattr(sys.stdin, "buffer", None)
+    if stream is not None:
+        raw = stream.read().decode("utf-8-sig")
+    else:
+        # Written as an escape, not as the character: an invisible literal in
+        # source is a thing no reviewer can see and no diff can explain.
+        raw = sys.stdin.read().lstrip("\ufeff")
+    return json.loads(raw) if raw.strip() else None
+
+
 def _print_json(payload: object) -> None:
     # ensure_ascii (the default) keeps every byte printable on a cp1252
     # console, which is what PowerShell 5.1 hands us.
@@ -499,7 +592,7 @@ def _cmd_compare(candidate: str) -> int:
 
 
 def _cmd_summarize_run() -> int:
-    payload = json.load(sys.stdin)
+    payload = read_stdin_json() or {}
     _print_json(summarize_run(payload.get("run"), payload.get("jobs"),
                               payload.get("log_tail")))
     return 0
@@ -546,10 +639,16 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(heading)
         return 0
+    if command == "pick-run":
+        chosen = newest_run(read_stdin_json())
+        if chosen is None:
+            return 1
+        _print_json(chosen)
+        return 0
     if command == "summarize-run":
         return _cmd_summarize_run()
     if command == "summarize-release":
-        _print_json(summarize_release(json.load(sys.stdin)))
+        _print_json(summarize_release(read_stdin_json() or {}))
         return 0
 
     print(f"unknown sub-command: {command}", file=sys.stderr)

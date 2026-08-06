@@ -306,15 +306,16 @@ verifies" answerable by reading one short file rather than grepping a long one.
 
 **PowerShell orchestrates; Python decides.** Anything with an edge case —
 which files hold a version, whether `0.9.10` is newer than `0.9.9`, which
-owner/repo a remote URL points at, which job and step a failed run failed at —
-lives in `release_support.py`, because a release path made entirely of shell is
-a release path with no tests. The structural properties that *can't* be
+owner/repo a remote URL points at, which of several runs for one commit is the
+one just triggered, which job and step a failed run failed at — lives in
+`release_support.py`, because a release path made entirely of shell is a
+release path with no tests. The structural properties that *can't* be
 executed from pytest are pinned by greps instead: verification before the tag,
 the tag before the push, an undo registered for every mutation, no `--force` or
 `--no-verify` anywhere in the pipeline, and `-SkipVerify` unreachable without
 `-DryRun`.
 
-Three PowerShell 5.1 hazards are handled once, and documented at the point they
+Five PowerShell 5.1 hazards are handled once, and documented at the point they
 are handled, because each one produced a failure that looked like something
 else:
 
@@ -335,6 +336,27 @@ else:
   a dynamic module cannot see functions dot-sourced into the calling script —
   so the undo would fail with "not recognized" at the exact moment it was
   needed.
+- **`[int]` is `Int32`, and every id GitHub issues outgrew it years ago.** Run
+  and job ids are around 1.7e10. The monitor used to choose which run to watch
+  with `Sort-Object -Property {[int]$_.id}`, and the interesting part is not the
+  overflow — it is that a cast failure inside a sort expression is
+  **non-terminating**, and `release.ps1` runs under `$ErrorActionPreference =
+  "Continue"`. So the sort returned its input unsorted, `-Descending` reversed
+  GitHub's newest-first response, and the watcher followed the **oldest** run
+  for the tag while reporting its conclusion as the release's. Selecting the run
+  is now a `release_support.py` decision (`pick-run`), where Python's arbitrary
+  precision makes the range question moot and pytest can reach the edge cases.
+  Timeouts, poll intervals, status codes and step counters remain `Int32`
+  deliberately; a test bans `[int]` on an *identifier* only.
+- **A string piped to a native process carries a UTF-8 BOM.** `json.load`
+  refuses it outright — *"Unexpected UTF-8 BOM (decode using utf-8-sig)"* — and
+  this affected every sub-command reading stdin, including `summarize-run`,
+  which is the failure-reporting path. Nothing caught it because pytest hands
+  Python a clean string; it appeared the first time the actual PowerShell →
+  Python hand-off was executed. `release_support.read_stdin_json` decodes from
+  the byte stream with `utf-8-sig`, so it is the one place that has to be right.
+  Note this is the same byte as the `git -F` note above, met from the other
+  side: there the fix is to stop writing one, here it is to tolerate one.
 
 ## Maintaining the workflows
 

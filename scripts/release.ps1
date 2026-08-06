@@ -477,7 +477,7 @@ if (-not $slug) {
 
     Write-Doing "waiting for GitHub to create the workflow run..."
     $run = Wait-GitHubWorkflowRun -Slug $slug -WorkflowFile $config.WorkflowFile `
-        -HeadSha $releaseSha -Token $auth.Token `
+        -HeadSha $releaseSha -Python $python -Token $auth.Token `
         -AppearTimeoutSec $config.RunAppearTimeoutSec -PollSeconds $pollSeconds
 
     if (-not $run) {

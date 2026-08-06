@@ -4,6 +4,53 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — Release monitoring: two 64-bit hazards on a path never yet run
+
+*Infrastructure only. No application code, no trading behaviour, no UI.*
+
+The release script's workflow monitor chose which run to watch with
+`Sort-Object -Property {[int]$_.id}`. **`[int]` is `Int32` and GitHub's run ids
+passed 2^31 years ago** — they are around 1.7e10 today.
+
+The overflow is not the interesting part. A cast failure inside a sort
+expression is **non-terminating**, and `release.ps1` deliberately runs under
+`$ErrorActionPreference = "Continue"` so that a native process writing to stderr
+cannot kill a release. So nothing threw: the sort returned its input unsorted,
+`-Descending` reversed GitHub's newest-first response, and the monitor followed
+the **oldest** run for the tag — reporting a stale conclusion as the outcome of
+the release just pushed, after the tag was already public. Reproduced directly:
+given three runs, the old code picked the oldest and the fix picks the newest.
+
+Choosing the run is now a decision in `release_support.py` (`pick-run`), which
+is where this project's own contract already said it belonged — Python's
+integers are arbitrary precision, so the range question disappears rather than
+being widened, and the edge cases are reachable from pytest. There is
+deliberately **no PowerShell fallback**: two pieces of code deciding one thing
+is the drift this codebase has paid for repeatedly, and the failure it would
+hide is "you watched the wrong run".
+
+**Wiring it up exposed a second defect on the same path, and an older one.**
+PowerShell 5.1 prefixes a UTF-8 BOM onto a string piped to a native process, and
+`json.load` refuses it outright. That broke **every** sub-command reading
+stdin — including `summarize-run`, the failure-reporting path — and no test
+could see it, because pytest hands Python a clean string. It surfaced the first
+time the actual PowerShell → Python hand-off was executed rather than reasoned
+about. Since no release has yet been cut with this script, it was waiting in the
+reporting path of the first real one. There is now one BOM-tolerant reader that
+every sub-command shares. It is the same byte the commit-message path already
+guards against from the other side.
+
+A third would-be bug never shipped: piping a one-element array to
+`ConvertTo-Json` unwraps it to a bare object, and **one run is the ordinary
+case**, so the obvious serialisation would have broken every release that was
+not a re-run.
+
+The remaining `[int]` casts — timeouts, poll intervals, HTTP status codes, step
+counters, commit counts — are correctly `Int32` and were left alone; a new test
+bans the cast on *identifiers* specifically, which is where the range matters.
+Two more tests pin the run selection in Python and the array-safe
+serialisation. 2564 → 2592 tests.
+
 ## [Uncommitted] — UI V2 M1: one workspace (V0.11.0)
 
 *Seven commits. The first UI V2 milestone a user can feel.*

@@ -143,6 +143,7 @@ function Wait-GitHubWorkflowRun {
         [Parameter(Mandatory = $true)][string]$Slug,
         [Parameter(Mandatory = $true)][string]$WorkflowFile,
         [Parameter(Mandatory = $true)][string]$HeadSha,
+        [Parameter(Mandatory = $true)][string]$Python,
         [string]$Token,
         [int]$AppearTimeoutSec = 300,
         [int]$PollSeconds = 15
@@ -155,10 +156,32 @@ function Wait-GitHubWorkflowRun {
         $attempt++
         $response = Invoke-GitHubApi -Path $path -Token $Token
         if ($response.Ok -and $response.Data -and $response.Data.total_count -gt 0) {
-            # Newest first: a re-run of the same sha creates a second run and
-            # the one just triggered is the one being watched.
-            $run = @($response.Data.workflow_runs |
-                Sort-Object -Property @{Expression = { [int]$_.id }} -Descending)[0]
+            # A re-run of the same sha creates a second run, so choosing among
+            # them is a judgement — and it is made in release_support.py where
+            # pytest can reach it, not here. This used to be an inline
+            # `Sort-Object` on `[int]$_.id`: `[int]` is Int32, GitHub's run ids
+            # passed 2^31 long ago, and PowerShell's cast failure is
+            # NON-TERMINATING, so the sort silently returned nothing sorted and
+            # `-Descending` handed back the input reversed — the OLDEST run,
+            # whose stale conclusion was then reported as this release's.
+            # -InputObject, not the pipeline: piping a ONE-element array to
+            # ConvertTo-Json unwraps it to a bare object, and one run is the
+            # ordinary case, so the pipeline form would have broken every
+            # release that was not a re-run.
+            $runs = ConvertTo-Json -InputObject @($response.Data.workflow_runs) `
+                -Depth 12 -Compress
+            $picked = Invoke-ReleaseSupport -Python $Python `
+                -Arguments @("pick-run") -StdIn $runs
+            $run = $null
+            if ($picked.Ok) { try { $run = $picked.Text | ConvertFrom-Json } catch { $run = $null } }
+            if (-not $run) {
+                # No silent second implementation to fall back on: two pieces of
+                # code deciding one thing is how this repository has produced
+                # drift before, and the failure it would hide is "you watched
+                # the wrong run".
+                Write-Caution "could not identify which workflow run to watch: $($picked.Text)"
+                return $null
+            }
             Write-Ok "workflow run #$($run.run_number) created: $($run.html_url)"
             return $run
         }
