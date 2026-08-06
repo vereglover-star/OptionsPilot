@@ -4,6 +4,14 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [2026-08-06] — About dialog wording cleanup (v0.12.2)
+
+*Small UI polish release. No functional or architectural changes.*
+
+The "About OptionsPilot" toast read "Hello from vX.Y.Z!" — reworded to
+"OptionsPilot — vX.Y.Z". Copy only: no id, no logic, and nothing in the test
+suite or the browser checks referenced the old string.
+
 ## [2026-08-06] — Fix: the in-app updater hung on "Installing…" (v0.12.1)
 
 *One line of behaviour. A hang reported from a real installed build.*
