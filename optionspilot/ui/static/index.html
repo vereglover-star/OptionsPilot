@@ -326,6 +326,41 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
   color:var(--ink-primary); line-height:1.6; }
 @media (max-width:1023px) { body.shell-v2 #shell-toosmall { display:flex; } }
 
+/* Command palette (§1.5). Fixed at 18% of the viewport, 640px at every
+   breakpoint, and it does NOT move as results change. */
+.pal-scrim { position:fixed; inset:0; z-index:50; background:var(--scrim); }
+.pal-scrim[hidden], .palette[hidden] { display:none; }
+.palette { position:fixed; z-index:51; top:18vh; left:50%;
+  transform:translateX(-50%); width:640px; max-width:calc(100vw - var(--space-6));
+  max-height:60vh; display:flex; flex-direction:column;
+  background:var(--surface-raised); border:1px solid var(--border-default);
+  border-radius:var(--radius-lg); box-shadow:var(--shadow-overlay);
+  overflow:hidden; }
+.pal-top { display:flex; align-items:center; gap:var(--space-3);
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border-subtle); }
+.pal-top input { all:unset; flex:1; font-size:var(--text-body-lg);
+  color:var(--ink-primary); }
+.pal-top input::placeholder { color:var(--ink-disabled); }
+.pal-esc { font-size:var(--text-micro); color:var(--ink-muted);
+  border:1px solid var(--border-subtle); border-radius:var(--radius-sm);
+  padding:var(--space-1) var(--space-2); }
+.pal-list { overflow:auto; padding:var(--space-2); }
+.pal-group { font-size:var(--text-micro); letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-muted);
+  padding:var(--space-3) var(--space-3) var(--space-1); }
+.pal-row { display:flex; align-items:center; gap:var(--space-3);
+  padding:var(--space-2) var(--space-3); border-radius:var(--radius-sm);
+  cursor:pointer; color:var(--ink-secondary); }
+.pal-row .pal-name { flex:1; min-width:0; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.pal-row .pal-right { font-size:var(--text-caption); color:var(--ink-muted);
+  white-space:nowrap; }
+.pal-row[aria-selected="true"] { background:var(--action-primary-tint);
+  color:var(--ink-primary); }
+.pal-row:hover { background:var(--surface-sunken); color:var(--ink-primary); }
+.pal-empty { padding:var(--space-5) var(--space-3); color:var(--ink-muted); }
+
 .pilot-panel { position:fixed; top:48px; right:0; bottom:28px; width:380px;
   z-index:45; display:flex; flex-direction:column;
   background:var(--surface-raised); border-left:1px solid var(--border-default);
@@ -1332,6 +1367,26 @@ html.gd-nomotion #gd-ring::after { display:none; }
           aria-expanded="false" aria-controls="shell-inbox">No notifications</button>
   <span class="ss-grow"></span>
   <button id="ss-version" class="ss-zone" type="button">v—</button>
+</div>
+
+<!-- Command palette (M2-C3) — UI_V2_WIREFRAMES.md §1.5.
+     "The palette is what makes a six-item navigation viable. It is the single
+     most load-bearing shell component."
+
+     Fixed position and fixed width: a palette that re-centres per keystroke is
+     unusable, so it must not move once open. The page behind is dimmed, not
+     blurred. -->
+<div id="palette-scrim" class="pal-scrim" hidden></div>
+<div id="palette" class="palette" role="dialog" aria-modal="true"
+     aria-label="Command palette" hidden>
+  <div class="pal-top">
+    <input id="palette-input" type="text" role="combobox" aria-expanded="true"
+           aria-controls="palette-list" aria-autocomplete="list"
+           autocomplete="off" spellcheck="false"
+           placeholder="Search or jump to…">
+    <span class="pal-esc">Esc</span>
+  </div>
+  <div id="palette-list" role="listbox" aria-label="Results" class="pal-list"></div>
 </div>
 
 <!-- Pilot panel — SCAFFOLD (M2-C2). Structure, position, focus behaviour and
@@ -4161,6 +4216,223 @@ window.Shell = (() => {
           renderContext, renderLevel, noteFetch,
           get destinations() { return DESTINATIONS; }};
 })();
+/* ── command palette (M2-C3) ───────────────────────────────────────────────
+   UI_V2_WIREFRAMES.md §1.5. Every entry is built from a source of truth that
+   already exists — destinations from the registry, the symbol from `Ctx`, the
+   moved names from the same table §4.3 documents — so the palette cannot list
+   a destination that is not there or name a symbol nobody is looking at.
+
+   The one rule with teeth: **destructive actions never execute from here.**
+   They navigate to the control and focus it. The palette cannot place an
+   order, close a position or reset a halt. A command list that can spend money
+   two keystrokes after a typo is a different product. */
+window.Palette = (() => {
+  //: Old tab names still resolve, and DISPLAY where they went rather than
+  //: silently redirecting — the rename teaches instead of stranding
+  //: (UI_V2_DESIGN.md §4.3).
+  const MOVED = [
+    ["Dashboard", "home", null, "Home"],
+    ["Charts", "research", "charts", "Research › Explore"],
+    ["Coach", "journal", "coach", "Journal › Review"],
+    ["Backtest", "research", "backtest", "Research › Backtest"],
+    ["Learning", "research", "learning", "Research › Engine"],
+    ["Watchlist", "research", "watchlist", "Research › Watchlist"],
+  ];
+
+  let open = false, rows = [], cursor = 0, ghost = "";
+  const recent = [];
+
+  function remember(id) {
+    const at = recent.indexOf(id);
+    if (at >= 0) recent.splice(at, 1);
+    recent.unshift(id);
+    recent.splice(6);
+  }
+
+  /** Everything the palette can offer, rebuilt per keystroke so that a
+   *  context-aware entry ("Place an order on NVDA") is never stale. */
+  function commands() {
+    const out = [];
+    for (const d of Shell.destinations) {
+      out.push({id: "dest:" + d.id, group: "Destinations", name: d.label,
+                right: d.key, run: () => Shell.goTo(d.id)});
+      for (const tab of (d.sections ? d.tabs : []))
+        out.push({id: `dest:${d.id}:${tab}`, group: "Destinations",
+                  name: `${d.label} › ${d.sections[tab]}`,
+                  right: "", run: () => Shell.goTo(d.id, tab)});
+    }
+
+    const symbol = Ctx.symbol();
+    out.push(
+      {id: "act:scan", group: "Actions", name: "Run a scan now", right: "",
+       run: () => $("scan-btn").click()},
+      // NAVIGATES rather than executes: placing an order is the one thing a
+      // palette must never do (§1.5).
+      {id: "act:order", group: "Actions",
+       name: `Place an order on ${symbol}`, right: "Trade",
+       run: () => { Shell.goTo("trade"); focusLater("tk-qty"); }},
+      {id: "act:chart", group: "Actions", name: `Chart ${symbol}`, right: "",
+       run: () => Shell.goTo("research", "charts")},
+      {id: "act:symbol", group: "Actions", name: "Change the symbol", right: "/",
+       run: () => window.SymbolJump && SymbolJump.show()},
+      {id: "act:ai", group: "Actions", name: "Who trades — AI or you", right: "",
+       run: () => { Shell.goTo("home"); openFlightStatus(); }},
+      {id: "act:keys", group: "Actions", name: "Keyboard shortcuts", right: "?",
+       run: () => $("keys-overlay").classList.add("show")},
+      // Help search kept its home and lost its key: the palette took Ctrl+K,
+      // so the help centre is reachable by name here and by `?` there.
+      {id: "act:help", group: "Actions", name: "Search help", right: "?",
+       run: () => Guide.openHelp()},
+      {id: "act:tour", group: "Actions", name: "Replay the guided tour",
+       right: "", run: () => Guide.start("tour")});
+
+    out.push(
+      {id: "set:data", group: "Settings", name: "Market data providers",
+       right: "Settings › Data",
+       run: () => { Shell.goTo("settings"); MarketData.enter(); }},
+      {id: "set:key", group: "Settings", name: "Add an API key",
+       right: "Settings › Data",
+       run: () => { Shell.goTo("settings"); MarketData.enter(); }},
+      {id: "set:level", group: "Settings", name: "How much to show",
+       right: "Settings", run: () => { Shell.goTo("settings"); focusLater("sl-levels"); }},
+      {id: "set:nav", group: "Settings", name: "Switch back to the old navigation",
+       right: "Settings", run: () => { Shell.goTo("settings"); focusLater("shell-toggle"); }});
+
+    for (const [name, dest, tab, where] of MOVED)
+      out.push({id: "moved:" + name, group: "Moved  (old names still work)",
+                name, right: "→  " + where, run: () => Shell.goTo(dest, tab)});
+    return out;
+  }
+
+  function focusLater(id) {
+    // The destination has to render before anything in it can take focus.
+    setTimeout(() => { const el = $(id); if (el) (el.focus ? el : el).focus(); }, 60);
+  }
+
+  /** Exact → prefix → fuzzy → recency, ties broken by use (§1.5). */
+  function score(cmd, q) {
+    const name = cmd.name.toLowerCase();
+    if (!q) return recent.includes(cmd.id) ? 60 : 50;
+    if (name === q) return 100;
+    if (name.startsWith(q)) return 90;
+    if (name.includes(q)) return 80;
+    let i = 0;                       // subsequence match = fuzzy
+    for (const ch of name) if (ch === q[i]) i++;
+    if (i === q.length) return 70;
+    return 0;
+  }
+
+  const GROUP_ORDER = ["Destinations", "Actions", "Settings",
+                       "Moved  (old names still work)"];
+
+  function render() {
+    const q = $("palette-input").value.trim().toLowerCase();
+    rows = commands()
+      .map(c => ({cmd: c, s: score(c, q)}))
+      .filter(r => r.s > 0)
+      .sort((a, b) => b.s - a.s ||
+                      recent.indexOf(a.cmd.id) - recent.indexOf(b.cmd.id))
+      .map(r => r.cmd);
+    cursor = 0;
+    let html = "", n = 0;
+    for (const group of GROUP_ORDER) {
+      const inGroup = rows.filter(c => c.group === group);
+      if (!inGroup.length) continue;          // empty groups are omitted
+      html += `<div class="pal-group">${esc(group)}</div>`;
+      for (const c of inGroup) {
+        html += `<div class="pal-row" role="option" id="pal-${n}" data-i="${n}"` +
+                ` aria-selected="${n === 0}"><span class="pal-name">${esc(c.name)}` +
+                `</span><span class="pal-right">${esc(c.right || "")}</span></div>`;
+        n++;
+      }
+    }
+    // Re-sort `rows` into the ORDER THEY ARE DRAWN IN, or the arrow keys walk
+    // a different list from the one on screen.
+    rows = GROUP_ORDER.flatMap(g => rows.filter(c => c.group === g));
+    setHTML("palette-list", html ||
+      `<div class="pal-empty">Nothing matches “${esc(q)}”.</div>`);
+    document.querySelectorAll("#palette-list .pal-row").forEach(el => {
+      el.onmousedown = e => { e.preventDefault(); choose(+el.dataset.i); };
+    });
+    mark();
+  }
+
+  function mark() {
+    document.querySelectorAll("#palette-list .pal-row").forEach((el, i) => {
+      el.setAttribute("aria-selected", String(i === cursor));
+      if (i === cursor) el.scrollIntoView({block: "nearest"});
+    });
+    $("palette-input").setAttribute("aria-activedescendant",
+                                    rows.length ? "pal-" + cursor : "");
+  }
+
+  function choose(i) {
+    const cmd = rows[i];
+    if (!cmd) return;
+    remember(cmd.id);
+    hide();
+    try { cmd.run(); } catch (e) { console.debug("palette command failed", e); }
+  }
+
+  function show() {
+    if (open) return;
+    open = true;
+    $("palette-scrim").hidden = false;
+    $("palette").hidden = false;
+    const input = $("palette-input");
+    input.value = "";
+    // The last query comes back as a ghost, not as text: reopening should not
+    // make the first keystroke an edit of something the user already finished.
+    input.placeholder = ghost || "Search or jump to…";
+    render();
+    input.focus();
+    // "The hint is a teaching device, not permanent chrome" (§1.2).
+    $("shell-frame").classList.add("taught");
+    $("shell-rail").classList.add("taught");
+  }
+
+  function hide() {
+    if (!open) return;
+    open = false;
+    ghost = $("palette-input").value.trim();
+    $("palette-scrim").hidden = true;
+    $("palette").hidden = true;
+    $("sf-palette-hint").focus();
+  }
+
+  const isOpen = () => open;
+
+  $("palette-scrim").onclick = hide;
+  $("palette-input").addEventListener("input", render);
+  $("palette-input").addEventListener("keydown", e => {
+    if (e.key === "ArrowDown") { e.preventDefault(); cursor = Math.min(cursor + 1, rows.length - 1); mark(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); cursor = Math.max(cursor - 1, 0); mark(); }
+    else if (e.key === "Home") { e.preventDefault(); cursor = 0; mark(); }
+    else if (e.key === "End") { e.preventDefault(); cursor = rows.length - 1; mark(); }
+    else if (e.key === "Enter") { e.preventDefault(); choose(cursor); }
+    else if (e.key === "Escape") { e.preventDefault(); hide(); }
+  });
+
+  return {show, hide, isOpen, get rows() { return rows.slice(); }};
+})();
+$("sf-palette-hint").onclick = () => Palette.show();
+
+/* Ctrl+K from anywhere, including from inside a text input — a palette you
+   cannot reach while typing a symbol is a palette you stop reaching for. */
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    if (window.Shell && Shell.enabled()) Palette.show();
+  }
+});
+
+/* Flight Status is C5's; the palette needs the opener to exist now, and a
+   stub that silently did nothing would be a command that lies. */
+function openFlightStatus() {
+  const btn = $("sf-status");
+  if (btn) btn.click();
+}
+
 $("shell-toggle").onchange = e => Shell.setEnabled(e.target.checked);
 $("sf-pilot").onclick = () => Shell.togglePilot();
 $("pilot-panel").querySelector("[data-close]").onclick = () => Shell.togglePilot();
@@ -9101,7 +9373,18 @@ const Guide = (() => {
         if (e.key === "ArrowLeft") { e.preventDefault(); backStep(); }
       }
       const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName);
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      // Ctrl+K belonged to the help centre from V0.6.1; UI_V2_WIREFRAMES.md
+      // §1.5 gives it to the command palette. The binding therefore MOVES
+      // rather than being shared — two dialogs answering one key means the
+      // second one to bind wins and the first one looks broken, which is
+      // exactly what happened when the palette landed.
+      //
+      // Nothing is lost: help search is a palette entry (the same treatment
+      // UI_MIGRATION_TRACKER.md §3 gives the whole Help menu), and `?` still
+      // opens it directly. In the legacy shell the old binding is untouched,
+      // which is what keeps the flag a true rollback.
+      const shellOwnsIt = window.Shell && Shell.enabled();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && !shellOwnsIt) {
         e.preventDefault(); openHelp(); return;
       }
       if (e.key === "?" && !typing && !e.ctrlKey && !e.metaKey) {
