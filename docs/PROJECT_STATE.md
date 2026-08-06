@@ -3,14 +3,46 @@
 Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
-**Last updated:** 2026-08-03, on closing **V0.9.1 — runtime & thread
-ownership** (branch `V3-ui`, committed `d92de20`…). 2158 → **2243 tests** (+85).
-Full detail: **`docs/CHANGELOG.md`**, `2026-08-03 — V0.9.1`.
+**Last updated:** 2026-08-05, on closing **UI V2 · M1 — workspace context and
+Surface Level** (branch `V3-ui`, committed `d665ad0`…`ace7a75`). 2493 →
+**2564 tests** (+71). Full detail: **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
-**V0.9.2 is closed, release automation is done, and nothing is in progress.**
-`verify.ps1` is green across all 13 gates at **2493 tests**.
+**The UI V2 programme is under way. M0 and M1 are complete and nothing is in
+progress.** `verify.ps1` is green across all **15** gates at **2564 tests**.
+
+### The UI V2 redesign (2026-08-05 —)
+
+Four frozen design documents (`UI_V2_DESIGN.md`, `UI_V2_WIREFRAMES.md`,
+`DESIGN_SYSTEM_V2.md`, `UI_V2_VISUAL_EXPLORATION.md`) and an engineering plan
+(`ROADMAP-UI-V2.md`) of ten milestones, M0…M9, ending at V1.0.0.
+**`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next**;
+`UI_MIGRATION_TRACKER.md` records what moved, what it cost, and what each
+commit found.
+
+**M0 · V0.10.0 — Foundation.** Nine commits, `8c5586e`…`6f859bb`. Invisible by
+design: three token layers with a one-way dependency (primitive ramp → semantic
+→ component), the type scale in `rem`, the spacing scale adopted at the 173
+occurrences that already matched, a dual focus ring, and two new static gates.
+`token_check.py` recomputes sixteen contrast floors from the tokens in the file
+rather than trusting the design document; `motion_check.py` enforces a closed
+animation catalogue. They found five defects that predate the work, including
+**eight `var()` references to properties this codebase has never defined**.
+Four ratchets carry the debt that could not be paid: 51 uses of a 13px type
+step, 313 off-scale spacing values, 3 hardcoded durations, 3 prohibited
+keyframes. All may only fall; they retire per destination in M3–M6.
+
+**M1 · V0.11.0 — Workspace context and Surface Level.** Seven commits,
+`d665ad0`…`ace7a75`. One symbol context across the chart, chain, ticket and
+backtest; one timeframe; a server-owned contract selection; and Surface Level
+(Guided/Focused/Full/Pro) as a presentation-only third axis with the option
+chain's column set as its first consumer. The browser suite now runs §4.5's own
+test — type a symbol once, then chart, chain and ticket it without typing it
+again — and grew from 21 assertions to 50.
+
+**Neither milestone has been released.** M0 contains nothing user-visible, so
+V0.11.0 is the release meant to carry both, and it has not been cut.
 
 ### Release automation (2026-08-04, standalone — not V0.9.3)
 

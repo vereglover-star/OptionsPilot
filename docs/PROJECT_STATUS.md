@@ -5,12 +5,13 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-08-04, **V0.9.2 — complete the service extraction,
-CLOSED**. `verify.ps1` green across **all 13 gates**: full `pytest` suite
-(**2564 tests**), ruff, HTML-id and doc checks, API contract check, pip check,
-`scripts/marketdata_stress.py` **88/88** offline, and the six browser suites
-(`browser_check`, `chart_check`, `marketdata_check`, `intelligence_check`,
-`guide_check`, `workspace_check`) in a real headless browser.
+**Last verified:** 2026-08-05, **UI V2 · M1 — workspace context and Surface
+Level, CLOSED**. `verify.ps1` green across **all 15 gates**: full `pytest` suite
+(**2564 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
+checks, API contract check, pip check, `scripts/marketdata_stress.py` **88/88**
+offline, and the six browser suites (`browser_check`, `chart_check`,
+`marketdata_check`, `intelligence_check`, `guide_check`, `workspace_check` —
+now **50** assertions) in a real headless browser.
 
 **Two browser checks are known-flaky** and both are tracked in `TODO.md`:
 `chart_check` is the only gate that fetches from **live providers**, and two of
@@ -520,12 +521,18 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current priorities
 
-1. **Begin V0.9.1 — runtime & thread ownership.** The next milestone, and a
-   blocking one: it must land before the V0.9.2 service extraction, or every
-   service that owns background work gets extracted against a broken ownership
-   model and needs redoing. Not started. See `NEXT_SESSION.md`.
-2. **Decide where `pip-audit` + Dependabot go** — V0.9.0 scope that never got a
-   commit. Fold into V0.9.1's first commit, or run it standalone first.
+1. **Begin UI V2 · M2 — the shell.** The next milestone and the highest-risk
+   one in the programme: a new frame, nav rail, system strip, command palette
+   and notification inbox over six destinations that host the **existing**
+   section markup unchanged, behind `ui.shell_v2` (default off until C11). It
+   breaks 38 `data-tab` references across six browser suites and 18 more inside
+   `index.html`'s guided tour, all at once — C9 exists to migrate them once per
+   file rather than once per reference. See `ROADMAP-UI-V2.md` §6 and §12.
+2. **Cut V0.11.0** when M2 is ready, or sooner. M0 and M1 are both complete and
+   unreleased; M0 was held back deliberately because it contains nothing a user
+   can see, so one release is meant to carry both.
+3. **Decide where `pip-audit` + Dependabot go** — V0.9.0 scope that never got a
+   commit and still has none.
 3. **User review of the uncommitted milestones.** V0.6.0, V0.6.1 and V0.7.0 are
    built and verified but not committed; `docs/TRADING_INTELLIGENCE.md`,
    `docs/ONBOARDING.md` and `docs/ARCHITECTURE-PLATFORM.md` are the review
@@ -538,6 +545,39 @@ called the risk preflight that existed but wasn't wired up.
 6. Exe rebuild + smoke test — deferred until the V3 branch is approved.
 
 ## Current milestone (in progress)
+
+**None.** UI V2 · M1 closed on 2026-08-05; **M2 — the shell** is next and has
+not started. The ten-milestone plan, its commit map and the six open design
+decisions are in `docs/ROADMAP-UI-V2.md`; `docs/UI_MIGRATION_TRACKER.md` §10
+carries the per-commit record. The sections below are the historical milestone
+narrative, newest first.
+
+### UI V2 · M1 — Workspace context and Surface Level (complete, `d665ad0`…`ace7a75`)
+
+Seven commits. One symbol context across the chart, chain, ticket and backtest;
+one timeframe; a server-owned expiry and contract selection; Surface Level
+(Guided/Focused/Full/Pro) as a presentation-only third axis, device-local by
+decision, with the option chain's column set as its first consumer. The browser
+suite runs `UI_V2_DESIGN.md` §4.5's own test — type a symbol once, then chart,
+chain and ticket it without typing it again — and grew from 21 assertions to 50.
+
+Three real defects, all found by checks rather than by clicking: a slow
+`/api/chain` response adopted its own symbol and dragged the whole workspace
+back to it (it reproduced only when the suite beat the response, so it first
+read as a flake); the selected contract had a server-owned home from C2–C3 that
+the client never wrote to; and `#tk-spot` kept naming the previous symbol during
+a load.
+
+### UI V2 · M0 — Foundation (complete, `8c5586e`…`6f859bb`)
+
+Nine commits, nothing visible. Three token layers with a one-way dependency,
+the type scale in `rem`, the spacing scale adopted where it already matched, a
+dual focus ring, and two new static gates taking `verify.ps1` from 13 to 15.
+The gates found five defects that predate the work, including eight `var()`
+references to properties this codebase has never defined. Four ratchets carry
+the unpayable debt and may only fall.
+
+### V0.9.1 — Runtime & thread ownership (complete)
 
 **V0.9.1 — Runtime & thread ownership.** Make `BackgroundRuntime` genuinely the
 one lifecycle owner, so pause, resume, shutdown and health reporting describe

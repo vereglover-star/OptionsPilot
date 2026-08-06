@@ -5,14 +5,55 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-05, during **UI V2 · M1** (workspace context and
-Surface Level), after closing **M0 — Foundation**.
+**Last updated:** 2026-08-05, on closing **UI V2 · M1** (workspace context and
+Surface Level), C1…C7.
 
 ## What to do next
 
-**Continue UI V2 · M1.** `docs/ROADMAP-UI-V2.md` §12 is the authority for which
-commit comes next — read it first, not this file. `verify.ps1` is green across
-**15 gates** at 2564 tests.
+**Start UI V2 · M2 — the shell.** `docs/ROADMAP-UI-V2.md` §12 is the authority
+for which commit comes next — read it first, not this file. `verify.ps1` is
+green across **15 gates** at 2564 tests.
+
+M2 is called out in the plan as **the highest-risk milestone in the
+programme**: it touches every screen and changes where everything is. Three
+things about it are worth knowing before starting.
+
+1. **It ships behind `ui.shell_v2`, default off**, in `RuntimeSettings` and not
+   `settings.py` — the flag is the rollback path and a restart-gated rollback
+   is not a rollback. C11 flips the default on.
+2. **The new navigation hosts the EXISTING section markup unchanged.** Six
+   destinations over nine untouched sections. That is what makes a milestone
+   this wide reviewable and releasable; do not start rebuilding interiors here
+   (M3–M6 do that, one destination each).
+3. **38 `data-tab` references across six browser suites and 18 more inside
+   `index.html`'s guided tour all break at once.** C9 introduces one
+   destination-resolving helper per suite so the retargeting happens once per
+   file rather than once per reference, and so both navigations stay drivable
+   during the overlap. Tutorial **ids** do not change, so
+   `tests/test_guide.py::TestCatalogueContract` keeps passing in both
+   directions.
+
+Two things M1 leaves for M2 specifically: the three symbol boxes are retired by
+**M2-C4** in favour of the `/` symbol jump, and Surface Level moves out of its
+temporary Settings home into the shell.
+
+## What M1 delivered
+
+Seven commits, `d665ad0`…`ace7a75`. The first milestone a user can feel: type a
+symbol once and it is set everywhere — chart, chain, ticket and backtest are
+renders of one context, and the selected contract, expiry and timeframe are
+server-owned so they survive a restart and a cleared browser profile. Surface
+Level (Guided/Focused/Full/Pro) arrives as a presentation-only third axis with
+the chain's column set as its first consumer.
+
+**The checks found three real defects that clicking did not.** A slow
+`/api/chain` response adopted its own symbol and dragged the whole workspace
+back to it; the selected contract had a server-owned home from C2–C3 that the
+client never wrote to; and `#tk-spot` kept naming the previous symbol during a
+load. `workspace_check.py` went from 21 assertions to 50.
+
+Full detail: `docs/CHANGELOG.md`, and `docs/UI_MIGRATION_TRACKER.md` §10 has
+the per-commit reasoning.
 
 The programme is ten milestones, M0…M9, ending at V1.0.0. Four frozen design
 documents precede it and **must not be modified**: `UI_V2_DESIGN.md` (why),
@@ -22,12 +63,12 @@ them, `ROADMAP-UI-V2.md` §11 gets a row and the work stops at that boundary
 rather than inventing one.
 
 **M0 (V0.10.0) is complete and deliberately unreleased** — the user's decision:
-it contains nothing a user can see, so V0.11.0 will be the release that carries
-both milestones. Nine commits `8c5586e`…`6f859bb`: three token layers with a
-one-way dependency, the type scale in `rem`, the spacing scale adopted where it
-already matched, a dual focus ring, and two new static gates
-(`token_check.py`, `motion_check.py`). The UI renders as it did before, which
-was the exit criterion.
+it contains nothing a user can see, so **V0.11.0 is the release that carries
+both milestones**, and it has not been cut yet. Nine commits
+`8c5586e`…`6f859bb`: three token layers with a one-way dependency, the type
+scale in `rem`, the spacing scale adopted where it already matched, a dual
+focus ring, and two new static gates (`token_check.py`, `motion_check.py`). The
+UI renders as it did before, which was the exit criterion.
 
 **Two product decisions are settled** and recorded in `ROADMAP-UI-V2.md` §11:
 Surface Level is **local only** (never synchronised), and the **light theme

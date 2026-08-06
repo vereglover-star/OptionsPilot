@@ -534,7 +534,13 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
-### Active milestone — M1 · V0.11.0 Workspace context and Surface Level
+### Next milestone — M2 · V0.12.0 The shell
+
+Not started. C1–C11 per §6. Two things carry into it from M1: the three
+symbol boxes are retired by **M2-C4** in favour of the `/` symbol jump, and
+Surface Level moves out of its temporary Settings home into the shell.
+
+### M1 · V0.11.0 Workspace context and Surface Level — complete
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
@@ -544,7 +550,7 @@ mapping.
 | C4 | ✅ | One symbol context; the three boxes become renders of it | `2ee27d4` |
 | C5 | ✅ | One timeframe context; found and fixed a stale-response bug | `fb42fcd` |
 | C6 | ✅ | The Surface Level control, chain columns its first consumer | `a05d718` |
-| C7 | ⬜ | `workspace_check.py` extended with the loop test | — |
+| C7 | ✅ | The loop test, and the selection persistence it needed | `ace7a75` |
 
 ### M0 · V0.10.0 Foundation — complete
 
@@ -565,7 +571,7 @@ mapping.
 | Milestone | Commits | Status | Hashes |
 | --- | --- | --- | --- |
 | M0 · V0.10.0 Foundation | C1–C9 | ✅ **complete** | see above |
-| M1 · V0.11.0 Workspace context | C1–C7 | 🔄 in progress | see above |
+| M1 · V0.11.0 Workspace context | C1–C7 | ✅ **complete** | see above |
 | M2 · V0.12.0 Shell | C1–C11 | ⬜ not started | — |
 | M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |
 | M4 · V0.14.0 Trade | C1–C11 | ⬜ not started | — |

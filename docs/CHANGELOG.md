@@ -4,6 +4,52 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2 M1: one workspace (V0.11.0)
+
+*Seven commits. The first UI V2 milestone a user can feel.*
+
+**Type a symbol once and it is set everywhere.** Before this, three boxes each
+owned a symbol and each defaulted to SPY: one drove the chart, one drove the
+option chain, one drove the backtest, and none knew about the others — so
+charting NVDA and opening the Trade tab silently offered a SPY chain. The three
+boxes are now renders of one context. Selecting a contract, changing the
+timeframe and moving between tabs all read and write the same workspace, and
+all of it is server-owned, so it survives a restart and a cleared browser
+profile.
+
+The design document states its own test for this and the browser suite now runs
+it: type a symbol once, then chart it, chain it and ticket it without ever
+typing it again.
+
+**Surface Level** arrives as a third mode-like axis alongside `operating_mode`
+and `trading_mode` — Guided, Focused, Full, Pro — with the option chain as its
+first consumer. Guided shows strike, bid, ask and mid; Focused adds delta; Full
+adds implied volatility, open interest and liquidity. It is **presentation
+only**, and the invariant that makes it progressive disclosure rather than a
+crippled edition is asserted directly: every level shows what a contract costs,
+renders every strike, and runs every safety check. Hiding the price at Guided
+fails the build. It is device-local by decision — a phone may reasonably sit at
+Guided while a desktop sits at Full — with its own row in the sync inventory
+saying so.
+
+**Three real defects, all found by the checks rather than by clicking.** A slow
+option-chain response adopted its own symbol and dragged the entire workspace
+back to it seconds after the user had moved on; it reproduced only when the
+suite ran fast enough to beat the response, so it first looked like a flake. The
+selected contract had a server-owned home from the third commit that **nothing
+in the client ever wrote to**, so "your selection survives a restart" was true
+of the backend and false of the product. And the spot label kept naming the
+previous symbol while a new chain loaded — a window that only became reachable
+once entering the Trade tab started reloading for a symbol chosen elsewhere.
+
+The symbol now persists when it is *chosen* rather than when a chart
+successfully renders, so the symbol you were looking at when a provider failed
+is the one you come back to.
+
+`workspace_check.py` grew from 21 assertions to 50 and gained one stubbed
+response, `/api/chain`, on the same terms `guide_check.py` stubs it: a column
+set cannot be asserted without a chain. 2,564 tests, 15 gates.
+
 ## [Uncommitted] — UI V2 M0: the token foundation (V0.10.0)
 
 *Nine commits. Nothing visible. Two new gates, five latent defects fixed.*

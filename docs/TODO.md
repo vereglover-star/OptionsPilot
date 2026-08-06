@@ -5,19 +5,21 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — M0 complete; start M1 (V0.11.0, workspace context).** The
+- [ ] **UI V2 — M0 and M1 complete; start M2 (V0.12.0, the shell).** The
       design is **frozen** across four documents; the implementation plan is
-      written and **M0 of ten milestones is built**.
+      written and **two of ten milestones are built**.
       **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
       milestones, ~85 commits, with §12's commit map as the authority for
       which commit comes next. **M0 landed in 9 commits**
       (`8c5586e`…`6f859bb`): three token layers with a one-way dependency, the
       type scale in `rem`, the spacing scale adopted, a dual focus ring, and
       two static gates taking `verify.ps1` from 13 to 15. Nothing visible
-      changed, which was the exit criterion. **M1 is next** — Surface Level
-      and workspace symbol/timeframe context in `RuntimeSettings`, mostly
-      backend and therefore mostly `pytest`-covered.
-      `UI_MIGRATION_TRACKER.md` is the authority for what has already moved.
+      changed, which was the exit criterion. **M1 landed in 7**
+      (`d665ad0`…`ace7a75`): one symbol context across chart/chain/ticket/
+      backtest, one timeframe, a server-owned contract selection, and Surface
+      Level with the chain's column set as its first consumer.
+      `workspace_check.py` went 21 → 50 assertions and found three real
+      defects. `UI_MIGRATION_TRACKER.md` is the authority for what has moved.
 
       The design documents, for reference rather than for reading first:
       `UI_V2_DESIGN.md` (philosophy, personas, Pilot, metrics),
@@ -26,14 +28,16 @@ is. This file is the flat, actionable checklist version.
       components, closed motion catalogue), `UI_V2_VISUAL_EXPLORATION.md` (the
       chosen direction, **Flight Deck**, and its 21-point freeze).
 
-      **Two decisions are wanted before M1-C1 and M2:** whether Surface Level
-      syncs across devices (shapes the persisted value), and whether the light
-      theme ships with V2 or after. M0 proceeded on the frozen documents'
-      recommendations, which `ROADMAP-UI-V2.md` §11 makes the default when no
-      decision is taken; all eight open decisions are listed there.
+      **Two decisions are settled** (`ROADMAP-UI-V2.md` §11): Surface Level is
+      **local only**, never synchronised, and the **light theme ships after
+      V2** — dark first. Six remain open there; each names the commit it
+      blocks, and the frozen documents' recommendation is the default if none
+      is taken.
 
       **M2 (navigation) is the highest-risk milestone** and ships behind
-      `ui.shell_v2` for one release. Standing rule: no commit ships a UI
+      `ui.shell_v2` for one release. It breaks 38 `data-tab` references across
+      six browser suites and 18 more in `index.html`'s guided tour at once;
+      M2-C9 migrates them once per file rather than once per reference. Standing rule: no commit ships a UI
       surface without its check, because `index.html` still has no automated
       coverage. The programme absorbs the still-open `ROADMAP-V3-UX.md`
       findings H5 (notification centre), N2 (chart↔chain) and N4 (toast

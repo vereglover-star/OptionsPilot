@@ -29,7 +29,7 @@ Re-measure at each milestone close.
 
 | Metric | At M0 start | Target | Now |
 | --- | --- | --- | --- |
-| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 8,254 |
+| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 8,735 |
 | Hardcoded `font-size: Npx` | 4 | 0 | **0** ✅ |
 | `font-size: var(--fs-*)` uses | 185 | all on roles | **0** — all renamed to `--text-*`; 51 on `--legacy-fs-md` |
 | `var(--space-*)` uses | 0 | all rhythm | **173** |
@@ -38,7 +38,8 @@ Re-measure at each milestone close.
 | `data-tab` refs in browser suites | 38 | 0 | 38 |
 | `data-tab` refs in `index.html` | 18 | 0 | 18 |
 | `verify.ps1` gates | 13 | 20 | **15** |
-| Test count | 2,493 | grows | 2,493 |
+| `workspace_check.py` assertions | 21 | grows with the context | **50** |
+| Test count | 2,493 | grows | **2,564** |
 
 **Correction to `ROADMAP-V3-UX.md`:** that audit reported ~14 hardcoded
 font sizes. Measured today it is 4 — the type scale was largely adopted
@@ -212,6 +213,8 @@ Nothing is deleted before its replacement ships and its checks pass.
 
 | Date | Milestone | Change |
 | --- | --- | --- |
+| 2026-08-05 | M1-C7 | The loop test: one `fill`, then charted, chained and ticketed with no further typing. Writing it found that C2/C3 had given the selected contract a server-owned home that **the client never wrote to** — `tkSel` lived and died in the page. `selectContract` now persists it and the first matching chain load restores it. Also fixed a stale `#tk-spot` that only became reachable in C4. `workspace_check.py` 43 → 50. **M1 complete: 7 commits, 15 gates, 2,564 tests.** |
+| 2026-08-05 | M1-C6 | Surface Level control (temporary home in Settings) with the chain's column set as its first consumer: Guided shows strike + prices, Focused adds delta, Full adds IV/OI/liquidity, Pro is deliberately identical to Full until a custom set exists. §8.1-2 asserted directly — hiding Mid at Guided fails the suite. `workspace_check.py` 32 → 43, and it gains the `/api/chain` stub. |
 | 2026-08-05 | M1-C5 | One writer for the timeframe (`Ctx.setTimeframe`); the Charts/Trade sharing was already structural — one chart in two slots — and is now asserted as such. `workspace_check.py` 28 → 32. **The new assertions found a real C4 defect:** a slow `/api/chain` response adopted its own symbol and dragged the whole workspace back to it after the user had moved on. Reproduced only when the suite beat the response, so it first read as a flake. |
 | 2026-08-05 | M1-C4 | `#ch-symbol`, `#tk-symbol` and `#bt-symbol` became renders of one context (new `Ctx` module). Charting NVDA and opening Trade used to offer a SPY chain; it now offers NVDA. Persistence moved into the setter, so a symbol survives a FAILED chart load — previously it was written only on a successful render. `workspace_check.py` 21 → 28. The three boxes stay for one more milestone; M2-C4 replaces all of them with the `/` symbol jump. |
 | 2026-08-05 | M1-C3 | `/api/workspace` now carries all five context facts. Surface Level is served here but stored under its own key — transport and storage are allowed to disagree. Composed in `WorkspaceService` (its store widens from two duck-typed methods to four) so `ui/server.py` gained **zero** lines against a ceiling with 21 to spare. `api_contract_check.py` upgraded from path-presence to a full round trip: the endpoint had been in `REQUIRED_PATHS` since it shipped with nothing ever asking it for a payload. |
