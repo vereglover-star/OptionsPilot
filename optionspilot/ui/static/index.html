@@ -205,6 +205,145 @@ body { background:var(--surface-cockpit); color:var(--ink-primary); font-size:va
 button { font-family:inherit; }
 ::selection { background:var(--action-primary-tint); }
 
+/* ══ UI V2 SHELL (M2) ══════════════════════════════════════════════════════
+   Every rule here is scoped under `body.shell-v2` or targets an element that
+   is `hidden` without it, so the legacy page is byte-for-byte unaffected when
+   the flag is off. That is what makes the flag a rollback rather than a
+   repair. Sizes are the frozen ones: frame 48px, strip 28px, rail 200/72/56
+   by breakpoint (DESIGN_SYSTEM_V2.md §5.2). */
+/* The standard visually-hidden idiom. Its 1px box and -1px offset are a
+   clipping technique, not rhythm — hence `inset` rather than `margin`, which
+   also keeps it off the spacing gate's books honestly rather than by
+   exemption. */
+.sr-only { position:absolute; width:1px; height:1px; inset:auto; padding:0;
+           overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
+
+body.shell-v2 { display:grid; height:100vh; min-height:0; overflow:hidden;
+  grid-template-columns:var(--rail-w, 200px) 1fr;
+  grid-template-rows:48px 1fr 28px;
+  grid-template-areas:"frame frame" "rail main" "strip strip"; }
+/* The legacy chrome does not move and is not deleted — it is simply not
+   displayed. M3-C10 removes it for real, once the one release has elapsed. */
+body.shell-v2 > nav[aria-label="Main"], body.shell-v2 header { display:none; }
+body.shell-v2 > main { grid-area:main; max-width:none; min-width:0;
+  overflow:auto; padding:var(--space-5) var(--space-5); }
+body.shell-v2 #shell-frame { grid-area:frame; }
+body.shell-v2 #shell-rail  { grid-area:rail; }
+body.shell-v2 #shell-strip { grid-area:strip; }
+body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
+
+.shell-frame[hidden], .shell-rail[hidden], .shell-strip[hidden] { display:none; }
+
+.shell-frame { display:flex; align-items:center; gap:var(--space-3);
+  padding:0 var(--space-4); background:var(--surface-base);
+  border-bottom:1px solid var(--border-subtle); min-width:0; }
+.sf-mark { font-weight:700; letter-spacing:.3px; white-space:nowrap; }
+.sf-mark b { color:var(--action-primary-text); font-weight:inherit; }
+.sf-dest { font-size:var(--text-body-lg); font-weight:650; white-space:nowrap; }
+.sf-sec { color:var(--ink-muted); font-weight:400; }
+.sf-sec:not(:empty)::before { content:" › "; color:var(--ink-disabled); }
+.sf-grow { flex:1; min-width:var(--space-2); }
+.sf-context { all:unset; cursor:pointer; display:flex; align-items:center;
+  gap:var(--space-2); padding:var(--space-1) var(--space-2);
+  border-radius:var(--radius-sm); font-weight:600; white-space:nowrap; }
+.sf-context:hover { background:var(--surface-sunken); }
+.sf-context[hidden] { display:none; }
+.sf-price { font-variant-numeric:tabular-nums; font-weight:400;
+  color:var(--ink-secondary); }
+.sf-hint, .sf-status, .sf-pilot { all:unset; cursor:pointer; white-space:nowrap;
+  padding:var(--space-1) var(--space-2); border-radius:var(--radius-sm);
+  font-size:var(--text-caption); color:var(--ink-secondary);
+  border:1px solid var(--border-subtle); }
+.sf-hint:hover, .sf-status:hover, .sf-pilot:hover { background:var(--surface-sunken);
+  color:var(--ink-primary); }
+/* "The hint is a teaching device, not permanent chrome" (§1.2). */
+.shell-frame.taught .sf-hint { opacity:.4; }
+.sf-status { color:var(--ink-primary); font-variant-numeric:tabular-nums; }
+.sf-pilot { border-color:var(--border-control); }
+
+.shell-rail { display:flex; flex-direction:column; padding:var(--space-3) var(--space-2);
+  background:var(--surface-base); border-right:1px solid var(--border-subtle);
+  overflow:hidden; }
+.shell-rail ul { list-style:none; display:flex; flex-direction:column; }
+.sr-grow { flex:1; }
+.shell-rail a { display:flex; align-items:center; gap:var(--space-2); text-decoration:none;
+  padding:var(--space-2) var(--space-3); border-radius:var(--radius-sm);
+  color:var(--ink-secondary); white-space:nowrap;
+  transition:background var(--dur-fast), color var(--dur-fast); }
+.shell-rail a:hover { background:var(--surface-sunken); color:var(--ink-primary); }
+/* Never colour alone: background AND a 2px left edge (§6.9). */
+.shell-rail a[aria-current="page"] { background:var(--action-primary-tint);
+  color:var(--ink-primary); font-weight:600;
+  box-shadow:inset 2px 0 0 var(--action-primary-text); }
+.shell-rail .ic { width:16px; height:16px; flex-shrink:0; fill:none;
+  stroke:currentColor; stroke-width:1.4; stroke-linecap:round;
+  stroke-linejoin:round; opacity:.85; }
+.shell-rail .kbd { margin-left:auto; }
+.shell-rail.taught .kbd { opacity:.35; }
+
+.shell-strip { display:flex; align-items:center; gap:var(--space-3);
+  padding:0 var(--space-3); background:var(--surface-base);
+  border-top:1px solid var(--border-subtle); font-size:var(--text-micro);
+  color:var(--ink-muted); }
+.ss-zone { all:unset; cursor:pointer; padding:var(--space-1) var(--space-2);
+  border-radius:var(--radius-sm); white-space:nowrap; }
+.ss-zone:hover { background:var(--surface-sunken); color:var(--ink-primary); }
+.ss-grow { flex:1; }
+.ss-menu { position:fixed; bottom:32px; z-index:40; background:var(--surface-raised);
+  border:1px solid var(--border-default); border-radius:var(--radius-med);
+  box-shadow:var(--shadow-overlay); padding:var(--space-1); min-width:180px; }
+.ss-menu[hidden] { display:none; }
+.ss-menu button { all:unset; cursor:pointer; display:block; width:100%;
+  box-sizing:border-box; padding:var(--space-2) var(--space-3);
+  border-radius:var(--radius-sm); font-size:var(--text-caption);
+  color:var(--ink-secondary); }
+.ss-menu button:hover { background:var(--surface-sunken); color:var(--ink-primary); }
+.ss-menu button[aria-checked="true"] { color:var(--ink-primary); font-weight:600; }
+
+/* Section rail — Archetype D, for destinations that host more than one legacy
+   section (Research, Journal). It is the same component as the nav rail one
+   level down, which is why it reuses its treatment rather than inventing one. */
+.dest-sections { display:flex; gap:var(--space-1); margin-bottom:var(--space-4);
+  border-bottom:1px solid var(--border-subtle); padding-bottom:var(--space-2); }
+.dest-sections[hidden] { display:none; }
+.dest-sections button { all:unset; cursor:pointer; padding:var(--space-2) var(--space-3);
+  border-radius:var(--radius-sm); color:var(--ink-secondary);
+  font-size:var(--text-body); }
+.dest-sections button:hover { background:var(--surface-sunken); color:var(--ink-primary); }
+.dest-sections button[aria-selected="true"] { background:var(--action-primary-tint);
+  color:var(--ink-primary); font-weight:600; }
+
+@media (max-width:1439px) { body.shell-v2 { --rail-w:72px; }
+  body.shell-v2 .shell-rail .lbl { display:none; } }
+@media (max-width:1279px) { body.shell-v2 { --rail-w:56px; }
+  body.shell-v2 .shell-rail .kbd { display:none; }
+  body.shell-v2 .shell-rail a { justify-content:center; padding:var(--space-2) var(--space-1); } }
+/* Below the supported minimum, a message rather than a degraded layout
+   (DESIGN_SYSTEM_V2.md §5.3). */
+#shell-toosmall { display:none; position:fixed; inset:0; z-index:90;
+  align-items:center; justify-content:center; text-align:center;
+  padding:var(--space-6); background:var(--surface-page);
+  color:var(--ink-primary); line-height:1.6; }
+@media (max-width:1023px) { body.shell-v2 #shell-toosmall { display:flex; } }
+
+.pilot-panel { position:fixed; top:48px; right:0; bottom:28px; width:380px;
+  z-index:45; display:flex; flex-direction:column;
+  background:var(--surface-raised); border-left:1px solid var(--border-default);
+  box-shadow:var(--shadow-overlay); }
+.pilot-panel[hidden] { display:none; }
+.pp-head { display:flex; align-items:center; gap:var(--space-3);
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border-subtle); }
+.pp-head h2 { font-size:var(--text-caption); letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-muted); margin-right:auto; }
+.pp-close { all:unset; cursor:pointer; font-size:var(--text-micro);
+  color:var(--ink-muted); border:1px solid var(--border-subtle);
+  border-radius:var(--radius-sm); padding:var(--space-1) var(--space-2); }
+.pp-close:hover { color:var(--ink-primary); }
+.pp-body { padding:var(--space-4); overflow:auto; line-height:1.6;
+  max-width:72ch; }
+.pp-body p { margin-bottom:var(--space-3); }
+
 /* sidebar */
 nav { width:200px; background:var(--surface-base); border-right:1px solid var(--border-subtle);
       padding:18px var(--space-3); display:flex; flex-direction:column; gap:2px; flex-shrink:0; }
@@ -1143,6 +1282,91 @@ html.gd-nomotion #gd-ring::after { display:none; }
 </head>
 <body data-palette="#3987e5">
 <a class="skip" href="#tab-title">Skip to content</a>
+
+<!-- ══ UI V2 SHELL (M2) ═══════════════════════════════════════════════════
+     Four permanent parts, per UI_V2_WIREFRAMES.md §1.1: frame (top), nav rail
+     (left), content (centre, which is the EXISTING <main>), system strip
+     (bottom). Only content ever scrolls.
+
+     These are siblings of the legacy <nav> and <main> rather than a wrapper
+     around them, and that is the whole migration strategy in one structural
+     decision: `body.shell-v2` re-lays-out what is already on the page and
+     hides the legacy chrome. No section moves, no markup is rewritten, and
+     turning the flag off restores the original page exactly rather than
+     approximately. Every destination interior M3-M6 rebuilds replaces content
+     INSIDE <main>, never any of this.
+
+     Everything here is inert until `body.shell-v2` is set. -->
+<div id="shell-frame" class="shell-frame" role="banner" hidden>
+  <span class="sf-mark">Options<b>Pilot</b></span>
+  <span class="sf-dest"><span id="sf-dest-name">Home</span><span
+        id="sf-dest-section" class="sf-sec"></span></span>
+  <button id="sf-context" class="sf-context" type="button"
+          aria-label="Workspace symbol — click to change">
+    <span id="sf-ctx-symbol">SPY</span><span id="sf-ctx-price" class="sf-price"></span>
+  </button>
+  <span class="sf-grow"></span>
+  <button id="sf-palette-hint" class="sf-hint" type="button"
+          aria-label="Open the command palette">Ctrl+K</button>
+  <button id="sf-status" class="sf-status" type="button" aria-haspopup="dialog"
+          aria-expanded="false" aria-controls="flight-status">
+    <span id="sf-status-text">PAPER · ······</span>
+  </button>
+  <button id="sf-pilot" class="sf-pilot" type="button" aria-haspopup="dialog"
+          aria-expanded="false" aria-controls="pilot-panel">Pilot</button>
+</div>
+
+<nav id="shell-rail" class="shell-rail" aria-label="Destinations" hidden>
+  <ul id="shell-rail-list"></ul>
+  <span class="sr-grow"></span>
+  <ul id="shell-rail-util"></ul>
+</nav>
+
+<div id="shell-strip" class="shell-strip" role="contentinfo" hidden>
+  <button id="ss-provider" class="ss-zone" type="button">Connecting…</button>
+  <span class="ss-grow"></span>
+  <button id="ss-level" class="ss-zone" type="button" aria-haspopup="menu"
+          aria-expanded="false" aria-controls="ss-level-menu">Full</button>
+  <div id="ss-level-menu" class="ss-menu" role="menu" hidden></div>
+  <button id="ss-notifs" class="ss-zone" type="button" aria-haspopup="dialog"
+          aria-expanded="false" aria-controls="shell-inbox">No notifications</button>
+  <span class="ss-grow"></span>
+  <button id="ss-version" class="ss-zone" type="button">v—</button>
+</div>
+
+<!-- Pilot panel — SCAFFOLD (M2-C2). Structure, position, focus behaviour and
+     dismissal are final per UI_V2_WIREFRAMES.md §1.7; the CONTENT is M8's,
+     and the panel says so rather than pretending to be finished. It overlays
+     the content and never reflows it: a panel that shoves the chart sideways
+     is a panel users stop opening. It never opens itself. -->
+<div id="pilot-panel" class="pilot-panel" role="dialog" aria-modal="false"
+     aria-labelledby="pilot-title" hidden>
+  <div class="pp-head">
+    <h2 id="pilot-title">Pilot</h2>
+    <button class="pp-close" data-close type="button" aria-label="Close Pilot">Esc</button>
+  </div>
+  <div class="pp-body">
+    <p>Pilot explains what is on screen — a term, a statistic, a gate
+      decision, a closed trade — in one voice, and stays quiet otherwise.</p>
+    <p class="hint">The panel is here; its answers arrive in a later
+      milestone. Until then, every explanation in the app is still where it
+      is today: the glossary terms, the tutorials, and the coach.</p>
+  </div>
+</div>
+
+<!-- Below 1024px the answer is a message, not a degraded layout
+     (DESIGN_SYSTEM_V2.md §5.3). CSS-only: it must work before any script has
+     run, and it must never be the reason a resize costs a reflow. -->
+<div id="shell-toosmall">
+  <div><b>The window is too narrow.</b><br>
+    OptionsPilot needs at least 1024px across. Widen the window — nothing is
+    lost, and your positions are still being managed.</div>
+</div>
+
+<!-- The ONE polite live region for the whole application
+     (UI_V2_DESIGN.md §15.1). Rate-limited in `Shell.announce`. -->
+<div id="shell-live" class="sr-only" role="status" aria-live="polite"></div>
+
 <nav aria-label="Main">
   <div class="logo"><span class="full">Options<b>Pilot</b></span><span class="mini">O<b>P</b></span></div>
   <button data-tab="dashboard" class="active" aria-current="page" title="Dashboard (1)">
@@ -1217,6 +1441,18 @@ html.gd-nomotion #gd-ring::after { display:none; }
     <div style="flex:1"><b>TRADING HALTED</b> — <span id="halt-reason"></span></div>
     <button class="btn" id="reset-halt">Reset halt (manual override)</button>
   </div>
+
+  <!-- PORTFOLIO (M2-C2) — a destination with no legacy tab of its own.
+       It is a real section so the router has no special case: `switchTab`
+       shows and hides it exactly like the other nine. What it CONTAINS is
+       borrowed from the Trade ticket on entry (see `#pf-blocks`), which is
+       what lets Portfolio exist a milestone before its interior is built.
+       It carries no nav button, which is why `switchTab` no longer requires
+       one — see TAB_LABELS. -->
+  <section id="tab-portfolio" style="display:none">
+    <div class="cards" id="pf-cards"></div>
+    <div id="pf-host" class="panel"></div>
+  </section>
 
   <!-- DASHBOARD -->
   <section id="tab-dashboard">
@@ -1450,12 +1686,20 @@ html.gd-nomotion #gd-ring::after { display:none; }
         </form>
         <div class="hint">Stop loss / take profit / trailing stop trigger on the <b>underlying</b>
           price; limit orders on the option premium. Day orders expire at 4:00 pm ET.</div>
-        <h3 class="sub">Open positions</h3>
-        <div id="tk-positions"><div class="empty">None.</div></div>
-        <h3 class="sub">Working orders</h3>
-        <div id="tk-working"><div class="empty">None.</div></div>
-        <h3 class="sub">Recent order history</h3>
-        <div id="tk-history"><div class="empty">None yet.</div></div>
+        <!-- Wrapped, not moved (M2-C2). The Portfolio destination BORROWS this
+             block — the same nodes, the same ids, the same handlers, relocated
+             on entry and returned on exit, exactly as the chart panel already
+             moves between the Charts tab and the Trade tab's slot. That is why
+             Portfolio can exist in M2 without rebuilding an interior: nothing
+             here is re-authored. M5 replaces the borrowing with real markup. -->
+        <div id="pf-blocks">
+          <h3 class="sub">Open positions</h3>
+          <div id="tk-positions"><div class="empty">None.</div></div>
+          <h3 class="sub">Working orders</h3>
+          <div id="tk-working"><div class="empty">None.</div></div>
+          <h3 class="sub">Recent order history</h3>
+          <div id="tk-history"><div class="empty">None yet.</div></div>
+        </div>
       </div>
     </div>
   </section>
@@ -2231,22 +2475,32 @@ document.addEventListener("keydown", e => {
 });
 
 /* ── tabs (click or keys 1-8) ─────────────────────────────────────────── */
+/* Titles for sections that have no legacy nav button.
+   `switchTab` used to REQUIRE one and early-return without it, which made the
+   nine tabs and the nine buttons one fact stored twice. Portfolio (M2-C2) has
+   a section and no button, and M3-C10 deletes the legacy nav entirely — so
+   the button is now an optional decoration on a route, not its definition. */
+const TAB_LABELS = {portfolio: "Portfolio"};
+
 function switchTab(name) {
-  const b = document.querySelector(`nav button[data-tab="${name}"]`);
-  if (!b) return;
-  document.querySelectorAll("nav button").forEach(x => {
+  const sec = $("tab-" + name);
+  if (!sec) return;
+  const b = document.querySelector(`nav[aria-label="Main"] button[data-tab="${name}"]`);
+  document.querySelectorAll('nav[aria-label="Main"] button').forEach(x => {
     x.classList.remove("active"); x.removeAttribute("aria-current");
   });
-  b.classList.add("active");
-  b.setAttribute("aria-current", "page");
+  if (b) {
+    b.classList.add("active");
+    b.setAttribute("aria-current", "page");
+  }
   // keep the single chart instance parented to whichever tab will show it
   // (the Trade slot only when its chart is expanded; the Charts tab otherwise)
   if (!(name === "trade" && tkChartOpen)) chReparent(chHome());
   document.querySelectorAll("main section").forEach(s => s.style.display = "none");
-  const sec = $("tab-" + name);
   sec.style.display = "";
   sec.style.animation = "none"; void sec.offsetWidth; sec.style.animation = "";
-  $("tab-title").textContent = b.querySelector(".lbl").textContent;
+  $("tab-title").textContent =
+    b ? b.querySelector(".lbl").textContent : (TAB_LABELS[name] || name);
   // The one workspace fact with no localStorage key of its own to intercept.
   if (window.Workspace) Workspace.push({tab: name});
   if (name === "dashboard") Intel.enterDashboard();
@@ -2262,8 +2516,13 @@ function switchTab(name) {
   // what keeps the header's Learn button describing the screen you are on.
   Guide.mark("tab." + name);
   Guide.syncLearnButton();
+  // The shell renders itself FROM the active section rather than alongside it.
+  // Every route — rail, number key, palette, legacy button, notification deep
+  // link — therefore lands in one place, and the destination is a function of
+  // the tab rather than a second piece of state that can disagree with it.
+  if (window.Shell) Shell.syncFromTab(name);
 }
-document.querySelectorAll("nav button").forEach(b =>
+document.querySelectorAll('nav[aria-label="Main"] button').forEach(b =>
   b.onclick = () => switchTab(b.dataset.tab));
 const TAB_KEYS = ["dashboard", "charts", "trade", "coach", "watchlist",
                   "journal", "backtest", "learning", "settings"];
@@ -2271,14 +2530,29 @@ document.addEventListener("keydown", e => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   const t = e.target.tagName;
   if (t === "INPUT" || t === "TEXTAREA" || t === "SELECT") return;
-  const i = "123456789".indexOf(e.key);
-  if (i >= 0) switchTab(TAB_KEYS[i]);
+  // Two navigations, two meanings for the number row, one handler. In the
+  // shell, `1`–`5` are DESTINATIONS and `,` is Settings — the rail's own
+  // hints, so a user learning them from the screen learns the right ones.
+  if (window.Shell && Shell.enabled()) {
+    const dest = Shell.destinations.find(d => d.key === e.key);
+    if (dest) { e.preventDefault(); Shell.goTo(dest.id); }
+  } else {
+    const i = "123456789".indexOf(e.key);
+    if (i >= 0) switchTab(TAB_KEYS[i]);
+  }
   if (e.key.toLowerCase() === "f" && chOnScreen()) toggleChartFullscreen();
   // `?` opens the searchable help centre (Guide owns that key since V0.6.1);
   // the shortcut reference is still one click away, from inside it and from
   // Help ▸ Keyboard shortcuts. Nothing was removed, only re-pointed.
   if (e.key === "Escape") $("keys-overlay").classList.remove("show");
   if (e.key === "Escape" && CH.tool) chSetTool(null);
+  if (e.key === "Escape" && window.Shell && Shell.enabled()) {
+    if (!$("pilot-panel").hidden) Shell.togglePilot();
+    if (!$("ss-level-menu").hidden) {
+      $("ss-level-menu").hidden = true;
+      $("ss-level").setAttribute("aria-expanded", "false");
+    }
+  }
   // order-entry keys — active only with the Trade tab open, a contract
   // selected, and no modal/overlay showing (Enter must never submit an
   // order from behind the shortcut-reference card)
@@ -2299,6 +2573,9 @@ let lastStatus = null;
 
 function renderStatus(s) {
   lastStatus = s;
+  // One payload, two renderers, while both shells exist. The shell reads the
+  // same `s` rather than fetching its own — see Shell.renderStatus.
+  if (window.Shell) Shell.renderStatus(s);
   $("ver-text").textContent = "v" + s.version;
   $("market-pill").textContent = s.market_open ? "market open" : "market closed";
   $("market-pill").className = "pill" + (s.market_open ? " open" : "");
@@ -3452,6 +3729,9 @@ window.Ctx = (() => {
       if (el && el !== document.activeElement && el.value !== CH.sym)
         el.value = CH.sym;
     }
+    // The shell's frame is a fourth render of the same one value, on exactly
+    // the same terms as the three boxes.
+    if (window.Shell) Shell.renderContext();
   }
 
   function setSymbol(next) {
@@ -3549,11 +3829,16 @@ window.Ctx = (() => {
     4: "Pro — everything, at maximum density.",
   };
 
+  const LEVEL_NAME = {1: "Guided", 2: "Focused", 3: "Full", 4: "Pro"};
+
   function renderLevel() {
     for (const b of document.querySelectorAll("#sl-levels button"))
       b.classList.toggle("active", +b.dataset.level === level);
     const what = $("sl-what");
     if (what) what.textContent = LEVEL_BLURB[level] || "";
+    // The strip owns the Surface Level control (§1.4); Settings LINKS to the
+    // same one value rather than keeping a second.
+    if (window.Shell) Shell.renderLevel(level, LEVEL_NAME[level]);
   }
 
   return {symbol, setSymbol, render, timeframe, setTimeframe,
@@ -3578,18 +3863,277 @@ document.querySelectorAll("#sl-levels button").forEach(b => b.onclick = () => {
    Attached to `window` and always read as `window.Shell`: `typeof Shell` does
    NOT protect against a temporal dead zone for a `const` declared later in the
    same scope, which is a trap this file has already been caught by. */
+/* THE DESTINATION REGISTRY — one table, read by everything.
+
+   The nav rail, the section rails, the router, the frame's title, the command
+   palette, the keyboard map and `shell_check.py` all derive from this. That is
+   deliberate and it is the single most important structural decision in M2:
+   when M3 rebuilds Home and M6 rebuilds Settings, each milestone edits ONE row
+   here rather than hunting for the six places that knew about a destination.
+
+   `tabs` names the LEGACY sections a destination currently hosts, in the order
+   its section rail lists them. A destination whose interior has been rebuilt
+   will hold exactly one tab of its own; until then it borrows what exists,
+   unchanged. `UI_V2_DESIGN.md` §4.3 is the mapping and §4.2 the order — the
+   five are phases of one loop, and Settings is deliberately NOT numbered 6
+   because it is a utility, not a peer.
+
+   Portfolio is the one destination with no legacy tab behind it. It hosts a
+   real but empty section and BORROWS the ticket's positions/orders/history
+   block through `borrow` — the same relocation the chart already does between
+   two slots. M5 gives it real markup and the hook disappears. */
+const DESTINATIONS = [
+  {id: "home", label: "Home", key: "1", tabs: ["dashboard"],
+   icon: '<rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1"/><rect x="9" y="9" width="5.5" height="5.5" rx="1"/>'},
+  {id: "trade", label: "Trade", key: "2", tabs: ["trade"],
+   icon: '<path d="M2 5h9l-2-2M14 11H5l2 2"/>'},
+  {id: "portfolio", label: "Portfolio", key: "3", tabs: ["portfolio"],
+   borrow: {block: "pf-blocks", into: "pf-host"},
+   icon: '<rect x="1.5" y="4" width="13" height="9.5" rx="1.5"/><path d="M5.5 4V2.5h5V4"/>'},
+  {id: "research", label: "Research", key: "4",
+   tabs: ["charts", "backtest", "watchlist", "learning"],
+   sections: {charts: "Explore", backtest: "Backtest",
+              watchlist: "Watchlist", learning: "Engine"},
+   icon: '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/>'},
+  {id: "journal", label: "Journal", key: "5", tabs: ["journal", "coach"],
+   sections: {journal: "Trades", coach: "Review"},
+   icon: '<rect x="3" y="1.5" width="10" height="13" rx="1.5"/><path d="M5.5 5h5M5.5 8h5M5.5 11h3"/>'},
+  {id: "settings", label: "Settings", key: ",", tabs: ["settings"], utility: true,
+   icon: '<circle cx="8" cy="8" r="2.5"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/>'},
+];
+
+//: legacy tab -> destination. Derived, never maintained separately: the
+//: active destination is a FUNCTION of the active tab, so there is no second
+//: piece of state that can disagree about where the user is.
+const TAB_DESTINATION = Object.fromEntries(
+  DESTINATIONS.flatMap(d => d.tabs.map(t => [t, d])));
+
 window.Shell = (() => {
   let on = false;
 
   const enabled = () => on;
+
+  const PARTS = ["shell-frame", "shell-rail", "shell-strip"];
+  let ageTimer = null;
 
   function apply() {
     // One class, one layout. Everything the shell adds is scoped under it, so
     // turning it off restores the legacy page exactly rather than approximately
     // — the difference between a rollback and a repair.
     document.body.classList.toggle("shell-v2", on);
+    for (const id of PARTS) $(id).hidden = !on;
     const box = $("shell-toggle");
     if (box) box.checked = on;
+    if (!on) { returnBorrowed(); return; }
+    renderRail();
+    syncFromTab(currentTab());
+    // Render from the LAST status rather than waiting for the next one. The
+    // websocket only pushes when the payload changes, so on a quiet market a
+    // shell switched on mid-session would sit on its placeholder text for
+    // minutes and look broken. Found by turning the flag on and watching
+    // `PAPER · ······` stay there.
+    renderStatus(lastStatus);
+    renderProvider();
+    renderContext();
+    Ctx.renderLevel();
+    if (!ageTimer) ageTimer = setInterval(renderProvider, 15000);
+  }
+
+  // ── the rail ─────────────────────────────────────────────────────────────
+  const railItem = d =>
+    `<li><a href="#" data-dest="${d.id}" role="link"><svg class="ic" viewBox="0 0 16 16">${d.icon}</svg>` +
+    `<span class="lbl">${d.label}</span>` +
+    (d.utility ? "" : `<span class="kbd">${d.key}</span>`) + `</a></li>`;
+
+  function renderRail() {
+    if ($("shell-rail-list").children.length) return;   // built once
+    setHTML("shell-rail-list",
+            DESTINATIONS.filter(d => !d.utility).map(railItem).join(""));
+    // Pilot sits with Settings at the foot: both are always-available
+    // surfaces rather than places, which is why neither is numbered.
+    setHTML("shell-rail-util",
+            `<li><a href="#" data-pilot="1" role="link"><svg class="ic" viewBox="0 0 16 16">` +
+            `<circle cx="8" cy="8" r="6"/><path d="M8 11V7.5M8 5.2v.1"/></svg>` +
+            `<span class="lbl">Pilot</span></a></li>` +
+            DESTINATIONS.filter(d => d.utility).map(railItem).join(""));
+    document.querySelectorAll("#shell-rail a[data-dest]").forEach(a =>
+      a.onclick = e => { e.preventDefault(); goTo(a.dataset.dest); });
+    document.querySelectorAll("#shell-rail a[data-pilot]").forEach(a =>
+      a.onclick = e => { e.preventDefault(); togglePilot(); });
+  }
+
+  // ── borrowing (Portfolio, until M5) ──────────────────────────────────────
+  // The same relocation the chart performs between the Charts tab and the
+  // Trade slot. Borrowed nodes keep their ids, their handlers and their
+  // renderers; nothing is cloned, because two copies of a positions list is
+  // two things to keep in step.
+  let borrowedBy = null;
+
+  function returnBorrowed() {
+    if (!borrowedBy) return;
+    const home = $(borrowedBy.homeId);
+    const block = $(borrowedBy.block);
+    if (home && block && block.parentElement !== home) home.appendChild(block);
+    borrowedBy = null;
+  }
+
+  function borrowFor(dest) {
+    if (borrowedBy && borrowedBy.dest !== dest.id) returnBorrowed();
+    if (!dest.borrow || borrowedBy) return;
+    const block = $(dest.borrow.block), into = $(dest.borrow.into);
+    if (!block || !into) return;
+    borrowedBy = {dest: dest.id, block: dest.borrow.block,
+                  homeId: block.parentElement.id};
+    into.appendChild(block);
+  }
+
+  // ── routing ──────────────────────────────────────────────────────────────
+  const currentTab = () => {
+    const active = document.querySelector("nav[aria-label='Main'] button.active");
+    return active ? active.dataset.tab : "dashboard";
+  };
+
+  const destinationFor = tab => TAB_DESTINATION[tab] || DESTINATIONS[0];
+
+  /** Go to a destination, optionally to one of its sections.
+   *  Delegates to `switchTab`, which remains the ONE thing that knows how to
+   *  show a section and what to load when it appears. The shell decides
+   *  WHERE, never WHAT — so there is no second router to drift. */
+  function goTo(destId, tab) {
+    const dest = DESTINATIONS.find(d => d.id === destId);
+    if (!dest) return;
+    switchTab(tab && dest.tabs.includes(tab) ? tab : dest.tabs[0]);
+  }
+
+  /** Render the shell for whatever section is now showing.
+   *  Called BY `switchTab`, so every route — a rail click, a number key, the
+   *  palette, a legacy nav button, a deep link from a notification — lands
+   *  here through one path. */
+  function syncFromTab(tab) {
+    if (!on) return;
+    const dest = destinationFor(tab);
+    borrowFor(dest);
+    document.querySelectorAll("#shell-rail a[data-dest]").forEach(a => {
+      const active = a.dataset.dest === dest.id;
+      a.setAttribute("aria-current", active ? "page" : "false");
+      if (!active) a.removeAttribute("aria-current");
+    });
+    $("sf-dest-name").textContent = dest.label;
+    $("sf-dest-section").textContent =
+      dest.sections && dest.tabs.length > 1 ? (dest.sections[tab] || "") : "";
+    renderSectionRail(dest, tab);
+    // The frame carries the workspace symbol only where a symbol means
+    // something (§1.2). Settings and Portfolio have no symbol context.
+    $("sf-context").hidden = !["trade", "research", "home"].includes(dest.id);
+  }
+
+  /** The section rail (Archetype D) for destinations hosting more than one
+   *  legacy section. Rendered into the destination's own section so it
+   *  scrolls with the content and disappears with it. */
+  function renderSectionRail(dest, tab) {
+    document.querySelectorAll(".dest-sections").forEach(el => el.remove());
+    if (!dest.sections || dest.tabs.length < 2) return;
+    const host = $("tab-" + tab);
+    if (!host) return;
+    const rail = document.createElement("div");
+    rail.className = "dest-sections";
+    rail.setAttribute("role", "tablist");
+    rail.setAttribute("aria-label", dest.label + " sections");
+    rail.innerHTML = dest.tabs.map(t =>
+      `<button role="tab" data-section="${t}" aria-selected="${t === tab}">` +
+      `${dest.sections[t]}</button>`).join("");
+    host.insertBefore(rail, host.firstChild);
+    rail.querySelectorAll("button").forEach(b =>
+      b.onclick = () => goTo(dest.id, b.dataset.section));
+  }
+
+  // ── Pilot (scaffold; M8 gives it content) ────────────────────────────────
+  function togglePilot() {
+    const panel = $("pilot-panel");
+    const open = panel.hidden;
+    panel.hidden = !open;
+    $("sf-pilot").setAttribute("aria-expanded", String(open));
+    if (open) panel.querySelector("[data-close]").focus();
+    else $("sf-pilot").focus();
+  }
+
+  // ── rendering the frame and strip from the status payload ───────────────
+  // Fed from `renderStatus`'s argument, never from a second fetch and never
+  // from a cached copy: the shell is a projection of the same payload the
+  // legacy header renders, so the two cannot disagree while both exist.
+  //
+  // The one-fact-one-owner split (UI_V2_WIREFRAMES.md §1.4) is enforced by
+  // which of these two functions a fact appears in, and by nothing else.
+  // Account mode, who trades, risk profile, market and scanning belong to
+  // Flight Status; provider, freshness, Surface Level, unread and version
+  // belong to the strip. A fact that needs to appear twice is LINKED to.
+  function renderStatus(s) {
+    if (!on || !s) return;
+    const who = s.operating_mode === "ai" ? "AI" : "You";
+    const scan = s.scan || {};
+    const engine = scan.running ? "scanning…"
+      : s.risk && s.risk.halted ? "halted"
+      : s.operating_mode === "ai" ? "AI trading" : "you trade";
+    $("sf-status-text").textContent = `PAPER · ${engine}`;
+    $("sf-status").title =
+      `${who} trades · ${s.trading_mode} · market ${s.market_open ? "open" : "closed"}`;
+    $("ss-version").textContent = "v" + s.version;
+  }
+
+  /** The strip's data zone: which provider answered, and how long ago.
+   *
+   *  Recorded when a fetch SUCCEEDS rather than polled, so the zone costs no
+   *  requests at all. The age ticks locally off one timer that exists whether
+   *  or not anything is fetching — an age that only updated on the next fetch
+   *  would read "2s ago" indefinitely once the data went stale, which is the
+   *  precise moment it needs to be believed. */
+  let lastFetch = null;
+
+  function noteFetch(provider, stale) {
+    lastFetch = {provider: provider || null, at: Date.now(), stale: !!stale};
+    renderProvider();
+  }
+
+  function renderProvider() {
+    if (!on) return;
+    const zone = $("ss-provider");
+    if (!lastFetch) {
+      zone.textContent = "Market data";
+      zone.title = "No data has been fetched yet this session.";
+      return;
+    }
+    const secs = Math.max(0, Math.round((Date.now() - lastFetch.at) / 1000));
+    const age = secs < 60 ? `${secs}s ago`
+      : secs < 3600 ? `${Math.round(secs / 60)}m ago`
+      : `${Math.round(secs / 3600)}h ago`;
+    zone.textContent = `${lastFetch.provider || "cache"} · ${age}` +
+      (lastFetch.stale ? " · stale" : "");
+    zone.title = "The provider that last answered. Click for Settings ▸ Data.";
+  }
+
+  /** The frame's context slot — a render of the workspace symbol, never a
+   *  second copy of it. `Ctx` remains the owner. */
+  function renderContext() {
+    if (!on) return;
+    $("sf-ctx-symbol").textContent = Ctx.symbol();
+  }
+
+  function renderLevel(level, label) {
+    if (!on) return;
+    $("ss-level").textContent = label;
+    $("ss-level").setAttribute("aria-label", "Surface level: " + label);
+  }
+
+  // ── the one announcement channel ─────────────────────────────────────────
+  // Rate-limited to one utterance per three seconds (UI_V2_DESIGN.md §15.1).
+  // A shell that announces every arrival is a shell a screen-reader user
+  // turns off, which costs them the announcements that mattered.
+  let lastSpoke = 0;
+  function announce(message) {
+    const now = Date.now();
+    if (!message || now - lastSpoke < 3000) return;
+    lastSpoke = now;
+    $("shell-live").textContent = message;
   }
 
   function adopt(value) {
@@ -3612,9 +4156,42 @@ window.Shell = (() => {
     return on;
   }
 
-  return {enabled, setEnabled, adopt, apply};
+  return {enabled, setEnabled, adopt, apply, goTo, syncFromTab, announce,
+          togglePilot, destinationFor, renderStatus, renderProvider,
+          renderContext, renderLevel, noteFetch,
+          get destinations() { return DESTINATIONS; }};
 })();
 $("shell-toggle").onchange = e => Shell.setEnabled(e.target.checked);
+$("sf-pilot").onclick = () => Shell.togglePilot();
+$("pilot-panel").querySelector("[data-close]").onclick = () => Shell.togglePilot();
+
+/* The strip's zones link to the one owner of each fact rather than repeating
+   it (§1.4). Provider → Settings ▸ Data, version → Settings ▸ About. */
+$("ss-provider").onclick = () => { Shell.goTo("settings"); MarketData.enter(); };
+$("ss-version").onclick = () => Shell.goTo("settings");
+
+/* Surface Level lives in the strip and is edited from there. It writes through
+   `Ctx.setSurfaceLevel`, the same setter the Settings panel uses, so the two
+   controls cannot disagree — they are two views of one value. */
+$("ss-level").onclick = () => {
+  const menu = $("ss-level-menu"), open = menu.hidden;
+  if (open) {
+    setHTML("ss-level-menu", [[1, "Guided"], [2, "Focused"], [3, "Full"], [4, "Pro"]]
+      .map(([n, label]) =>
+        `<button role="menuitemradio" data-level="${n}" aria-checked="${
+          Ctx.surfaceLevel() === n}">${label}</button>`).join(""));
+    menu.querySelectorAll("button").forEach(b => b.onclick = () => {
+      Ctx.setSurfaceLevel(b.dataset.level);
+      menu.hidden = true;
+      $("ss-level").setAttribute("aria-expanded", "false");
+      $("ss-level").focus();
+    });
+    const rect = $("ss-level").getBoundingClientRect();
+    menu.style.left = rect.left + "px";
+  }
+  menu.hidden = !open;
+  $("ss-level").setAttribute("aria-expanded", String(open));
+};
 // The three boxes ship with `value="SPY"` in the markup; the restored context
 // usually is not SPY. Painting once here is what makes the Trade and Research
 // boxes correct before anyone visits those tabs — previously only the chart's
@@ -4808,6 +5385,11 @@ async function loadChart(symbol) {
   if (!chRenderData(out, viewOpts())) return;
   chSetState(d.stale ? "cached" : "complete",
              d.provider ? `via ${d.provider}` : "");
+  // The strip's data zone is fed from the fetch that just succeeded rather
+  // than from a poll of its own. A status bar that polls the subsystem it is
+  // reporting on becomes a meaningful share of that subsystem's traffic — and
+  // on a metered provider, traffic is budget.
+  if (window.Shell) Shell.noteFetch(d.provider, d.stale);
 }
 
 /* Merge a freshly-fetched RECENT window (`fresh`, the base window a refresh
