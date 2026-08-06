@@ -361,6 +361,54 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
 .pal-row:hover { background:var(--surface-sunken); color:var(--ink-primary); }
 .pal-empty { padding:var(--space-5) var(--space-3); color:var(--ink-muted); }
 
+/* Flight Status (§1.8) — 480px, anchored to the right edge of its button. */
+.fstatus { position:fixed; z-index:52; top:52px; right:var(--space-4);
+  width:480px; max-width:calc(100vw - var(--space-6));
+  background:var(--surface-raised); border:1px solid var(--border-default);
+  border-radius:var(--radius-med); box-shadow:var(--shadow-overlay);
+  padding:var(--space-4); }
+.fstatus[hidden] { display:none; }
+.fs-title { font-size:var(--text-micro); letter-spacing:.08em;
+  text-transform:uppercase; color:var(--ink-muted);
+  margin-bottom:var(--space-3); }
+.fs-row { display:flex; gap:var(--space-4); padding:var(--space-3) 0;
+  border-top:1px solid var(--border-subtle); }
+.fs-row:first-of-type { border-top:0; }
+.fs-k { width:96px; flex-shrink:0; color:var(--ink-muted);
+  font-size:var(--text-caption); }
+.fs-v { flex:1; min-width:0; }
+.fs-why { margin-top:var(--space-2); font-size:var(--text-caption);
+  color:var(--ink-muted); line-height:1.5; }
+
+/* Symbol jump (§1.6) — anchored under the frame's context slot, left-aligned. */
+.symjump { position:fixed; z-index:52; top:52px; width:480px;
+  max-width:calc(100vw - var(--space-6)); background:var(--surface-raised);
+  border:1px solid var(--border-default); border-radius:var(--radius-med);
+  box-shadow:var(--shadow-overlay); overflow:hidden; }
+.symjump[hidden] { display:none; }
+.sj-top { display:flex; align-items:center; gap:var(--space-2);
+  padding:var(--space-3) var(--space-4);
+  border-bottom:1px solid var(--border-subtle); }
+.sj-slash { color:var(--ink-muted); font-weight:700; }
+.sj-top input { all:unset; flex:1; font-size:var(--text-body-lg);
+  color:var(--ink-primary); text-transform:uppercase; }
+.sj-list { max-height:40vh; overflow:auto; padding:var(--space-1); }
+.sj-row { display:flex; align-items:center; gap:var(--space-3);
+  padding:var(--space-2) var(--space-3); border-radius:var(--radius-sm);
+  cursor:pointer; color:var(--ink-secondary); }
+.sj-row[aria-selected="true"] { background:var(--action-primary-tint);
+  color:var(--ink-primary); }
+.sj-row:hover { background:var(--surface-sunken); }
+.sj-sym { font-weight:700; min-width:72px; }
+.sj-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; color:var(--ink-muted); }
+.sj-watch { all:unset; cursor:pointer; font-size:var(--text-micro);
+  color:var(--ink-muted); border:1px solid var(--border-subtle);
+  border-radius:var(--radius-sm); padding:var(--space-1) var(--space-2); }
+.sj-watch:hover { color:var(--ink-primary); border-color:var(--action-primary-fill); }
+.sj-foot { padding:var(--space-2) var(--space-4); font-size:var(--text-micro);
+  color:var(--ink-muted); border-top:1px solid var(--border-subtle); }
+
 .pilot-panel { position:fixed; top:48px; right:0; bottom:28px; width:380px;
   z-index:45; display:flex; flex-direction:column;
   background:var(--surface-raised); border-left:1px solid var(--border-default);
@@ -1387,6 +1435,45 @@ html.gd-nomotion #gd-ring::after { display:none; }
     <span class="pal-esc">Esc</span>
   </div>
   <div id="palette-list" role="listbox" aria-label="Results" class="pal-list"></div>
+</div>
+
+<!-- Flight Status (M2-C5) — UI_V2_WIREFRAMES.md §1.8.
+     "The two sentences under each segmented control are the entire reason this
+     popover exists: each axis states that it does not affect the other." That
+     is the orthogonality invariant made visible to the user rather than only
+     asserted in code, and it must not be removed for tidiness. -->
+<div id="flight-status" class="fstatus" role="dialog" aria-label="Flight status"
+     hidden>
+  <h2 class="fs-title">Flight status</h2>
+  <div class="fs-row"><span class="fs-k">Account</span>
+    <div class="fs-v"><b>PAPER</b> · not real money
+      <div class="fs-why" id="fs-account"></div></div></div>
+  <div class="fs-row"><span class="fs-k">Who trades</span>
+    <div class="fs-v"><span class="seg" id="fs-op"></span>
+      <div class="fs-why" id="fs-op-why"></div></div></div>
+  <div class="fs-row"><span class="fs-k">Risk profile</span>
+    <div class="fs-v"><span class="seg" id="fs-mode"></span>
+      <div class="fs-why" id="fs-mode-why"></div></div></div>
+  <div class="fs-row"><span class="fs-k">Scanning</span>
+    <div class="fs-v"><span id="fs-scan"></span>
+      <div class="fs-why"><button class="btn" id="fs-scan-now">Scan now</button></div></div></div>
+  <div class="fs-row"><span class="fs-k">Market</span>
+    <div class="fs-v"><span id="fs-market"></span>
+      <div class="fs-why">Quotes are 15-minute delayed.</div></div></div>
+</div>
+
+<!-- Symbol jump (M2-C4) — UI_V2_WIREFRAMES.md §1.6.
+     Anchored under the frame's context slot, 480px. `Enter` sets THE workspace
+     symbol — chart, chain, ticket, backtest and the frame at once. M1-C4 made
+     the three boxes renders of one context; this is the editor that context
+     was waiting for. -->
+<div id="symjump" class="symjump" role="dialog" aria-label="Change symbol" hidden>
+  <div class="sj-top"><span class="sj-slash">/</span>
+    <input id="symjump-input" type="text" role="combobox" aria-expanded="true"
+           aria-controls="symjump-list" aria-autocomplete="list"
+           autocomplete="off" spellcheck="false" placeholder="Symbol…"></div>
+  <div id="symjump-list" role="listbox" aria-label="Symbols" class="sj-list"></div>
+  <div class="sj-foot">Enter sets the workspace symbol everywhere.</div>
 </div>
 
 <!-- Pilot panel — SCAFFOLD (M2-C2). Structure, position, focus behaviour and
@@ -2631,6 +2718,9 @@ function renderStatus(s) {
   // One payload, two renderers, while both shells exist. The shell reads the
   // same `s` rather than fetching its own — see Shell.renderStatus.
   if (window.Shell) Shell.renderStatus(s);
+  // In place, never a dismissal: a mode change must leave the popover open
+  // because these are settings a user changes in pairs (§1.8).
+  if (window.FlightStatus) FlightStatus.refresh();
   $("ver-text").textContent = "v" + s.version;
   $("market-pill").textContent = s.market_open ? "market open" : "market closed";
   $("market-pill").className = "pill" + (s.market_open ? " open" : "");
@@ -4417,6 +4507,128 @@ window.Palette = (() => {
 })();
 $("sf-palette-hint").onclick = () => Palette.show();
 
+/* ── symbol jump (M2-C4) ───────────────────────────────────────────────────
+   UI_V2_WIREFRAMES.md §1.6, and the sentence that matters: "There is no other
+   symbol input in the product." M1-C4 made `#ch-symbol`, `#tk-symbol` and
+   `#bt-symbol` renders of one context; this is the editor. They stay on screen
+   for one more milestone because M3-M6 rebuild the destinations that own them
+   — deleting an input before its screen is rebuilt would leave a hole.
+
+   Searches through `/api/symbols/search`, the endpoint the watchlist already
+   uses, which reads the local 12k-symbol table — so it works offline and
+   returns instantly. No new endpoint, no second catalogue. */
+window.SymbolJump = (() => {
+  let open = false, rows = [], cursor = 0, seq = 0;
+
+  function place() {
+    const anchor = $("sf-context").hidden ? $("shell-frame") : $("sf-context");
+    const rect = anchor.getBoundingClientRect();
+    $("symjump").style.left = Math.max(8, rect.left) + "px";
+  }
+
+  async function search(q) {
+    const mine = ++seq;
+    if (!q) { rows = [{sym: Ctx.symbol(), name: "current symbol"}]; return draw(); }
+    try {
+      const d = await fetch("/api/symbols/search?q=" + encodeURIComponent(q))
+        .then(r => r.json());
+      if (mine !== seq) return;      // a slower answer must not overwrite a newer one
+      // `{results: [{symbol, name}]}` — the same shape the watchlist reads.
+      rows = (d.results || []).slice(0, 8)
+        .map(r => ({sym: r.symbol, name: r.name || ""}));
+    } catch (e) {
+      // Offline is a normal state for this control, not an error worth a toast.
+      rows = [{sym: q.toUpperCase(), name: "use anyway"}];
+    }
+    if (mine === seq) draw();
+  }
+
+  function draw() {
+    cursor = 0;
+    setHTML("symjump-list", rows.map((r, i) =>
+      `<div class="sj-row" role="option" data-i="${i}" aria-selected="${i === 0}">` +
+      `<span class="sj-sym">${esc(r.sym)}</span>` +
+      `<span class="sj-name">${esc(r.name || "")}</span>` +
+      `<button class="sj-watch" data-watch="${esc(r.sym)}">watch</button></div>`).join("") ||
+      `<div class="sj-row">No match.</div>`);
+    document.querySelectorAll("#symjump-list .sj-row").forEach(el => {
+      el.onmousedown = e => {
+        if (e.target.dataset.watch) return;
+        e.preventDefault(); pick(+el.dataset.i);
+      };
+    });
+    // "[watch] adds to the watchlist WITHOUT leaving the current destination."
+    document.querySelectorAll("#symjump-list [data-watch]").forEach(b => {
+      b.onclick = async e => {
+        e.preventDefault(); e.stopPropagation();
+        // `{text}`, not `{symbol}`: the endpoint parses a free-form list,
+        // and it is the watchlist's vocabulary, not a second one.
+        await post("/api/watchlist/add", {text: b.dataset.watch});
+        b.textContent = "added";
+        Shell.announce(b.dataset.watch + " added to the watchlist");
+      };
+    });
+    mark();
+  }
+
+  function mark() {
+    document.querySelectorAll("#symjump-list .sj-row").forEach((el, i) =>
+      el.setAttribute("aria-selected", String(i === cursor)));
+  }
+
+  function pick(i) {
+    const row = rows[i];
+    if (!row) return;
+    hide();
+    // ONE setter. Everything downstream — chart, chain, ticket, backtest, the
+    // frame — is already a render of this value (M1-C4/C5).
+    Ctx.setSymbol(row.sym);
+    loadChart(row.sym);
+    Shell.announce("Symbol set to " + Ctx.symbol());
+  }
+
+  function show() {
+    if (!window.Shell || !Shell.enabled() || open) return;
+    open = true;
+    place();
+    $("symjump").hidden = false;
+    const input = $("symjump-input");
+    input.value = "";
+    search("");
+    input.focus();
+  }
+
+  function hide() {
+    if (!open) return;
+    open = false;
+    $("symjump").hidden = true;
+  }
+
+  $("symjump-input").addEventListener("input", e => search(e.target.value.trim()));
+  $("symjump-input").addEventListener("keydown", e => {
+    if (e.key === "ArrowDown") { e.preventDefault(); cursor = Math.min(cursor + 1, rows.length - 1); mark(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); cursor = Math.max(cursor - 1, 0); mark(); }
+    else if (e.key === "Enter") { e.preventDefault(); pick(cursor); }
+    else if (e.key === "Escape") { e.preventDefault(); hide(); $("sf-context").focus(); }
+  });
+  document.addEventListener("mousedown", e => {
+    if (open && !$("symjump").contains(e.target) && e.target !== $("sf-context")) hide();
+  });
+
+  return {show, hide, isOpen: () => open};
+})();
+$("sf-context").onclick = () => SymbolJump.show();
+
+/* `/` opens it from anywhere EXCEPT a text input — otherwise it eats the
+   slash in a date, a note or a search box (§1.6). */
+document.addEventListener("keydown", e => {
+  if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (["INPUT", "TEXTAREA", "SELECT"].includes(e.target.tagName)) return;
+  if (!window.Shell || !Shell.enabled()) return;
+  e.preventDefault();
+  SymbolJump.show();
+});
+
 /* Ctrl+K from anywhere, including from inside a text input — a palette you
    cannot reach while typing a symbol is a palette you stop reaching for. */
 document.addEventListener("keydown", e => {
@@ -4426,12 +4638,92 @@ document.addEventListener("keydown", e => {
   }
 });
 
-/* Flight Status is C5's; the palette needs the opener to exist now, and a
-   stub that silently did nothing would be a command that lies. */
-function openFlightStatus() {
-  const btn = $("sf-status");
-  if (btn) btn.click();
-}
+/* ── Flight Status (M2-C5) ─────────────────────────────────────────────────
+   UI_V2_WIREFRAMES.md §1.8. The header's eight controls end here: the two mode
+   segments, the market pill, the cycle pill, Scan now and the PAPER badge all
+   become one button that opens one popover.
+
+   **The two explanatory sentences are the point of the component.** Each axis
+   states that it does not affect the other — the orthogonality invariant
+   `CLAUDE.md` requires in code, finally visible to the user. They are not
+   decoration and must not be removed for tidiness, and no convenience may be
+   added here that couples the axes.
+
+   It writes through the SAME handlers the legacy segments use, so the two
+   controls cannot drift: there is one way to change a mode, and this is a
+   second view of it. */
+window.FlightStatus = (() => {
+  let open = false;
+
+  function render() {
+    const s = lastStatus;
+    if (!s) return;
+    setHTML("fs-op", [["ai", "AI trades"], ["human", "You trade"]].map(([v, label]) =>
+      `<button data-op="${v}" class="${s.operating_mode === v ? "active" : ""}">${label}</button>`).join(""));
+    $("fs-op-why").textContent = s.operating_mode === "ai"
+      ? "The AI opens positions on its own. Does not change your risk profile."
+      : "You open positions; the AI scans and advises. Does not change your risk profile.";
+
+    setHTML("fs-mode", [["conservative", "Conservative"], ["high_risk", "High-Risk"],
+                        ["custom", "Custom"]].map(([v, label]) =>
+      `<button data-mode="${v}" class="${s.trading_mode === v ? "active" : ""}">${label}</button>`).join(""));
+    $("fs-mode-why").textContent =
+      "Sets size and confidence thresholds. Does not change who trades." +
+      (s.trading_mode === "high_risk"
+        ? " High-Risk sizes larger and accepts lower-confidence setups."
+        : "");
+
+    $("fs-account").textContent =
+      `Started at ${fmt$(s.account.starting_balance)} · now ${fmt$(s.account.equity)}.`;
+    const scan = s.scan || {};
+    $("fs-scan").textContent = scan.running
+      ? `scanning ${scan.done}/${scan.total}…`
+      : s.last_cycle_ts
+        ? "last scan " + new Date(s.last_cycle_ts).toLocaleTimeString()
+        : "no scan yet";
+    $("fs-scan-now").disabled = !!scan.running;
+    $("fs-market").textContent = s.market_open ? "Market open" : "Market closed";
+
+    // Delegated to the LEGACY handlers rather than reimplemented. One way to
+    // change a mode; this popover is a second view of it, not a second path.
+    document.querySelectorAll("#fs-op button").forEach(b => b.onclick = () => {
+      const legacy = document.querySelector(`#op-seg button[data-op="${b.dataset.op}"]`);
+      if (legacy) legacy.click();
+    });
+    document.querySelectorAll("#fs-mode button").forEach(b => b.onclick = () => {
+      const legacy = document.querySelector(`#mode-seg button[data-mode="${b.dataset.mode}"]`);
+      if (legacy) legacy.click();
+    });
+  }
+
+  function show() {
+    open = true;
+    $("flight-status").hidden = false;
+    $("sf-status").setAttribute("aria-expanded", "true");
+    render();
+  }
+
+  function hide() {
+    open = false;
+    $("flight-status").hidden = true;
+    $("sf-status").setAttribute("aria-expanded", "false");
+  }
+
+  // "Changing Who trades or Risk profile applies immediately and DOES NOT
+  // CLOSE the popover — because these are settings a user may change in
+  // pairs." So the refresh is a re-render in place, never a dismissal.
+  function refresh() { if (open) render(); }
+
+  $("sf-status").onclick = () => (open ? hide() : show());
+  $("fs-scan-now").onclick = () => $("scan-btn").click();
+  document.addEventListener("mousedown", e => {
+    if (open && !$("flight-status").contains(e.target) && e.target !== $("sf-status"))
+      hide();
+  });
+
+  return {show, hide, refresh, isOpen: () => open};
+})();
+function openFlightStatus() { FlightStatus.show(); }
 
 $("shell-toggle").onchange = e => Shell.setEnabled(e.target.checked);
 $("sf-pilot").onclick = () => Shell.togglePilot();
