@@ -14,7 +14,8 @@ import pytest
 
 from optionspilot.update import installer as installer_mod
 from optionspilot.update.installer import (
-    SILENT_FLAGS, InstallerLauncher, classify_trust_status, verify_authenticode,
+    RELAUNCH_FLAG, SILENT_FLAGS, InstallerLauncher, classify_trust_status,
+    verify_authenticode,
 )
 from optionspilot.update.models import SignatureVerdict, UpdateError
 
@@ -75,13 +76,126 @@ class TestLaunch:
         launcher = InstallerLauncher(spawn=spawn, backup=lambda p, l: None)
         cmd = launcher.launch(_installer(tmp_path), restart=True,
                               exe_path="C:/Program Files/OptionsPilot/OptionsPilot.exe")
-        assert "/RESTARTAPPLICATIONS" in cmd
+        assert RELAUNCH_FLAG in cmd
 
     def test_no_restart_flag_without_exe(self, tmp_path):
         spawn = _Spawn()
         launcher = InstallerLauncher(spawn=spawn, backup=lambda p, l: None)
         cmd = launcher.launch(_installer(tmp_path), restart=True, exe_path=None)
-        assert "/RESTARTAPPLICATIONS" not in cmd
+        assert RELAUNCH_FLAG not in cmd
+
+
+class TestRelaunchIsTheInstallersJob:
+    """V0.12.3. The update installed correctly and the app never came back.
+
+    Three mechanisms could have relaunched it and none did: the `[Run]` entry
+    carries `skipifsilent` and every update is `/VERYSILENT`; Restart Manager
+    was told `RestartApplications=no` and in any case can only restart a process
+    it closed, while this app closes ITSELF; and `relaunch_app()` is called by
+    nothing in production.
+
+    The installer is now the single authority, because it is the only
+    participant that knows when the file replacement finished — the app cannot
+    know, since it has to be dead for the install to happen at all.
+    """
+
+    @staticmethod
+    def _cmd(tmp_path, **kw):
+        launcher = InstallerLauncher(spawn=_Spawn(), backup=lambda p, l: None)
+        return launcher.launch(_installer(tmp_path), **kw)
+
+    def test_the_updater_asks_for_a_relaunch(self, tmp_path):
+        cmd = self._cmd(tmp_path, restart=True, exe_path="C:/x/OptionsPilot.exe")
+        assert RELAUNCH_FLAG in cmd
+        assert cmd.count(RELAUNCH_FLAG) == 1
+
+    def test_restartapplications_is_never_emitted(self, tmp_path):
+        """It drove Restart Manager, which cannot restart a process it did not
+        close — and if RM ever did close this app, `WM_CLOSE` would land in
+        `on_closing`, which cancels every close it did not sanction. That is
+        the V0.12.1 hang re-entered through another door, so the flag must not
+        come back on ANY branch."""
+        for kwargs in ({"restart": True, "exe_path": "C:/x/OptionsPilot.exe"},
+                       {"restart": True, "exe_path": None},
+                       {"restart": False}):
+            assert "/RESTARTAPPLICATIONS" not in self._cmd(tmp_path, **kwargs)
+
+    def test_a_silent_install_that_did_not_ask_gets_no_relaunch(self, tmp_path):
+        """`restart=False` is the caller saying "install, do not come back".
+        The installer must not decide otherwise, which is exactly what the
+        `Check:` on the second `[Run]` entry enforces."""
+        cmd = self._cmd(tmp_path, restart=False)
+        assert RELAUNCH_FLAG not in cmd
+        for flag in SILENT_FLAGS:
+            assert flag in cmd
+
+    def test_a_dev_checkout_asks_for_nothing(self, tmp_path):
+        """No frozen exe means the installed app is not what is running, so
+        relaunching it would start a build the developer did not ask for."""
+        assert RELAUNCH_FLAG not in self._cmd(tmp_path, restart=True,
+                                              exe_path=None)
+
+    def test_the_flag_is_ours_and_not_an_inno_one(self):
+        """Inno ignores parameters it does not recognise, which is what lets a
+        script define its own — but only if it stays spelled the way
+        `RelaunchRequested` in OptionsPilot.iss compares it."""
+        assert RELAUNCH_FLAG == "/RELAUNCH"
+        assert RELAUNCH_FLAG not in SILENT_FLAGS
+
+
+class TestTheInstallerScriptHoldsUpItsEnd:
+    """The switch is one fact written in two languages, and nothing else here
+    can check the second one.
+
+    `verify.ps1` never compiles the `.iss` — Inno is not a build dependency of
+    the test suite — so a rename on either side would ship a silent no-op: the
+    updater passing a switch nobody reads, the app never coming back, and every
+    Python test above still green. That is precisely the drift this codebase
+    keeps paying for, so the two halves are asserted against each other as
+    text. It proves the contract, not the behaviour; the behaviour needs a real
+    build (see docs/RELEASE.md).
+    """
+
+    @staticmethod
+    def _script() -> str:
+        path = Path(__file__).resolve().parents[1] / "installer" / "OptionsPilot.iss"
+        assert path.is_file(), f"installer script missing at {path}"
+        return path.read_text(encoding="utf-8")
+
+    def test_the_script_reads_the_switch_the_app_sends(self):
+        script = self._script()
+        assert "function RelaunchRequested" in script
+        assert f"'{RELAUNCH_FLAG}'" in script, (
+            f"OptionsPilot.iss does not compare against {RELAUNCH_FLAG} — the "
+            f"updater would pass a switch nothing reads")
+
+    def test_the_relaunch_entry_is_gated_and_runs_as_the_original_user(self):
+        """Ungated it would launch after every silent install; elevated it
+        would resolve {localappdata} for whoever approved UAC, which is a
+        different data directory than the user's own."""
+        line = next(ln for ln in self._script().splitlines()
+                    if ln.startswith("Filename:") and "RelaunchRequested" in ln)
+        assert "Check: RelaunchRequested" in line
+        assert "runasoriginaluser" in line
+        assert "nowait" in line, "Setup would block on the app it just started"
+        assert "skipifsilent" not in line, (
+            "the whole point of this entry is that it DOES run silently")
+
+    def test_the_interactive_entry_is_untouched(self):
+        """The Finished-page checkbox keeps `postinstall skipifsilent`: an
+        interactive install must behave exactly as it did before."""
+        line = next(ln for ln in self._script().splitlines()
+                    if ln.startswith("Filename:") and "Description:" in ln)
+        assert "postinstall" in line and "skipifsilent" in line
+        assert "Check:" not in line
+
+    def test_restart_manager_is_still_told_not_to_restart(self):
+        """`CloseApplications=yes` keeps an interactive upgrade able to replace
+        files; `RestartApplications=no` keeps RM out of the relaunch decision,
+        which now has exactly one owner."""
+        script = self._script()
+        assert "RestartApplications=no" in script
+        assert "CloseApplications=yes" in script
 
     def test_missing_installer_raises(self, tmp_path):
         launcher = InstallerLauncher(spawn=_Spawn(), backup=lambda p, l: None)

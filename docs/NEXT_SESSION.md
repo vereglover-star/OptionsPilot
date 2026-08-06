@@ -11,13 +11,17 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 
 **Start UI V2 · M3 — Home**, the first Flight Deck destination.
 `docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
-`verify.ps1` is green across **16 gates** at 2636 tests.
+`verify.ps1` is green across **16 gates** at 2645 tests.
 
-**Owed first, and it needs a human:** the updater fix (`76c1059` and its
-follow-up) sits after the `v0.12.0` tag, so the released build still hangs on
-"Installing…". Nothing in CI launches the packaged desktop shell, so the only
-proof is `.\scripts\build.ps1`, installing it, and running an update against a
-newer release. Everything else about the fix is covered by tests.
+**Owed first, and it needs a human:** the updater's *relaunch* fix (v0.12.3,
+unreleased) has no automated proof and cannot have one — `verify.ps1` does not
+compile the `.iss`, so the Python and Inno halves are only checked against each
+other as text. Release it, then run the three cases in `docs/AUTO_UPDATER.md` §7
+(interactive install, silent update, silent install without `/RELAUNCH`).
+
+The shutdown fix that preceded it (`76c1059`, v0.12.1) **is** confirmed on a
+real packaged build: v0.12.1 → v0.12.2 closed cleanly, installed, and preserved
+data. Only the relaunch was missing.
 
 Three things M3 inherits and must honour:
 

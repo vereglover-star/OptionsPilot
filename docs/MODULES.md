@@ -429,8 +429,11 @@ by import, so it sits **below** the coach in the layering.
   before execution (exists/name/size[/hash]); Authenticode slots in here.
 - `installer.InstallerLauncher` — `create_pre_update_backup()` (mandatory;
   `create_backup(paths, "pre-update")`), `launch(path)` with
-  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL [/RESTARTAPPLICATIONS]`,
-  `relaunch_app()` fallback.
+  `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL [/RELAUNCH]`. `/RELAUNCH`
+  is our own switch (`RELAUNCH_FLAG`), read by `RelaunchRequested` in
+  `installer/OptionsPilot.iss`; the installer owns relaunching because it is
+  the only participant that knows when the file replacement finished.
+  `relaunch_app()` is an unused fallback — production calls it nowhere.
 - `service.UpdateService` — facade + thread-safe `UpdatePhase` state machine;
   `maybe_check_on_launch()` (background, never blocks), `check_now()`,
   `start_download()`/`cancel_download()`, `apply_update()` (validate → backup

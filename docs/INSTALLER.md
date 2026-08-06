@@ -37,9 +37,23 @@ Restart Manager (`CloseApplications=yes`) closes it so its files can be replaced
 installer: the in-app updater (`docs/AUTO_UPDATER.md`) downloads the newer
 `OptionsPilot-Setup-vX.Y.Z.exe` from GitHub Releases, backs up the user's data
 (`create_backup(paths, "pre-update")`), and runs it silently
-(`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /RESTARTAPPLICATIONS`) —
-so this script's unattended behavior is part of the update contract. Keep the
-output filename pattern and the silent-install semantics stable.
+(`/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /RELAUNCH`) — so this
+script's unattended behavior is part of the update contract. Keep the output
+filename pattern and the silent-install semantics stable.
+
+**`/RELAUNCH` is ours, not Inno's** (V0.12.3). Inno ignores parameters it does
+not recognise, which is what lets the script define one: `RelaunchRequested` in
+`[Code]` scans the command line for it, and a second `[Run]` entry with
+`Check: RelaunchRequested` starts the app after a silent update. It carries
+`runasoriginaluser` because Setup runs elevated, and without it the app would
+resolve `{localappdata}` for whichever account approved UAC — a different data
+directory than the user's own. Interactive installs are untouched: they still
+use the Finished-page checkbox, which keeps `postinstall skipifsilent`.
+
+`RestartApplications=no` stays. Restart Manager can only restart a process it
+closed, and on the update path the app closes *itself* before Setup ever scans;
+the flag `/RESTARTAPPLICATIONS` was passed for three releases and could never
+have worked. Relaunching now has exactly one owner.
 
 ## Uninstall behavior
 

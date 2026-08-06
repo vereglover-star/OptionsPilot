@@ -94,7 +94,8 @@ App launch (desktop, run_loop=True)
                     │
                     ▼
         Inno Setup upgrades C:\Program Files\OptionsPilot ONLY
-        (%LOCALAPPDATA%\OptionsPilot untouched) → /RESTARTAPPLICATIONS relaunches
+        (%LOCALAPPDATA%\OptionsPilot untouched) → its [Run] entry relaunches
+        the app, gated on our /RELAUNCH switch (docs/INSTALLER.md)
 ```
 
 ---
@@ -237,7 +238,9 @@ installer. `tests/update_helpers.py` provides an in-memory transport (`FakeOpene
 - `test_update_checker.py` — availability, frequency throttling, offline-quiet.
 - `test_update_downloader.py` — streaming, progress, cancellation, atomic finalize.
 - `test_update_validation.py` — size/hash/name/missing/empty.
-- `test_update_installer.py` — silent flags, restart, mandatory backup, error paths.
+- `test_update_installer.py` — silent flags, relaunch, mandatory backup, error
+  paths, and the `/RELAUNCH` contract read back out of `installer/OptionsPilot.iss`
+  (the two halves are one fact in two languages and nothing compiles the `.iss`).
 - `test_update_service.py` — full check→download→verify→backup→install flow.
 - `test_update_endpoints.py` — `/api/update/*` via `TestClient`, fake-wired.
 
@@ -252,6 +255,17 @@ or via a tagged CI release:
 4. Confirm the new version runs and **all data survived** (journal, paper
    account, coach history, settings, watchlists, backups).
 5. Confirm a `pre-update` backup exists under `%LOCALAPPDATA%\OptionsPilot\backups`.
+
+**Relaunch (V0.12.3).** Three cases, because the relaunch is gated and the gate
+is the whole feature. Nothing automated covers any of them — `verify.ps1` does
+not compile the `.iss`, so the Python and Inno halves are only checked against
+each other as text (`tests/test_update_installer.py`).
+
+| Run | Expect |
+|---|---|
+| Interactive: run the setup exe by double-clicking | Finished page shows **Launch OptionsPilot**, checked; unchecking it means no launch. Unchanged from before. |
+| Silent update: the real in-app **Install & Restart** | App closes, installer runs unattended, **app reappears on its own** at the new version — and in Task Manager runs as *you*, not elevated. |
+| Silent without the switch: `OptionsPilot-Setup-vX.Y.Z.exe /VERYSILENT` from a shell | Installs and **does not launch anything**. |
 
 ---
 

@@ -4,6 +4,49 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [2026-08-06] — Fix: the app did not relaunch after an update (v0.12.3)
+
+*The last step of the updater. Reported from a real packaged install: v0.12.1
+detected v0.12.2, downloaded it, closed cleanly, installed successfully, data
+preserved — and then never came back.*
+
+**Three mechanisms could have relaunched it and none did.** The installer's one
+`[Run]` entry carries `skipifsilent`, and every update runs `/VERYSILENT`, so it
+is skipped by construction. `RestartApplications=no` sits in `[Setup]` with a
+comment saying "don't auto-restart it afterwards". And `relaunch_app()`, whose
+own docstring calls itself the fallback for when the installer didn't, is called
+by **nothing in production** — written and never wired, which is this codebase's
+recorded failure mode in a new place.
+
+`/RESTARTAPPLICATIONS` was being passed all along and could never have worked.
+It drives Restart Manager, and **RM can only restart a process it closed
+itself** — this updater guarantees it closes none, because the app shuts itself
+down. The other timing is worse, not better: RM closes a GUI app with
+`WM_CLOSE`, which lands in `on_closing`, which cancels every close it did not
+sanction. That is the V0.12.1 hang re-entered through a different door.
+
+**The installer is now the single owner**, because it is the only participant
+that knows when the file replacement finished — the app cannot know, since it
+has to be dead for the install to happen at all. `launch()` passes our own
+`/RELAUNCH` switch (Inno ignores parameters it does not recognise, which is what
+lets a script define one), a `RelaunchRequested` function in `[Code]` reads it,
+and a second `[Run]` entry gated on it starts the app. Interactive installs are
+untouched: the Finished-page checkbox keeps `postinstall skipifsilent`, and a
+silent install that did not ask still launches nothing.
+
+The new entry carries **`runasoriginaluser`**, which is load-bearing rather than
+tidy: Setup runs elevated, and without it the relaunched app would resolve
+`{localappdata}` for whichever account approved UAC — a different data directory
+than the user's own, which would look like every setting and trade vanishing.
+
+Nine tests. Four pin the command line, including one asserting
+`/RESTARTAPPLICATIONS` is emitted on **no** branch. Five read the `.iss` and
+assert the two halves still agree, because `verify.ps1` does not compile it:
+a rename on either side would ship a silent no-op — the updater passing a switch
+nobody reads, the app never coming back, and every other test still green.
+16 gates, 2,645 tests. The behaviour itself still needs a real packaged build;
+`docs/AUTO_UPDATER.md` §7 carries the three-case checklist.
+
 ## [2026-08-06] — About dialog wording cleanup (v0.12.2)
 
 *Small UI polish release. No functional or architectural changes.*

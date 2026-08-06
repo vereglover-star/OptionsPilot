@@ -4,25 +4,36 @@ Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
-`V3-ui`, committed `b380141`…`12510b3`). **2636 tests.** Full detail:
+`V3-ui`, committed `b380141`…`12510b3`). **2645 tests.** Full detail:
 **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0, M1 and M2 are complete and nothing is
-in progress.** `verify.ps1` is green across all **16** gates at **2636 tests**,
+in progress.** `verify.ps1` is green across all **16** gates at **2645 tests**,
 with the new shell ON by default.
 
-**One bug fix sits on the branch after the `v0.12.0` tag and is therefore not
-in the released build**: the in-app updater hung on "Installing…" because its
-shutdown hook destroyed the window directly, and `_DesktopController.on_closing`
-cancels every close it did not sanction — so the update silently became a
-hide-to-tray, the process kept the exe locked, and the installer could never
-replace it. `76c1059` routes the hook through `exit()`, the one owner of
-`allow_close`; the follow-up adds end-to-end coverage over the composed
-application and two source-level rules that keep the audit from quietly ceasing
-to be true. **It has not been confirmed on a packaged install** — nothing in CI
-launches the desktop shell, so that check is owed to a real build.
+**The updater took two fixes and the second is not yet released.** v0.12.3
+(unreleased) makes the *installer* the single owner of relaunching after an
+update: it passes our own `/RELAUNCH` switch, `RelaunchRequested` in
+`installer/OptionsPilot.iss` reads it, and a second `[Run]` entry carrying
+`runasoriginaluser` starts the app. Before it, three candidate mechanisms all
+sat inert — `[Run]` skipped by `skipifsilent` under `/VERYSILENT`,
+`RestartApplications=no`, and `relaunch_app()` called by nothing — so an update
+installed correctly and the app never came back. `/RESTARTAPPLICATIONS` is gone;
+Restart Manager can only restart a process it closed, and this app closes
+itself. **Confirmed on a real packaged build only up to the install**; the
+relaunch itself still needs one (`docs/AUTO_UPDATER.md` §7 has the three cases).
+
+The first fix, `76c1059`, shipped in v0.12.1 and is **confirmed working on a
+real packaged build** (v0.12.1 → v0.12.2, 2026-08-06): the updater hung on
+"Installing…" because its shutdown hook destroyed the window directly, and
+`_DesktopController.on_closing` cancels every close it did not sanction — so the
+update silently became a hide-to-tray, the process kept the exe locked, and the
+installer could never replace it. It now routes through `exit()`, the one owner
+of `allow_close`. The measured result: app closed correctly, installer
+completed, new version present, data and settings preserved. Only the relaunch
+was missing, which is what v0.12.3 above fixes.
 
 ### The UI V2 redesign (2026-08-05 —)
 

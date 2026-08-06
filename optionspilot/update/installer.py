@@ -18,8 +18,11 @@ The apply sequence, in order, matching the milestone's mandate:
      touches ``%LOCALAPPDATA%\\OptionsPilot`` (guaranteed by the storage split,
      not by this code).
   4. **Restart.** The installer is told to relaunch the app on completion via
-     ``/RESTARTAPPLICATIONS``, and we also hand it the exe path so a restart
-     happens whether the app was already closed or Inno closes it.
+     our own ``/RELAUNCH`` switch, which ``installer/OptionsPilot.iss`` reads in
+     a ``Check:`` on a second ``[Run]`` entry. The installer is the authority
+     here because it is the only participant that knows when the file
+     replacement finished — the app cannot know, since it must be dead for the
+     install to proceed at all.
 
 The current app process should exit shortly after a successful launch so the
 installer can replace the running exe; the service coordinates that.
@@ -41,9 +44,28 @@ from optionspilot.update.models import SignatureVerdict, UpdateError
 log = get_logger("update")
 
 # Inno Setup unattended flags. VERYSILENT = no wizard + no progress window;
-# SUPPRESSMSGBOXES = auto-answer message boxes; NORESTART = never reboot Windows;
-# NOCANCEL = the user can't half-cancel a silent upgrade mid-flight.
+# SUPPRESSMSGBOXES = auto-answer message boxes; NORESTART = never reboot Windows
+# (nothing to do with restarting the app); NOCANCEL = the user can't half-cancel
+# a silent upgrade mid-flight.
 SILENT_FLAGS = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOCANCEL"]
+
+#: Our own switch, read by `RelaunchRequested` in `installer/OptionsPilot.iss`.
+#: NOT an Inno Setup flag — Inno ignores parameters it does not recognise, which
+#: is what lets a script define one.
+#:
+#: It replaces `/RESTARTAPPLICATIONS`, which was passed here for three releases
+#: and could never have worked. That flag drives Restart Manager, and **RM can
+#: only restart a process it closed itself**. This updater guarantees it closes
+#: none: `apply_update` spawns Setup and the app then shuts *itself* down, so by
+#: the time RM scans there is nothing registered. Worse if the timing went the
+#: other way — RM closes a GUI app with `WM_CLOSE`, which lands in
+#: `_DesktopController.on_closing`, which cancels every close it did not
+#: sanction. That is the V0.12.1 hang, re-entered through a different door.
+#:
+#: So the installer relaunches from `[Run]` instead, which is also the only
+#: participant that knows when the file replacement actually finished. The app
+#: cannot know: it is required to be dead for the install to proceed.
+RELAUNCH_FLAG = "/RELAUNCH"
 
 # spawn(cmd: list[str]) -> None   — start the installer, do not wait
 Spawn = Callable[[list[str]], object]
@@ -302,9 +324,10 @@ class InstallerLauncher:
         cmd = [str(installer_path), *SILENT_FLAGS]
         exe = exe_path if exe_path is not None else app_executable()
         if restart and exe:
-            # Inno relaunches the app it closed; handing it the exe makes the
-            # restart explicit and robust even if the app was already closed.
-            cmd.append("/RESTARTAPPLICATIONS")
+            # Ask the installer to start the app again once it has finished
+            # replacing it. Still gated on `exe`: no frozen exe means a dev
+            # checkout, where the installed app is not what is running.
+            cmd.append(RELAUNCH_FLAG)
         try:
             self._spawn(cmd)
         except OSError as exc:

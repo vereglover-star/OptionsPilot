@@ -64,7 +64,10 @@ SetupIconFile=..\assets\optionspilot.ico
 WizardStyle=modern
 
 ; Close a running OptionsPilot (via Restart Manager) so an upgrade can replace
-; its files, and don't auto-restart it afterwards.
+; its files. Restart Manager must NOT restart it: RM only restarts what it
+; closed, and on the update path the app closes itself before Setup ever scans
+; (optionspilot\update\installer.py). Relaunching is done by the [Run] entry
+; below instead, gated on our own /RELAUNCH switch.
 CloseApplications=yes
 RestartApplications=no
 
@@ -95,9 +98,34 @@ Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"; IconFilename
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Interactive install: the "Launch OptionsPilot" checkbox on the Finished page.
+; `skipifsilent` keeps it off the silent path entirely — which is why an update
+; never relaunched anything before v0.12.3.
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; Update install: relaunch only when the updater asked for it by passing
+; /RELAUNCH. `runasoriginaluser` is load-bearing, not tidiness — Setup runs
+; elevated (PrivilegesRequired=admin), and without it the app would inherit
+; admin and AppPaths would resolve {localappdata} for whichever account
+; approved UAC, i.e. a DIFFERENT data directory than the user's own.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: RelaunchRequested
 
 [Code]
+{ True when /RELAUNCH was passed on the command line. Inno ignores parameters
+  it does not recognise, which is what lets a script define its own; the app
+  passes this one from InstallerLauncher.launch (RELAUNCH_FLAG). }
+function RelaunchRequested: Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+end;
+
 { Uninstall-time prompt (Step 4). Ask whether to also remove personal data,
   defaulting to NO so an accidental uninstall never destroys the paper account,
   journal, coach reviews, settings, watchlists, or backups. In silent uninstall
