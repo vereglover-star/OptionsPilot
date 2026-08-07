@@ -48,6 +48,23 @@ def ready(page, timeout: int = 25000) -> None:
         timeout=timeout)
 
 
+def home_ready(page, timeout: int = 25000) -> None:
+    """Block until the landing destination has rendered something.
+
+    Five suites used `#hero` for this — the legacy dashboard's top block —
+    which M3-C5 moved inside `#home-legacy` and hid under `body.shell-v2`.
+    All five broke at once, which is the same shape of failure M2-C9 fixed by
+    replacing 53 `data-tab` literals with this module: a selector that means
+    "the app has booted" belongs in one place, or the next milestone that
+    touches the landing page breaks every suite again.
+
+    Expressed as "either Home is up" so it holds on both sides of the flag,
+    exactly like `ready()` above, and so M3-C10's deletion of `#hero` is not a
+    sixth simultaneous breakage.
+    """
+    page.wait_for_selector("#home-metrics, #hero", timeout=timeout)
+
+
 def destination_of(page, tab: str) -> str:
     """Which destination hosts a legacy section, per the app's own registry."""
     return page.evaluate(

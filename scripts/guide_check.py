@@ -35,7 +35,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from shell_nav import goto, shell_on, visible as reachable  # noqa: E402
+from shell_nav import goto, home_ready, shell_on, visible as reachable  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -703,7 +703,7 @@ def check_empty_states(page, c: Checks) -> None:
 
 def check_recommendations(page, base: str, c: Checks) -> None:
     page.reload()
-    page.wait_for_selector("#hero", timeout=20000)
+    home_ready(page, 20000)
     dismiss_welcome(page)
     page.wait_for_timeout(700)
     # Read the API only AFTER the page has settled: dismissing the welcome
@@ -789,7 +789,7 @@ def check_accessibility(page, base: str, c: Checks) -> None:
     page.wait_for_timeout(200)
 
     page.reload()
-    page.wait_for_selector("#hero", timeout=20000)
+    home_ready(page, 20000)
     dismiss_welcome(page)
     page.wait_for_timeout(600)
     c.check("reduced motion: it survives a reload",
@@ -1016,7 +1016,7 @@ def main() -> int:
                 status=200, content_type="application/json",
                 body=json.dumps(CHAIN)))
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=25000)
+            home_ready(page, 25000)
             page.wait_for_timeout(600)
             run_checks(page, base, c)
             browser.close()

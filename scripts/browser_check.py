@@ -27,7 +27,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from shell_nav import goto, shell_on  # noqa: E402
+from shell_nav import goto, home_ready, shell_on  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 # Every legacy section, including the one the shell added (M2-C9). `portfolio`
@@ -91,7 +91,7 @@ def main() -> int:
             page.on("pageerror", lambda e: errors.append(str(e)))
 
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             # A scratch profile has never been onboarded, so this IS the real
             # first-launch path (V0.6.1). Dismissing it here is coverage, not a
             # workaround: if the welcome dialog ever failed to close, every

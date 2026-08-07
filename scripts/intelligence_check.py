@@ -33,7 +33,7 @@ import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from shell_nav import goto  # noqa: E402
+from shell_nav import goto, home_ready  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -497,7 +497,7 @@ def main() -> int:
                     lambda m: console.append(m.text) if m.type == "error" else None)
             page.on("pageerror", lambda e: console.append(str(e)))
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=25000)
+            home_ready(page, 25000)
             run_checks(page, base, c)
             browser.close()
 

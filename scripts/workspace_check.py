@@ -33,7 +33,7 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from shell_nav import goto, ready  # noqa: E402
+from shell_nav import goto, home_ready, ready  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -554,7 +554,7 @@ def main() -> int:
             page.on("pageerror", lambda e: console.append(str(e)))
             page.route("**/api/chain*", serve_chain)
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=25000)
+            home_ready(page, 25000)
             page.wait_for_timeout(1200)
             run_checks(page, base, c)
             browser.close()
