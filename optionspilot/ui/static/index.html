@@ -1540,8 +1540,30 @@ body.shell-v2 .home-legacy { display:none; }
 /* H2 — the five compartments. `auto-fit` with a floor rather than a fixed
    five columns, so the responsive steps in §2.12 are a consequence of the
    grid rather than four hand-written breakpoints that can disagree. */
-.home-metrics { grid-template-columns:repeat(auto-fit, minmax(168px, 1fr));
+/* `auto-fit` with a floor WIDE ENOUGH FOR THE WIDEST VALUE. The floor was
+   168px and at 1024 that fits five columns of ~190px — into which a
+   `text-display` account value does not go, so "$24,933.53" ran straight into
+   TODAY. Measured, not guessed: the display step is 36px and a ten-character
+   tabular figure needs ~215px with the cell's padding. The grid now wraps to
+   two rows instead of overflowing.
+
+   NOTE — §2.12 prescribes dropping to four metrics at 1280 and three plus a
+   `[More]` at 1024. Wrapping is a deliberate deviation: this milestone was
+   told not to remove information, and an overflow control hides two figures
+   behind a click on exactly the screens where the user has least room to go
+   looking. Recorded in the M3 report. */
+.home-metrics { grid-template-columns:repeat(auto-fit, minmax(224px, 1fr));
   margin:0; }
+/* Below 1280 the cluster wraps to two rows, and CSS grid cannot tell a cell
+   that starts a row from one that continues it — so a left rule appears at the
+   start of row two, drawn against nothing. The dividers come off entirely at
+   that width and spacing carries the separation, which the direction already
+   sanctions: space and surface each do their own job. */
+@media (max-width:1279px) {
+  .home-val-lead { font-size:var(--text-title); }
+  .home-metrics .ins-cell + .ins-cell { border-left:0; }
+  .home-metrics .ins-cell { padding-left:0; padding-right:var(--space-5); }
+}
 .home-metrics dt { margin:0; }
 .home-metrics dd { margin:var(--space-2) 0 0; display:flex;
   flex-direction:column; gap:var(--space-1); }
@@ -2084,51 +2106,6 @@ body.shell-v2 .home-legacy { display:none; }
       </div>
     </div>
 
-    <div class="home-legacy">
-    <div class="hero" id="hero"></div>
-    <div class="cards" id="cards"></div>
-    </div>
-
-
-    <div class="home-legacy">
-    <div class="dash-grid">
-      <div class="dash-main">
-        <div class="panel">
-          <h2>Equity — session history</h2>
-          <svg class="chart" id="equity-chart" viewBox="0 0 960 200" preserveAspectRatio="none"></svg>
-          <div class="dash-empty" id="equity-hint">
-            <p>Equity history builds as scan cycles run.</p>
-            <button class="btn" onclick="$('scan-btn').click()">Run a scan now</button>
-          </div>
-        </div>
-        <div class="panel">
-          <h2>Open positions</h2>
-          <div id="positions"></div>
-        </div>
-        <div class="panel">
-          <h2>Watchlist — AI confidence</h2>
-          <div id="signals"></div>
-          <div class="hint">Yellow tick = required confidence for that symbol's setup
-          (fixed in Conservative Mode; adapts to setup quality in High-Risk Mode).
-          Hover a verdict line for the passed/failed confirmations.</div>
-        </div>
-      </div>
-      <div class="dash-side">
-        <div class="panel">
-          <h2>AI opportunities</h2>
-          <div id="dash-opps"></div>
-        </div>
-        <div class="panel">
-          <h2>Watchlist movers</h2>
-          <div id="dash-movers"></div>
-        </div>
-        <div class="panel">
-          <h2>Notifications</h2>
-          <div id="notifs"><div class="empty">Nothing yet.</div></div>
-        </div>
-      </div>
-    </div>
-    </div>
   </section>
 
   <!-- CHARTS (interactive workspace) -->
@@ -3245,152 +3222,10 @@ function renderStatus(s) {
       (s.risk.halt_until ? " (resumes " + new Date(s.risk.halt_until).toLocaleString() + ")"
                          : " — manual reset required");
 
-  const a = s.account, p = s.pnl;
-  const openPnl = s.positions.reduce((x, q) => x + q.unrealized, 0);
-  const dayTotal = p.today + openPnl;
-  setHTML("hero",
-    `<div><div class="lbl">Portfolio value</div><div class="eq">${fmt$(a.equity)}</div></div>
-     <div><div class="lbl">Today</div><div class="sub ${cls(dayTotal)}">${
-       dayTotal >= 0 ? "+" : ""}${fmt$(dayTotal)} ${
-       a.equity ? `(${(dayTotal / a.equity * 100).toFixed(2)}%)` : ""}</div></div>`);
-  setHTML("cards", [
-    ["Cash", fmt$(a.cash), ""],
-    ["P&L today", fmt$(p.today), cls(p.today)],
-    ["P&L this week", fmt$(p.week), cls(p.week)],
-    ["P&L this month", fmt$(p.month), cls(p.month)],
-    ["Open P&L", fmt$(openPnl), cls(openPnl)],
-  ].map(([k, v, c]) =>
-    `<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`).join(""));
-
-  drawEquity($("equity-chart"), s.equity_history.map(([t, e]) => [new Date(t), e]),
-             a.starting_balance);
-  $("equity-hint").style.display = s.equity_history.length > 1 ? "none" : "";
-  $("equity-chart").style.display = s.equity_history.length > 1 ? "" : "none";
-
-  // AI opportunities: strongest current signals, tradeable first
-  const opps = Object.entries(s.signals || {})
-    .map(([sym, sig]) => ({ sym, ...sig }))
-    .sort((x, y) => (y.accepted - x.accepted) || (y.confidence - x.confidence))
-    .slice(0, 5);
-  setHTML("dash-opps", opps.length === 0
-    ? `<div class="dash-empty"><p>${s.last_cycle_ts
-        ? "No signals from the last scan — the AI found nothing worth flagging."
-        : "No scan has run yet."}</p>
-       <button class="btn" onclick="$('scan-btn').click()">Scan the watchlist</button></div>`
-    : opps.map(o => {
-        const need = o.min_confidence_required;
-        const state = o.accepted ? `<span class="state ok">✓ tradeable</span>`
-          : need == null ? `<span class="state">not tradeable</span>`
-          : `<span class="state">needs ${need.toFixed(0)}%</span>`;
-        return `<div class="opp" onclick="openChart('${o.sym}')"
-          title="open ${o.sym} chart">
-          <span class="sym">${o.sym}</span>
-          <span class="chip ${o.direction === "long" ? "long" : "short"}">${o.direction}</span>
-          ${state}<span class="conf">${o.confidence.toFixed(0)}%</span></div>`;
-      }).join(""));
-
-  // watchlist movers: biggest daily change first
-  const movers = (s.watchlist || [])
-    .map(sym => ({ sym, ...(s.quotes?.[sym] || {}) }))
-    .filter(q => q.change_pct != null)
-    .sort((x, y) => Math.abs(y.change_pct) - Math.abs(x.change_pct))
-    .slice(0, 6);
-  setHTML("dash-movers", movers.length === 0
-    ? `<div class="empty">Prices land after the first scan cycle.</div>`
-    : movers.map(q => `<div class="mover" onclick="openChart('${q.sym}')"
-        title="open ${q.sym} chart">
-        <span class="sym">${q.sym}</span>
-        <span class="px">${q.price.toFixed(2)}</span>
-        <span class="chg ${cls(q.change_pct)}">${q.change_pct >= 0 ? "▲" : "▼"} ${
-          Math.abs(q.change_pct).toFixed(2)}%</span></div>`).join(""));
-
-  $("signals").innerHTML = s.watchlist.map(sym => {
-    const sig = s.signals[sym];
-    const conf = sig ? sig.confidence : 0;
-    const dir = sig ? sig.direction : "—";
-    const required = sig && sig.min_confidence_required != null
-        ? sig.min_confidence_required : s.min_confidence;
-    const skip = s.skipped[sym] && !(sig && sig.setup_quality)
-        ? `<span class="skip">${esc(s.skipped[sym])}</span>` : "";
-    let gate = "";
-    if (sig && sig.setup_quality) {
-      const hist = (s.setup_history || {})[sig.setup_quality];
-      const prob = hist && hist.trades >= 10
-          ? `est. success ${(hist.win_rate * 100).toFixed(0)}% (${hist.trades} trades)`
-          : "est. success: n/a (insufficient history)";
-      const need = sig.min_confidence_required == null
-          ? "not tradeable" : `needs ${sig.min_confidence_required.toFixed(0)}%`;
-      const tip = `Passed: ${(sig.confirmations_passed || []).join(", ") || "none"}\n` +
-                  `Failed: ${(sig.confirmations_failed || []).join(", ") || "none"}`;
-      gate = `<div class="gate ${sig.accepted ? "ok" : ""}" title="${esc(tip)}">` +
-             `<b>${esc(sig.setup_quality)}</b> setup · ${need} · ${prob} · ` +
-             `${esc(sig.reason || "")}</div>`;
-    }
-    return `<div class="meter"><span class="sym" style="cursor:pointer"
-      title="open ${sym} chart" onclick="openChart('${sym}')">${sym}</span>
-      <div class="bar"><div class="fill" style="width:${Math.min(conf,100)}%"></div>
-        <div class="thresh" style="left:${required}%"></div></div>
-      <span class="val">${sig ? conf.toFixed(1) + "% " + dir : "—"}</span>${skip}</div>${gate}`;
-  }).join("");
-
-  const posChanged = setHTML("positions", s.positions.length === 0
-    ? `<div class="dash-empty"><p>No open positions. ${highRisk
-        ? "High-Risk Mode: threshold adapts to setup quality (floor " + s.high_risk_floor + "%)."
-        : "The engine only trades ≥ " + s.min_confidence + "% confidence."}</p>${
-        s.operating_mode === "human"
-          ? `<button class="btn" onclick="switchTab('trade')">Open the Trade tab</button>`
-          : `<button class="btn" onclick="$('scan-btn').click()">Scan for setups</button>`}</div>`
-    : `<div class="pos-grid">` + s.positions.map((q, i) => {
-        const plPct = q.avg_price ? (q.mark / q.avg_price - 1) * 100 : 0;
-        return `<div class="pos-card">
-          <div class="head"><span class="sym">${q.underlying}</span>
-            <span class="desc">$${q.strike} ${q.right === "call" ? "Call" : "Put"} · ${q.expiration.slice(5)}</span>
-            <span class="chip who" style="margin-left:auto">${q.managed_by === "manual" ? "You" : "AI"}</span></div>
-          <div class="pl ${cls(q.unrealized)}">${q.unrealized >= 0 ? "+" : ""}${fmt$(q.unrealized)}
-            <span style="font-size:var(--legacy-fs-md); font-weight:600">(${plPct >= 0 ? "+" : ""}${plPct.toFixed(1)}%)</span></div>
-          <div class="sub"><span>Qty <b>${q.quantity}</b></span>
-            <span>Avg <b>${q.avg_price.toFixed(2)}</b></span>
-            <span>Mark <b>${q.mark.toFixed(2)}</b></span>
-            ${q.stop ? `<span>Stop <b>${q.stop}</b></span>` : ""}
-            ${q.target ? `<span>Target <b>${q.target}</b></span>` : ""}</div>
-          <div class="foot">
-            <span class="chip ${q.direction}">${q.direction}</span>
-            <button class="btn" onclick="openChart('${q.underlying}')"
-              style="margin-left:auto; padding:var(--space-1) var(--space-3); font-size:var(--text-caption)">Chart</button>
-            <button class="btn pos-close" data-i="${i}"
-              style="padding:var(--space-1) var(--space-3); font-size:var(--text-caption)">Close</button></div>
-        </div>`;
-      }).join("") + "</div>");
-  if (posChanged) document.querySelectorAll(".pos-close").forEach(b => b.onclick = async () => {
-    const q = lastStatus.positions[+b.dataset.i];
-    if (!q) return;
-    const est = q.mark * q.quantity * 100;
-    const ok = await confirmModal(
-      `Close ${q.underlying} $${q.strike} ${q.right === "call" ? "Call" : "Put"}`,
-      [["Action", "Sell to close (market)"], ["Contracts", String(q.quantity)],
-       ["Mark", q.mark.toFixed(2)], ["Est. credit", "≈ " + fmt$(est)],
-       ["Unrealized P/L", `${q.unrealized >= 0 ? "+" : ""}${fmt$(q.unrealized)}`]],
-      "Close position", "sell");
-    if (!ok) return;
-    const resp = await fetch("/api/orders", {method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({kind: "market", side: "sell_to_close",
-        symbol: q.underlying, expiration: q.expiration, strike: q.strike,
-        right: q.right, quantity: q.quantity})});
-    const d = await resp.json();
-    toast(resp.ok ? `✓ closed ${q.contract}: ${d.order.result}` : d.error, resp.ok);
-    refresh();
-  });
-
-  $("notifs").innerHTML = s.notifications.length === 0
-    ? `<div class="tell"><b>Quiet so far</b>
-        Notifications appear when something happens you would want to know about
-        without watching: a position opened or closed, a risk limit reached, a
-        large move on a watchlist symbol, or — in Human Mode — a setup the AI
-        thinks is worth your attention.</div>`
-    : s.notifications.map(n => `<div class="notif ${n.kind}">
-        <span class="ts">${new Date(n.ts).toLocaleTimeString()}</span>
-        <div class="t">${esc(n.title)}</div><div class="b">${esc(n.body)}</div></div>`).join("");
+  // The legacy dashboard's render lived here until M3-C10. Home is served by
+  // `/api/v1/home` and painted by the `Home` module, so a status push only has
+  // to tell it to refresh — the payload it needs is not this one.
+  if (window.Home && $("tab-dashboard").style.display !== "none") Home.load();
 
   // keep the Trade tab's positions list live
   if ($("tab-trade").style.display !== "none") renderTkPositions();
@@ -5708,9 +5543,17 @@ window.Inbox = (() => {
         `<button class="ib-open" data-kind="${esc(n.kind)}">Open ›</button></div>` +
         `<span class="ib-when">${new Date(n.ts).toLocaleTimeString()}</span></div>`;
     }
+    /* P9: an empty state teaches. The legacy dashboard panel this inbox
+       replaced explained what notifications are FOR, and M3-C10 deleted that
+       panel — the explanation moves here rather than being lost with it. */
     setHTML("ib-body", html ||
       `<div class="ib-empty">${filter === "unread"
-        ? "Nothing unread." : "No notifications yet."}</div>`);
+        ? "Nothing unread."
+        : "Quiet so far. Notifications appear when something happens you " +
+          "would want to know about without watching: a position opened or " +
+          "closed, a risk limit reached, a large move on a watchlist symbol, " +
+          "or — in Human Mode — a setup the AI thinks is worth your " +
+          "attention."}</div>`);
     document.querySelectorAll("#ib-body .ib-open").forEach(b => b.onclick = () => {
       const [dest, tab] = DEST[b.dataset.kind] || ["home"];
       hide();
@@ -10164,22 +10007,21 @@ const GUIDE_TUTORIALS = {
        do:"That is the tour — press Finish and have a look around"},
     ]},
 
-  dashboard: {title:"The Dashboard", icon:"📊", tab:"dashboard",
-    blurb:"Your account, what the AI is seeing right now, and what it thinks you should work on.",
+  dashboard: {title:"Home", icon:"📊", tab:"dashboard",
+    blurb:"Where you stand, what needs you, and what the AI is seeing right now.",
     steps:[
-      {el:"#hero", title:"Where you stand",
-       body:"Account equity, and how far it has moved from the balance you started with. This is the number every other figure on the page eventually feeds into."},
-      {el:"#cards", title:"The day at a glance",
-       body:"Cash, open risk, today's profit and loss, and how many positions are live. Hover any card with an underlined label for what it actually measures."},
-      {el:"#intel-panel", title:"What the analysis says about you",
-       body:"Once you have closed some trades, this becomes the honest read: composite scores, the specific things costing you money, and what to do next. Anything it cannot measure from your actual history says so rather than showing a flattering number.",
-       when:() => $("intel-panel").style.display !== "none"},
-      {el:"#equity-chart", title:"Your equity curve",
-       body:"Built from snapshots taken every scan cycle. It is the shape of the account over time rather than a single number — a strategy that ends flat after a 40% dip is not the same as one that never dipped."},
-      {el:"#signals", title:"Live confidence per symbol",
-       body:"Every watchlist symbol scored right now. The yellow tick is the bar that symbol's setup has to clear — fixed in Conservative Mode, adaptive in High-Risk. Hover any verdict line to see exactly which confirmations passed and which failed."},
-      {el:"#dash-opps", title:"What it would take",
-       body:"Setups the engine likes but has not acted on, and what is missing. In Human Mode this is the advice channel: the AI will point, but it will never enter."},
+      {el:"#home-status", title:"The one sentence",
+       body:"What is true right now, in English. It says whether anything needs you — and it never says nothing does unless nothing does. If you read one thing on this screen, read this."},
+      {el:"#home-metrics", title:"Five numbers, fixed positions",
+       body:"Account, today, open risk, buying power and win rate. Open risk is the most a position can lose you if it goes to zero; when a mark is missing it is shown as a floor with a ≥ rather than pretending to be exact. The win rate stays blank until there are enough closed trades to mean anything."},
+      {el:"#home-positions", title:"What you hold",
+       body:"Open positions and any resting orders, together, because a stop you have working and a position you hold are one thing to keep track of. Clicking a row opens it in Portfolio; closing always goes through a review first."},
+      {el:"#home-next", title:"What to do next",
+       body:"At most three things, ranked by the analysis engine — a risk condition, one evidenced finding about your own trading, then setups that cleared the gate. Each carries the evidence behind it. When it has nothing it can prove, it says so instead of filling the space."},
+      {el:"#home-equity", title:"Your equity curve",
+       body:"Thirty days by default rather than this session, because a session curve on a freshly launched paper account is noise. It is the shape of the account over time — a strategy that ends flat after a 40% dip is not the same as one that never dipped."},
+      {el:"#home-watchlist", title:"Live confidence per symbol",
+       body:"Every watchlist symbol scored right now. The yellow tick is the bar that symbol's setup has to clear — fixed in Conservative Mode, adaptive in High-Risk."},
     ]},
 
   charts: {title:"The chart workspace", icon:"📈", tab:"charts",
@@ -10366,7 +10208,7 @@ const Guide = (() => {
       syncPrefs();
       applyMotion();
       maybeWelcome();
-      $("hero").style.visibility = "";
+      $("home").style.visibility = "";
     } catch (e) {
       // The guide must never be the reason the app looks broken. Fall back to
       // the OS motion preference and a catalogue with no progress marks.
@@ -10375,7 +10217,7 @@ const Guide = (() => {
                reduce_motion:osReduced(), tips:true,
                large_text:false, high_contrast:false};
       applyDisplay();
-      $("hero").style.visibility = "";
+      $("home").style.visibility = "";
     }
   }
 
@@ -10865,7 +10707,7 @@ const Guide = (() => {
     // The first-launch modal and the initial dashboard are one bootstrap
     // decision.  Do not expose an interactive dashboard, then inject a modal
     // after a slow guide-state GET has finished.
-    $("hero").style.visibility = "hidden";
+    $("home").style.visibility = "hidden";
     applyMotion();                       // before the first paint of anything
     $("gd-next").onclick = nextStep;
     $("gd-back").onclick = backStep;

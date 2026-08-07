@@ -696,9 +696,15 @@ def check_empty_states(page, c: Checks) -> None:
     goto(page, "dashboard")
     page.wait_for_selector("#tab-dashboard", state="visible")
     page.wait_for_timeout(400)
-    notifs = text_of(page, "#notifs")
+    # The dashboard notifications panel was deleted in M3-C10; the inbox that
+    # replaced it in M2-C6 inherited the copy, because what the panel taught is
+    # not something the migration was entitled to drop.
+    page.click("#ss-notifs")
+    page.wait_for_selector("#shell-inbox", state="visible", timeout=5000)
+    notifs = text_of(page, "#ib-body")
     c.check("empty states: notifications explain what they are for",
             "quiet so far" in notifs, notifs[:120])
+    page.keyboard.press("Escape")
 
 
 def check_recommendations(page, base: str, c: Checks) -> None:
