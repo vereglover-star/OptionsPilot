@@ -129,6 +129,26 @@ class PnLWindowsView(ViewModel):
 
 
 @dataclass(frozen=True, slots=True)
+class StatusLineView(ViewModel):
+    """Home's first line, and the system's single self-report.
+
+    `case` is carried so a client can style by state without re-deriving which
+    of the eight situations applied — a second derivation would eventually
+    disagree with the first, and the two would be rendering different opinions
+    of the same moment.
+
+    `needs_you` exists so calm text and an alarm badge cannot appear together.
+    The sentence's whole value is that it never claims nothing needs you unless
+    nothing does; a client that had to parse the prose to find that out would
+    get it wrong. See `services/statusline.py`.
+    """
+
+    text: str
+    case: str
+    needs_you: bool
+
+
+@dataclass(frozen=True, slots=True)
 class OpenRiskView(ViewModel):
     """How much of the account is currently exposed. New in M3.
 
