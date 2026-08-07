@@ -4,6 +4,59 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [2026-08-07] — UI V2 M4 (backend tier): quick picks and review
+
+*Two commits, both backend, both additive. No existing route, contract or
+payload changed and no pixel has moved yet — the same shape M3 took, where
+C1–C3 landed the services before C4 drew anything.*
+
+**Quick picks.** §6.3's four chips — ATM call, ATM put, 30 day, Weekly — turn
+an intent into a concrete contract, so "buy a call on this" is one click
+rather than a table of forty rows a beginner must first learn to read.
+
+Resolution is **server-side** because §6.3 says the chips are the same intents
+Pilot (M8) expresses and the same the AI engine states its opportunities in;
+"the suggestion and the action are the same object" only holds if there is one
+implementation of what an intent means, and the obvious alternative — ten
+lines of JavaScript against a chain the client already holds — would put that
+rule in two languages.
+
+It is **two-phase** because an intent has two axes and most name only one.
+"ATM call" chooses a strike within whatever expiry is loaded; "30 day" chooses
+an expiry and says nothing about calls versus puts. Collapsing them would
+require the chain of an expiration not yet chosen — impossible, since choosing
+it is the first half of the job. A chip never overrides the axis it does not
+name. Ties in expiry selection break toward the **longer** expiry, which is
+also what keeps "Weekly" off a 1-DTE contract.
+
+**Review.** §6.5's five elements in order — the sentence, cost and maximum
+loss, breakeven beside spot, position size as a percentage of the account, and
+"if you do nothing" — plus the honesty line about how the fill actually
+happens.
+
+Two properties make it trustworthy rather than merely populated. **The numbers
+are the engine's numbers:** `broker/paper.py` fills a market buy at
+`ask × (1 + slippage_pct)` and a market sell at `bid × (1 − slippage_pct)`,
+and quoting the mid — the obvious thing, and what the chain displays — would
+describe a trade the system is not going to place. And **an element that does
+not apply says so rather than printing a zero:** a `sell_to_close` has
+proceeds rather than a cost, adds no new maximum loss and has no breakeven, so
+each is `null` with a note explaining why. "Most you can lose: $0.00" on a
+closing order is the same class of error as scoring a metric that could not be
+measured.
+
+**One roadmap correction.** C1 was scheduled to land in
+`services/contracts.py`. That file already exists and holds the *transport*
+contract vocabulary, created in V0.7.0 after this roadmap was written; the
+quick-pick resolver is `services/quickpick.py`, following M3's `statusline.py`
+precedent. Recorded in `ROADMAP-UI-V2.md` §12 rather than silently redirected.
+
+Also backfills three documentation gaps M3 left: §12's commit map had no rows
+for M3 or M3.5, `MODULES.md` had no entries for `statusline.py` or `home.py`,
+and `AI_HANDOFF.md` had never listed `/api/v1/home`.
+
+**C3–C11 — the Trade destination itself — are not started.**
+
 ## [2026-08-07] — UI V2 M3.5: Home polish, and six defects underneath it
 
 *A refinement milestone, run before M4 so that Trade, Portfolio, Research,

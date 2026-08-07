@@ -509,6 +509,37 @@ transport. Every service takes **injected, duck-typed** collaborators and return
 - `portfolio.py` — positions, account, `performance()` (win rate, profit factor,
   max drawdown), `pnl_windows()`, `setup_history()`. Reproduces exactly which
   reads happen under the orchestrator lock and which do not.
+- `statusline.py` (UI V2 M3-C2) — the one sentence a user is entitled to trust
+  completely. Pure: `StatusInputs` in, `StatusLineView` out. Its `CASES` tuple
+  is a **precedence order the design documents do not state** — halt > rejected
+  > approaching stop > degraded quotes, all four above the first-run welcome,
+  because a greeting that hid a halt would be the status line lying on the one
+  launch where a user has least context to catch it. `needs_you` is carried on
+  the view model so a client cannot render calm text beside an alarm.
+- `home.py` (UI V2 M3-C3) — assembles Home's six regions from four owners into
+  ONE payload, failing **per region**: six round trips would be six chances to
+  arrive late and six independently shifting regions. `next_actions: None`
+  distinguishes "I could not look" from "there is nothing".
+- `quickpick.py` (UI V2 M4-C1) — turns one of the four §6.3 intents (ATM call,
+  ATM put, 30 day, Weekly) into a concrete contract. Pure, and **two-phase by
+  design**: `expiration_for` takes ISO dates only, the caller fetches that
+  chain, `contract_for` takes rows only — because an intent has two axes and
+  most name only one, and choosing both at once would need the chain of an
+  expiration not yet chosen. Resolution is server-side so Pilot (M8) and the AI
+  engine express the same intents through one implementation rather than the
+  client owning a second copy in JavaScript. Every unresolved pick carries a
+  sentence a user could read; `strike` is `None` rather than `0.0`, because a
+  strike of zero is a price and this is an absence.
+- `review.py` (UI V2 M4-C2) — §6.5's consequence restatement: the sentence,
+  cost and maximum loss, breakeven beside spot, position size as a percentage,
+  and "if you do nothing", plus the honesty line about the fill.
+  **`estimate_premium` mirrors `broker/paper.py` exactly** — ask × (1 +
+  slippage) to buy, bid × (1 − slippage) to sell — because quoting the mid
+  would describe a trade the system is not going to place, and a missing quote
+  yields `None` rather than falling back. An element that does not apply (a
+  closing order has no breakeven, no new maximum loss) is `None` **with a note
+  saying why**; printing a zero there is the same class of error as scoring a
+  metric that could not be measured.
 - `watchlist.py` — parse, validate, add/remove/reorder. The four disjoint outcome
   buckets (`added` / `invalid` / `duplicates` / `over_cap`) exist because a user
   who pastes twelve tickers and gets eight must be able to see which four went

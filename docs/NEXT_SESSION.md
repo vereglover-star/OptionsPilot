@@ -5,14 +5,32 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-07, on closing **UI V2 · M3.5 — Home polish**,
-C1…C10.
+**Last updated:** 2026-08-07, on stopping **UI V2 · M4 — Trade** at the
+backend/frontend boundary. C1–C2 are done; **C3–C11 are not started.**
 
 ## What to do next
 
-**Start UI V2 · M4 — Trade**, the most valuable milestone in the programme
-(`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next).
-`verify.ps1` is green across **17 gates** at 2787 tests.
+**Continue UI V2 · M4 — Trade at C3**, the workspace layout.
+`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next, and its
+M4 table is current. `verify.ps1` is green across **17 gates** at 2787 tests.
+
+**M4's backend tier (C1–C2) is complete and shipped**, the same shape M3 took:
+services first, then pixels. Nothing on screen has changed yet. What is
+already there for C3–C11 to build on:
+
+* `GET /api/v1/quickpicks` — the four chips as a catalogue. **Render from it;
+  do not restate the four in `index.html`.** That is the two-catalogue drift
+  `services/guide.py` has a bidirectional test for, after it happened twice.
+* `GET /api/v1/quickpick` — resolves one intent. Carries a `reason` when it
+  cannot; show it rather than treating the chip as a no-op.
+* `POST /api/v1/review` — all five §6.5 elements plus the fill line. Every
+  numeric field is paired with a `*_note`; when the number is `null`, **render
+  the note**, because that is the whole point of the pairing.
+
+**C10 (`scripts/trade_check.py`) is XL and is the gate for everything C3–C9
+builds.** M2 deliberately brought its equivalent forward out of order for
+exactly this reason — five commits of new surface with no automated coverage
+is how a destination ships broken. Consider doing the same here.
 
 **Read `DESIGN_SYSTEM_V2.md` §5.5–5.7 and §6.6 before writing any of M4's
 markup.** M3.5 corrected four things in the shared design language and every

@@ -523,6 +523,21 @@ All mutating endpoints acquire `UIServer.lock` (an `RLock`) — the
 orchestrator is not thread-safe, and this lock serializes the background
 cycle-loop thread against API request threads.
 
+### The versioned surface (`/api/v1/*`, `optionspilot/ui/api_v1.py`)
+
+Every legacy `/api/*` route above is also reachable under `/api/v1/*` wrapped
+in the success/error envelope from `services/contracts.py`. The routes below
+exist **only** under v1 — they were added by the UI V2 programme and have no
+legacy twin. Backfilled here in M4; M3 added the first of them and did not
+record it, which is the gap `CLAUDE.md`'s rule 8 exists to close.
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/v1/home` | **M3-C3.** Home's six regions from four owners in ONE request — six round trips would be six independently shifting regions, which is the layout jump M3 exists to remove. Fails **per region** via `errors[]` rather than as a whole; `next_actions: null` distinguishes "I could not look" from "there is nothing to suggest" |
+| GET | `/api/v1/quickpicks` | **M4-C1.** The four §6.3 intents as a catalogue (`key`, `label`, `right`, `target_dte`). The client renders the chips FROM this rather than restating them — the two-catalogue drift `services/guide.py` has a bidirectional test for |
+| GET | `/api/v1/quickpick?symbol=&intent=&expiration=&right=` | **M4-C1.** Resolves one intent to a concrete contract. Two-phase inside: the expiry is chosen from dates alone, then that expiry's chain is fetched. Never fails silently — an unresolved pick carries a `reason` a user could read, and `strike` is `null` rather than `0.0` |
+| POST | `/api/v1/review` | **M4-C2.** §6.5's consequence restatement for an order draft: sentence, cost, maximum loss, breakeven beside spot, position size, "if you do nothing", plus the fill honesty line. **Prices with the broker's own model** (ask × (1 + slippage) to buy, bid × (1 − slippage) to sell), not the mid. Places nothing and mutates nothing, so it deliberately does not go through the idempotency path. An element that does not apply is `null` **with a note saying why** |
+
 ## Database / storage approach
 
 **Storage root (V0.4.4):** all user data lives under a stable per-user root —

@@ -9,8 +9,23 @@ what's next" tracker — keep it current as you work.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0–M3.5 are complete and nothing is in
-progress.** `verify.ps1` is green across all **17** gates at **2787 tests**.
+**The UI V2 programme is under way. M0–M3.5 are complete; M4 (Trade) is IN
+PROGRESS — its backend tier (C1–C2) has shipped and C3–C11 are not started.** `verify.ps1` is green across all **17** gates at **2787 tests**.
+
+**M4 · Trade — backend tier complete (`1191281`, `7ef7968`).** Two commits,
+both additive: no existing route, contract or payload changed, and no pixel
+has moved. `services/quickpick.py` resolves §6.3's four intents into concrete
+contracts, server-side and two-phase — server-side because Pilot and the AI
+engine must express the same intents through one implementation, two-phase
+because an intent has two axes and choosing both at once would need the chain
+of an expiration not yet chosen. `services/review.py` builds §6.5's five
+elements and prices them with `broker/paper.py`'s own fill model rather than
+the mid, because a review quoting a price the engine will not use describes a
+trade the system is not going to place.
+
+**C3–C11 — the Trade destination itself — are not started.** The stopping
+point is the backend/frontend boundary, the same one M3 used between C3 and
+C4.
 
 **M3.5 · Home polish — complete (`f87debe`…`ec79c7c`).** A refinement
 milestone run before M4 so the remaining five destinations inherit a corrected
