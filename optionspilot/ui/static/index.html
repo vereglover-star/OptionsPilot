@@ -644,6 +644,12 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 .seg button:hover { color:var(--ink-primary); }
 .seg button.active { background:var(--surface-sunken); color:var(--ink-primary); font-weight:600; }
 .seg button.active.hr { color:var(--status-caution); }
+/* `aria-pressed` is the accessible expression of the same state, so it styles
+   identically rather than needing a parallel `.active` class kept in step by
+   hand — two owners of "which segment is on" would eventually disagree, and
+   the one a screen reader announces is the one that must be right. */
+.seg button[aria-pressed="true"] { background:var(--surface-sunken);
+  color:var(--ink-primary); font-weight:600; }
 
 /* buy/sell side toggle */
 .side-seg { display:flex; gap:var(--space-2); margin-bottom:var(--space-3); }
@@ -1620,6 +1626,35 @@ body.shell-v2 .home-legacy { display:none; }
   line-height:1.6; padding:var(--space-2) 0; }
 .home-empty .btn { margin-top:var(--space-3); }
 .home-note { font-size:var(--text-caption); color:var(--ink-muted); }
+
+/* Band 3. Equity and watchlist side by side at 1920; the watchlist drops
+   below the chart from 1440 down (§2.12). */
+.home-band3 { display:grid; gap:var(--space-5);
+  grid-template-columns:minmax(0,2fr) minmax(0,1fr); align-items:start; }
+@media (max-width:1439px) { .home-band3 { grid-template-columns:1fr; } }
+
+/* The plot area is the instrument's recessed interior, so the chart reads as
+   INSIDE something (UI_V2_VISUAL_EXPLORATION.md, "Chart presentation"). */
+.home-chart { display:block; width:100%; height:180px; }
+
+/* H6 rows. The confidence bar carries a TICK at the confidence that symbol
+   actually needed — a bar with no reference line says "71%" and leaves the
+   only question that matters ("is that enough?") unanswered. */
+.hw-row { display:grid; grid-template-columns:auto 1fr auto;
+  gap:var(--space-3); align-items:center; padding:var(--space-2);
+  border-radius:var(--radius-sm); cursor:pointer; }
+.hw-row:hover { background:var(--surface-sunken); }
+.hw-sym { font-size:var(--text-body); color:var(--ink-primary);
+  font-weight:600; min-width:3.5em; }
+.hw-bar { position:relative; height:6px; background:var(--surface-sunken);
+  border-radius:var(--radius-pill); overflow:visible; }
+.hw-bar i { display:block; height:100%; border-radius:var(--radius-pill);
+  background:var(--market-neutral); }
+.hw-bar.ok i { background:var(--market-pos-mark); }
+.hw-tick { position:absolute; top:-3px; width:2px; height:12px;
+  background:var(--status-caution); border-radius:1px; }
+.hw-conf { font-size:var(--text-caption); color:var(--ink-muted);
+  font-variant-numeric:tabular-nums; min-width:3.5em; text-align:right; }
 </style>
 </head>
 <body data-palette="#3987e5">
@@ -1973,6 +2008,41 @@ body.shell-v2 .home-legacy { display:none; }
             <span class="ins-label">What to do next</span>
           </div>
           <ol id="hn-body" class="home-next-list"></ol>
+        </div>
+      </div>
+
+      <!-- Band 3 — context. Deliberately last and deliberately the part that
+           may scroll: nothing in it is consequential, which is the point of
+           putting it third (§5.5). -->
+      <div class="home-band3">
+
+        <!-- H5 — 30 days by default, NOT session. A session curve on a
+             freshly launched paper account is the least informative large
+             object that could be put here. -->
+        <div class="ins" id="home-equity">
+          <div class="ins-head">
+            <span class="ins-label">Equity</span>
+            <div class="seg" id="he-range" role="group" aria-label="Equity range">
+              <button type="button" data-range="30" aria-pressed="true">30d</button>
+              <button type="button" data-range="90" aria-pressed="false">90d</button>
+              <button type="button" data-range="0" aria-pressed="false">All</button>
+            </div>
+          </div>
+          <div class="ins-well flush" id="he-well">
+            <svg id="he-chart" class="home-chart" viewBox="0 0 960 180"
+                 preserveAspectRatio="none" role="img"
+                 aria-label="Account equity over time"></svg>
+          </div>
+          <div id="he-empty" class="home-empty" hidden></div>
+        </div>
+
+        <!-- H6 — the watchlist, with the required-confidence tick. -->
+        <div class="ins" id="home-watchlist">
+          <div class="ins-head">
+            <span class="ins-label">Watchlist</span>
+            <button class="ins-act" id="hw-manage" type="button">Manage ›</button>
+          </div>
+          <div id="hw-body"></div>
         </div>
       </div>
     </div>
@@ -3307,11 +3377,20 @@ function drawEquity(svg, pts, baselineVal) {
   const Y = v => H - P - (v - lo) / span * (H - 2 * P);
   const line = pts.map((p, i) => `${X(i)},${Y(p[1])}`).join(" ");
   const by = Y(baselineVal);
+  /* DV rule C-6: the accent never appears inside a chart plot area. The line
+     and its readout dot were `--action-primary-text`, which is the colour this
+     product uses for "you can click this" — inside a plot it reads as an
+     interactive element and competes with the real ones around it. M0-C4
+     recorded this as debt and assigned it here. The curve now carries MARKET
+     colour, chosen by where it ended relative to where it started, which is
+     also the one thing a glance at an equity line is asking. */
+  const up = pts[pts.length - 1][1] >= baselineVal;
+  const curve = up ? "var(--market-pos-mark)" : "var(--market-neg-mark)";
   svg.innerHTML =
     `<line x1="${P}" y1="${by}" x2="${W-P}" y2="${by}" stroke="var(--border-default)" stroke-dasharray="4 4"/>` +
-    `<polyline points="${line}" fill="none" stroke="var(--action-primary-text)" stroke-width="2"/>` +
+    `<polyline points="${line}" fill="none" stroke="${curve}" stroke-width="2"/>` +
     `<line id="xh" y1="${P}" y2="${H-P}" stroke="var(--ink-muted)" stroke-width="1" visibility="hidden"/>` +
-    `<circle id="dot" r="4" fill="var(--action-primary-text)" stroke="var(--surface-base)" stroke-width="2" visibility="hidden"/>`;
+    `<circle id="dot" r="4" fill="${curve}" stroke="var(--surface-base)" stroke-width="2" visibility="hidden"/>`;
   const tip = $("tooltip"), xh = svg.querySelector("#xh"), dot = svg.querySelector("#dot");
   svg.onmousemove = e => {
     const r = svg.getBoundingClientRect();
@@ -3813,6 +3892,8 @@ const HomeBands = (() => {
       }
       const retry = ev.target.closest("[data-home-retry]");
       if (retry) { Home.load(); return; }
+      const scan = ev.target.closest("[data-home-scan]");
+      if (scan) { const b = $("scan-btn"); if (b) b.click(); return; }
       const close = ev.target.closest("[data-home-close]");
       if (close) {
         /* Nothing on Home places, modifies or closes anything without the
@@ -3828,8 +3909,93 @@ const HomeBands = (() => {
     if (manage) manage.onclick = () => switchTab("portfolio");
   }
 
+  /* Band 3 — context. The range control is a VIEW over one series, not three
+     requests: the payload carries the whole recorded curve and this windows
+     it, so switching range never waits on a network round trip. */
+  let range = 30;
+
+  function renderEquity(d) {
+    const svg = el("he-chart"), empty = el("he-empty"), well = el("he-well");
+    if (!svg) return;
+    const all = (d.equity || []).map(([t, v]) => [new Date(t), v]);
+    const cutoff = range > 0
+      ? Date.now() - range * 24 * 3600 * 1000 : -Infinity;
+    const pts = all.filter(p => p[0].getTime() >= cutoff);
+
+    /* Fewer than two points is not a chart. Say what fills it and offer the
+       step that does — P9 applies to a plot area exactly as to a list. */
+    if (pts.length < 2) {
+      svg.innerHTML = "";
+      if (well) well.hidden = true;
+      if (empty) {
+        empty.hidden = false;
+        empty.innerHTML = all.length
+          ? `<div>No equity recorded in the last ${range} days.
+             <div class="home-note">The curve fills as scan cycles run.</div></div>`
+          : `<div>Your equity line starts after your first scan.
+             <div><button class="btn" type="button" data-home-scan="1"
+                  >Run a scan</button></div></div>`;
+      }
+      return;
+    }
+    if (well) well.hidden = false;
+    if (empty) empty.hidden = true;
+    const base = (d.account && d.account.starting_balance) || pts[0][1];
+    drawEquity(svg, pts, base);
+  }
+
+  function renderWatchlist(d) {
+    const body = el("hw-body");
+    if (!body) return;
+    const rows = d.watchlist || [];
+    if (!rows.length) {
+      body.innerHTML = `<div class="home-empty">The AI only sees what you
+        point it at.
+        <div><button class="btn" type="button" data-home-go="watchlist"
+             >Add symbols</button></div></div>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const conf = r.confidence;
+      const pct = conf === null || conf === undefined ? 0 : conf * 100;
+      /* The tick is drawn only when a requirement is KNOWN. Drawing it at a
+         default would put a reference line somewhere the engine never said,
+         which is worse than no line at all. */
+      const need = r.required;
+      const tick = (need === null || need === undefined) ? ""
+        : `<span class="hw-tick" style="left:${Math.min(100, need * 100)}%"
+             title="needs ${Math.round(need * 100)}%"></span>`;
+      return `<div class="hw-row" data-home-go="trade"
+                   data-home-symbol="${esc(r.symbol)}">
+        <span class="hw-sym">${esc(r.symbol)}</span>
+        <span class="hw-bar${r.accepted ? " ok" : ""}"><i
+          style="width:${Math.min(100, pct)}%"></i>${tick}</span>
+        <span class="hw-conf">${conf === null || conf === undefined
+          ? "—" : Math.round(pct) + "%"}</span>
+      </div>`;
+    }).join("");
+  }
+
+  function wireRange() {
+    const seg = el("he-range");
+    if (!seg || seg.dataset.wired) return;
+    seg.dataset.wired = "1";
+    seg.addEventListener("click", ev => {
+      const b = ev.target.closest("button[data-range]");
+      if (!b) return;
+      range = +b.getAttribute("data-range");
+      seg.querySelectorAll("button").forEach(x =>
+        x.setAttribute("aria-pressed", String(x === b)));
+      if (Home.data) renderEquity(Home.data);
+    });
+  }
+
   return {
-    render(d) { wire(); renderPositions(d); renderNext(d); },
+    render(d) {
+      wire(); wireRange();
+      renderPositions(d); renderNext(d);
+      renderEquity(d); renderWatchlist(d);
+    },
     failed() {
       wire();
       const body = el("hn-body");

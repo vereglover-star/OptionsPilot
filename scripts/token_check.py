@@ -192,6 +192,40 @@ def check_instrument(text: str) -> list[str]:
                       text[found[0]:found[1]])
         return m.group(1) if m else None
 
+    # DV rule C-6 (DESIGN_SYSTEM_V2.md §9): the accent never appears inside a
+    # chart plot area. It is the product's "you can click this" colour, so
+    # inside a plot it reads as an interactive element and competes with the
+    # real ones around it. M0-C4 shipped the equity curve in the accent and
+    # recorded it as debt for M3; this is what stops it coming back.
+    # Brace-matched from the signature rather than via `block_span`, which
+    # expects `selector {` and would silently match nothing against
+    # `function drawEquity(svg, pts, baselineVal) {` — a check that finds no
+    # function passes, which is the vacuous-gate failure this file already
+    # carries two comments about.
+    plot = ""
+    at = text.find("function drawEquity")
+    if at >= 0:
+        open_at = text.index("{", at)
+        depth = 0
+        for i in range(open_at, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    plot = text[open_at:i]
+                    break
+    if not plot:
+        problems.append(
+            "drawEquity was not found — the C-6 plot-area check is inert.")
+    else:
+        for m in re.finditer(r"(stroke|fill)=\"var\(\s*(--action-primary-[a-z]+)\s*\)\"",
+                             plot):
+            problems.append(
+                f"drawEquity paints {m.group(1)} with {m.group(2)} inside the "
+                f"plot area. DV rule C-6 forbids the accent there; use a "
+                f"--market-* colour.")
+
     outer, inner = radius_of(".ins"), radius_of(".ins-well")
     if outer is None:
         problems.append(".ins has no tokenised border-radius.")

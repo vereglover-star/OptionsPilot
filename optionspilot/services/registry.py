@@ -167,7 +167,12 @@ class ServiceRegistry:
             facts=self._status_facts,
             intelligence=self._next_actions,
             working_orders=self._working_orders,
-            equity=lambda: list(getattr(self.trading, "equity_history", [])),
+            # The BROKER's recorded history, not `TradingService.equity_history`.
+            # The latter is the in-memory session list, and §5.5 is explicit
+            # that a session curve on a freshly launched paper account is noise
+            # — which is exactly why band 3 defaults to 30 days.
+            equity=self._equity_history,
+            watchlist=self._watchlist_confidence,
         )
 
     # ── H4: what to do next ──────────────────────────────────────────────────
@@ -188,6 +193,47 @@ class ServiceRegistry:
                 "stop": getattr(order, "stop_price", None),
             })
         return out
+
+    def _equity_history(self) -> list:
+        """Recorded equity snapshots, oldest first, as `[iso, value]` pairs.
+
+        Capped at the same 500 `PerformanceView` uses, so the two never carry
+        different amounts of the same curve. The client windows it to 30/90/all
+        — the range control is a view over one series, not three requests.
+        """
+        broker = self._orch.broker
+        if not hasattr(broker, "equity_history"):
+            return []
+        with self._lock:
+            history = list(broker.equity_history())
+        return [[ts, value] for ts, value in history[-500:]]
+
+    def _watchlist_confidence(self) -> list:
+        """H6: symbol, verdict, confidence, and the confidence it NEEDED.
+
+        `required` is the tick the design asks for beside each bar, and it is
+        carried per symbol rather than as one global number because in
+        High-Risk Mode the floor adapts to setup quality — one shared threshold
+        would draw the tick in the wrong place for every symbol but one.
+        """
+        summary = self.trading.last_summary or {}
+        signals = summary.get("signals") or {}
+        rows = []
+        for symbol, sig in signals.items():
+            if not isinstance(sig, dict):
+                continue
+            rows.append({
+                "symbol": symbol,
+                "direction": sig.get("direction") or "",
+                "confidence": sig.get("confidence"),
+                "required": sig.get("min_confidence_required"),
+                "accepted": bool(sig.get("accepted")),
+            })
+        # Tradeable first, then by confidence — the engine's own ordering for
+        # this list, mirrored from the legacy opportunities panel so the two
+        # cannot disagree about which setup is strongest while both exist.
+        rows.sort(key=lambda r: (not r["accepted"], -(r["confidence"] or 0)))
+        return rows
 
     def _next_actions(self) -> list | None:
         """H4's ranking: risk condition -> evidenced finding -> cleared setups.

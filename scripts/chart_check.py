@@ -42,7 +42,7 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from shell_nav import goto  # noqa: E402
+from shell_nav import goto, home_ready  # noqa: E402
 
 ET = ZoneInfo("America/New_York")
 
@@ -172,7 +172,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.add_init_script("window.__chNoAutoRefresh = true;")
 
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             goto(page, "charts")
 
             def wait_loaded(sym: str, tf: str, timeout: int = 30000) -> None:
@@ -337,7 +337,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             # 9. drawing persistence across reload
             saved = page.evaluate("() => JSON.parse(localStorage.getItem('chDraw:QQQ')).items.length")
             page.reload()
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             goto(page, "charts")
             page.wait_for_function("() => CH.data && CH.candle && DRAW.items.length > 0",
                                    timeout=30000)
@@ -683,7 +683,7 @@ def main() -> int:  # noqa: C901 - a flat sequence of independent checks reads c
             page.evaluate("() => { localStorage.setItem('chDraw:QQQ', '{not json'); "
                           "localStorage.setItem('chInds', 'garbage'); }")
             page.reload()
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             goto(page, "charts")
             try:
                 wait_loaded("QQQ", "1d")

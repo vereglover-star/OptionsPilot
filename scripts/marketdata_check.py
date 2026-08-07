@@ -39,7 +39,7 @@ import tempfile
 import time
 import urllib.request
 from pathlib import Path
-from shell_nav import goto  # noqa: E402
+from shell_nav import goto, home_ready  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -134,7 +134,7 @@ def main() -> int:  # noqa: C901 — a flat sequence of independent checks reads
             page.on("pageerror", lambda e: errors.append(str(e)))
 
             page.goto(base)
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             goto(page, "settings")
             page.wait_for_selector("#md-panel", state="visible", timeout=10000)
 
@@ -503,7 +503,7 @@ def main() -> int:  # noqa: C901 — a flat sequence of independent checks reads
                     body: JSON.stringify({mode: 'static'})});
                }""")
             page.reload()
-            page.wait_for_selector("#hero", timeout=20000)
+            home_ready(page, 20000)
             goto(page, "settings")
             wait_render()
             page.wait_for_function(
