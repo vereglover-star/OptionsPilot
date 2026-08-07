@@ -184,6 +184,45 @@ REVIEW_STUB = {
 }
 
 
+def _quickpick_over(chain: dict, url: str) -> dict:
+    """Resolve a quick pick against the FIXTURE chain, using the real rules.
+
+    The transport is stubbed; the rules are not. `/api/v1/quickpick` on the
+    live server resolves against the provider's actual chain — spot $773 on a
+    real SPY — while the browser is showing this file's fixture, so the
+    honest answer would name a strike the page does not contain. Importing
+    `services/quickpick.py` here keeps every decision under test real and
+    fakes only which chain it is handed, which is the same bargain
+    `guide_check.py` strikes with `/api/chain`.
+
+    (The mismatch itself turned out to be worth having found: the client used
+    to select a strike it could not find and return silently, so the chip
+    appeared to do nothing. It now says so.)
+    """
+    sys.path.insert(0, str(ROOT))
+    from optionspilot.services import quickpick as qp
+
+    from urllib.parse import parse_qs, urlparse
+    q = parse_qs(urlparse(url).query)
+    key = (q.get("intent") or [""])[0]
+    right = (q.get("right") or ["call"])[0]
+    spec = qp.BY_KEY.get(key)
+    if spec is None:
+        return qp.QuickPickView(intent=key, right=right,
+                                reason="that is not one of the quick picks"
+                                ).to_dict()
+    dates = chain.get("expirations") or []
+    choice = qp.expiration_for(spec, dates, date.today(),
+                               (q.get("expiration") or [""])[0])
+    if not choice.ok:
+        return qp.QuickPickView(intent=key, right=spec.right or right,
+                                reason=choice.reason).to_dict()
+    return qp.contract_for(
+        spec, chain.get("chain"), chain.get("spot"), current_right=right,
+        expiration=choice.expiration, dte=choice.dte,
+        symbol=chain.get("symbol", "")).to_dict()
+
+
 def open_trade(browser, base, *, width=1920, height=1080, console=None,
                chain=None, review=None, review_log=None):
     """A page showing the Trade destination with a known chain.
@@ -201,6 +240,17 @@ def open_trade(browser, base, *, width=1920, height=1080, console=None,
         page.route("**/api/chain*", lambda route: route.fulfill(
             status=200, content_type="application/json",
             body=json.dumps(chain)))
+        # Resolution runs the real `quickpick` rules over this fixture — see
+        # `_quickpick_over`. The CATALOGUE route is deliberately left alone:
+        # the chips must come from the live `/api/v1/quickpicks`, because the
+        # thing worth asserting there is that the client is not carrying a
+        # second copy of `quickpick.INTENTS`.
+        page.route("**/api/v1/quickpick?*", lambda route, request:
+                   route.fulfill(
+                       status=200, content_type="application/json",
+                       body=json.dumps({
+                           "data": _quickpick_over(chain, request.url),
+                           "meta": {"api_version": "v1"}})))
     if review is not None or review_log is not None:
         def _review(route, request):
             if review_log is not None:
@@ -783,10 +833,149 @@ def check_chain_columns_by_level(browser, base, c: Checks,
     page.close()
 
 
+# ── 4. Which contract matches my intent? ─────────────────────────────────────
+
+QUICK_JS = """() => {
+  const chips = Array.from(document.querySelectorAll('#tk-quick button'));
+  const why = document.getElementById('tk-qp-why');
+  const rows = Array.from(
+    document.querySelectorAll('#tk-chain tr[data-strike]'));
+  return {
+    labels: chips.map(b => b.textContent.trim()),
+    // A chip that says what it will do BEFORE it is pressed. §6.3's promise
+    // that "the chain then teaches them what the chip chose" needs the chip
+    // to have said what it was going to choose.
+    described: chips.filter(b => (b.title || '').length > 20).length,
+    pressed: chips.filter(b => b.getAttribute('aria-pressed') === 'true')
+                  .map(b => b.dataset.intent),
+    why: (why?.textContent || '').trim(),
+    whyShown: !!why && why.classList.contains('show'),
+    whyWarns: !!why && why.classList.contains('warn'),
+    picked: rows.filter(r => r.classList.contains('qprow'))
+                .map(r => +r.dataset.strike),
+    selected: rows.filter(r => r.classList.contains('selrow'))
+                  .map(r => +r.dataset.strike),
+  };
+}"""
+
+
+def check_quick_picks(browser, base, c: Checks, console: list) -> None:
+    """§6.3's four chips, and the rule that they are never magic (M4-C6).
+
+    Fails against the previous build throughout: it offered TWO ad-hoc buttons
+    ("Nearest ATM call", "Nearest ATM put") whose rule was ten lines of
+    JavaScript in `atmPick`, which existed only in the empty state, which
+    explained nothing about what they had chosen, and which had no
+    relationship to `quickpick.INTENTS` — the catalogue §6.3 says Pilot and
+    the AI engine express the same intents through.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[])
+    q = page.evaluate(QUICK_JS)
+
+    # The catalogue is the SERVER's. Four chips, in §6.3's order, and this
+    # request is not stubbed — it is the real `/api/v1/quickpicks`.
+    c.check("all four of §6.3's intents are offered", len(q["labels"]) == 4,
+            str(q["labels"]))
+    c.check("and in the order §6.3 lists them",
+            [x.lower() for x in q["labels"]] ==
+            ["atm call", "atm put", "30 day", "weekly"], str(q["labels"]))
+    c.check("every chip says what it will do before it is pressed",
+            q["described"] == 4, f"{q['described']} of 4 carry a description")
+    c.check("no chip claims to have produced the current contract",
+            q["pressed"] == [], str(q["pressed"]))
+
+    # Everything below presses a chip. With none rendered, `page.click` waits
+    # 30s and then raises, which turns a gate that found something into a gate
+    # that crashed. Same guard as the chain's keyboard section, same reason.
+    if len(q["labels"]) != 4:
+        c.check("the four chips can be pressed at all", False,
+                "no chips rendered; skipping the resolution path")
+        page.close()
+        return
+
+    # Press ATM call. Spot is 471.20, so the answer is 470 and nothing else.
+    page.click('#tk-quick button[data-intent="atm_call"]')
+    page.wait_for_timeout(900)
+    q = page.evaluate(QUICK_JS)
+    c.check("a chip arms the ticket with a concrete contract",
+            q["selected"] == [470], str(q["selected"]))
+    # §6.3: "the resulting selection is highlighted in the chain so the user
+    # can see what was picked and why."
+    c.check("and the chain marks the row the shortcut chose",
+            q["picked"] == [470], str(q["picked"]))
+    c.check("the chip itself shows it is the one in effect",
+            q["pressed"] == ["atm_call"], str(q["pressed"]))
+
+    # NEVER MAGIC. The explanation names both axes an intent resolves.
+    c.check("the pick explains which strike, and against what",
+            q["whyShown"] and "$470" in q["why"] and "471.20" in q["why"],
+            q["why"][:120])
+    c.check("and what it did with the expiry",
+            "expiry you already had" in q["why"].lower(), q["why"][:120])
+    c.check("an explanation is not painted as a warning", not q["whyWarns"],
+            q["why"][:60])
+
+    sel = page.text_content("#tk-selected") or ""
+    c.check("the ticket names the contract the chip chose",
+            "$470" in sel and "Call" in sel, sel[:70])
+
+    # A chip that names a RIGHT switches sides; ATM put must not stay on calls.
+    page.click('#tk-quick button[data-intent="atm_put"]')
+    page.wait_for_timeout(900)
+    q = page.evaluate(QUICK_JS)
+    sel = page.text_content("#tk-selected") or ""
+    c.check("an intent that names a right switches the chain to it",
+            "Put" in sel, sel[:70])
+    c.check("and the previous chip stops claiming to be in effect",
+            q["pressed"] == ["atm_put"], str(q["pressed"]))
+
+    # Choosing by hand ends the shortcut — the mark says "a chip put this
+    # here", and after a manual click that is no longer true.
+    page.click("#tk-chain tr[data-strike='455']")
+    page.wait_for_timeout(700)
+    q = page.evaluate(QUICK_JS)
+    c.check("choosing a row by hand clears the quick-pick mark",
+            q["picked"] == [] and q["selected"] == [455],
+            f"picked={q['picked']} selected={q['selected']}")
+    c.check("and no chip still claims credit for it", q["pressed"] == [],
+            str(q["pressed"]))
+    page.close()
+
+
+def check_quick_pick_that_cannot_resolve(browser, base, c: Checks,
+                                         console: list) -> None:
+    """A shortcut that finds nothing says so (M4-C6).
+
+    `QuickPickView` carries a `reason` precisely because a chip that quietly
+    does nothing is one the user presses again. The previous build's `atmPick`
+    returned early on an empty side with no output at all.
+    """
+    thin = _chain_payload(date.today())
+    # Calls only. "ATM put" now has a real, explainable reason to fail.
+    thin["chain"] = [r for r in thin["chain"] if r["right"] == "call"]
+    page = open_trade(browser, base, console=console, chain=thin,
+                      review_log=[])
+    if not page.query_selector('#tk-quick button[data-intent="atm_put"]'):
+        c.check("a shortcut that cannot resolve says why, rather than nothing",
+                False, "no quick-pick chips rendered")
+        page.close()
+        return
+    page.click('#tk-quick button[data-intent="atm_put"]')
+    page.wait_for_timeout(900)
+    q = page.evaluate(QUICK_JS)
+    c.check("a shortcut that cannot resolve says why, rather than nothing",
+            q["whyShown"] and "puts" in q["why"].lower(), q["why"][:120])
+    c.check("and that one IS marked as a problem", q["whyWarns"],
+            q["why"][:60])
+    c.check("a failed shortcut arms nothing", q["selected"] == [],
+            str(q["selected"]))
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
-        "4. Which contract matches my intent? (M4-C6)",
         "7. Should I place this order? (M4-C8/C9)",
     ):
         c.note(label)
@@ -801,6 +990,8 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_ticket_empty_state(browser, base, c, console)
     check_ticket_states_the_engines_numbers(browser, base, c, console)
     check_ticket_does_not_refetch(browser, base, c, console)
+    check_quick_picks(browser, base, c, console)
+    check_quick_pick_that_cannot_resolve(browser, base, c, console)
     check_workflow_sections(c)
 
 

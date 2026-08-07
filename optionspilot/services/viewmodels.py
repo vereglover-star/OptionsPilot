@@ -269,6 +269,11 @@ class QuickPickView(ViewModel):
     ask: float | None = None
     delta: float | None = None
     reason: str = ""
+    #: WHY this contract, in a sentence (M4-C6). Both halves of the rule —
+    #: which strike and which expiry — because an intent resolves two axes and
+    #: a user who disagrees with the result needs to know which half to argue
+    #: with. Empty when `ok` is False; `reason` is the sentence in that case.
+    explanation: str = ""
 
 
 @dataclass(frozen=True, slots=True)

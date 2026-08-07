@@ -102,6 +102,41 @@ realistic-length chain below it the expiry strip was compressed to **57% of
 its natural height** — every pill still present, still readable by
 `textContent`, still clickable, and unreadable on screen.
 
+**C6 — quick picks, wired and explained.** §6.3's four chips — ATM call, ATM
+put, 30 day, Weekly — replace the two ad-hoc buttons whose rule was ten lines
+of JavaScript in `atmPick`, which existed only in the empty state and had no
+relationship to `quickpick.INTENTS`.
+
+The catalogue is **fetched** from `/api/v1/quickpicks`, not restated in
+`index.html`, and resolution stays server-side: §6.3's claim that "the chips
+are the same intents Pilot uses when it suggests a trade" only holds if there
+is one implementation of what an intent means.
+
+**Never magic.** Each intent now carries a `description` — what the chip will
+do, before it is pressed — and each resolution carries an `explanation`
+naming *both* axes it resolved: which strike, against what spot, and what it
+did with the expiry. An intent resolves two axes, and a user who disagrees
+with the result needs to know which half to argue with. Both strings live
+with the rule they describe, for the reason the DTE defect exists.
+
+The picked row is marked in the chain distinctly from the selected row — the
+two say different things, and the mark clears the moment the user picks a row
+by hand. A chip that cannot resolve says why, in the caution voice; an
+explanation of a successful pick does not, because painting an expected
+outcome in warning colour trains the eye to ignore the colour when a real
+guardrail fires.
+
+**One defect found.** The server resolves against its own chain for the
+expiry, and when that named a strike the loaded chain did not contain,
+`selectContract` returned silently — the chip appeared to do nothing, which
+is the exact failure `QuickPickView.reason` exists to prevent. It now reports
+the mismatch.
+
+**Gate: 89 → 107 checks.** `/api/v1/quickpick` is stubbed by running the real
+`services/quickpick.py` rules over the fixture chain, so only the transport
+is faked; the catalogue route is deliberately left live, because what is
+worth asserting there is that the client holds no second copy of the intents.
+
 **Gate: 46 → 89 checks.** Assertions carry a `[preserved]` or `[guard]` label
 where they cannot fail against the previous build, so the file's own rule —
 every assertion fails against the build it replaces — stays checkable rather

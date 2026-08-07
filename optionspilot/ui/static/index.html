@@ -819,7 +819,25 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 .tk-blocked { font-size:var(--text-caption); color:var(--ink-muted);
   padding:var(--space-2) 2px 0; }
 .tk-blocked:empty { display:none; }
-.tk-quick { display:flex; gap:var(--space-2); justify-content:center; margin-top:10px; }
+/* Quick picks (M4-C6). A row of chips, wrapping rather than scrolling — four
+   is a bounded set and a horizontally scrolling group of four hides the last
+   one for no reason. `aria-pressed` marks the chip that produced the current
+   contract, which is a state a colour alone must not carry. */
+.tk-quick { display:flex; flex-wrap:wrap; gap:var(--space-2);
+  margin-top:var(--space-3); }
+.tk-quick:empty { display:none; }
+.tk-quick .btn.qp { flex:1 1 auto; text-align:center;
+  font-size:var(--text-caption); padding:var(--space-2) var(--space-3); }
+.tk-quick .btn.qp[aria-pressed="true"] {
+  background:var(--action-primary-tint);
+  border-color:var(--action-primary-fill); color:var(--ink-primary);
+  font-weight:600; }
+/* The chain's own mark for a quick-picked row (§6.3). Distinct from `selrow`,
+   which says where the ticket is pointed; this says a shortcut put it there.
+   An inset edge on the far side, so the two marks cannot be confused with
+   each other or overlap. */
+.chain-wrap tr.qprow td:last-child {
+  box-shadow:inset -3px 0 0 var(--action-primary-text); }
 .tk-pos { display:flex; align-items:center; gap:10px; padding:7px var(--space-2);
   border-radius:var(--radius-sm); font-size:var(--legacy-fs-md); font-variant-numeric:tabular-nums; }
 .tk-pos:hover { background:var(--surface-sunken); }
@@ -1587,6 +1605,16 @@ html.gd-nomotion #gd-ring::after { display:none; }
   border-radius:var(--radius-sm); padding:7px 10px; margin-top:var(--space-2); line-height:1.5;
   display:none; }
 .tk-why.show { display:block; animation:gdcard var(--dur-fast) ease; }
+/* The quick-pick line reuses `.tk-why`'s SHAPE but not its voice (M4-C6).
+   `.tk-why` is the guardrail's amber, and a chip explaining what it chose is
+   not a warning — painting a successful, expected outcome in caution colour
+   is exactly the "decoration that does not communicate" §8 prohibits, and it
+   would train the eye to ignore the colour when a real guardrail fires.
+   `.warn` restores the caution treatment for the case that IS one: a chip
+   that could not resolve. */
+#tk-qp-why { color:var(--ink-secondary); background:var(--surface-sunken); }
+#tk-qp-why.warn { color:var(--status-caution);
+  background:var(--status-caution-tint); }
 
 /* ══ THE INSTRUMENT (M3-C4) ═══════════════════════════════════════════════
    The Flight Deck's one region primitive. Home is its first consumer and
@@ -2693,6 +2721,12 @@ body.shell-v2 .home-legacy { display:none; }
                   aria-label="Learn how the order ticket works">?</button>
         </div>
         <div id="tk-selected" class="empty">Click a chain row to select a contract.</div>
+        <!-- Quick picks (M4-C6). §6.3's four chips, rendered FROM the server's
+             catalogue rather than restated here, and present in both the
+             empty and the selected state — a shortcut you can only reach
+             before choosing is not a shortcut for the second trade. -->
+        <div class="tk-quick" id="tk-quick"></div>
+        <div class="tk-why" id="tk-qp-why" role="status" aria-live="polite"></div>
         <!-- ══ THE TICKET, ALWAYS PRESENT (M4-C4) ═══════════════════════════
              The form no longer waits for a contract. §6.1's second named
              fault is that "the ticket does not exist until a contract is
@@ -8541,8 +8575,9 @@ const post = (url, body) => fetch(url, {method: "POST",
   headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
 
 async function loadTrade() {
-  await Promise.all([loadMetrics(), loadOrders()]);
+  await Promise.all([loadMetrics(), loadOrders(), qpLoad()]);
   renderTkPositions();
+  qpRender();
   if (!tkChain) loadChain();
   tkChartApply();
 }
@@ -8819,9 +8854,17 @@ function chRevealRow(el) {
 /* Selection, without touching the other 298 rows. */
 function chMarkSelection() {
   chRowEls().forEach(el => {
-    const on = !!tkSel && +el.dataset.strike === tkSel.strike;
+    const strike = +el.dataset.strike;
+    const on = !!tkSel && strike === tkSel.strike;
     el.classList.toggle("selrow", on);
     el.setAttribute("aria-selected", on ? "true" : "false");
+    // §6.3: a quick-picked contract is marked IN THE CHAIN, "so the user can
+    // see what was picked and why". Distinct from `selrow`, because the two
+    // say different things — selected is where the ticket is pointed, picked
+    // is that a shortcut put it there — and the mark clears the moment the
+    // user chooses a different row themselves.
+    el.classList.toggle("qprow",
+      !!tkPick && strike === tkPick.strike && on);
   });
 }
 
@@ -8940,37 +8983,143 @@ $("tk-chain").addEventListener("keydown", e => {
    and this comment is where that is recorded. */
 function hideTicket() {
   tkSel = null;
+  tkPick = null;
   $("tk-selected").className = "empty";
-  $("tk-selected").innerHTML = tkChain
-    ? `<b>Nothing selected yet.</b> Pick a strike from the chain — or jump
-       straight to the money:
-       <div class="tk-quick">
-         <button class="btn" type="button" onclick="atmPick('call')">⚡ Nearest ATM call</button>
-         <button class="btn" type="button" onclick="atmPick('put')">⚡ Nearest ATM put</button>
-       </div>`
-    : `<b>Nothing selected yet.</b> Load a chain to build an order.`;
+  $("tk-selected").innerHTML =
+    `<b>Nothing selected yet.</b> ` +
+    (tkChain ? `Pick a strike from the chain — or start from an intent:`
+             : `Load a chain to build an order.`);
   tkPaintFigures(null);
+  qpRender();
 }
 
-function atmPick(right) {
+/* ── quick picks (M4-C6) ──────────────────────────────────────────────────
+   §6.3's four chips: ATM call, ATM put, 30 day, Weekly. Each resolves an
+   INTENT into a concrete contract, selects it in the chain and populates the
+   ticket. The chain stays fully available; a chip is a shortcut, never a
+   replacement.
+
+   **The catalogue is fetched, not restated.** `quickpick.INTENTS` is the one
+   list, served by `/api/v1/quickpicks`. A copy of the four labels in this
+   file would be the second catalogue holding one fact — the drift
+   `guide.py::TestCatalogueContract` has a bidirectional test for and the
+   settings ranking (V0.5.7) and `data/health.py` (V0.5.3) both shipped.
+
+   **The RESOLUTION is server-side too**, which is the decision M4-C1 made and
+   this commit consumes: the client holds a chain payload and could pick the
+   nearest strike itself, and then "the chips are the same intents Pilot uses
+   when it suggests a trade" (§6.3) would be false — there would be two
+   implementations of what an intent means.
+
+   **And it is never magic.** Each chip carries the server's `description`
+   before it is pressed, and the resolved pick carries the server's
+   `explanation` after — both halves of the rule, strike and expiry, because
+   an intent resolves two axes and a user who disagrees needs to know which
+   half to argue with. */
+let qpIntents = null;      // the server's catalogue, fetched once
+let tkPick = null;         // {intent, strike, right, expiration} or null
+
+async function qpLoad() {
+  if (qpIntents) return qpIntents;
+  try {
+    const r = await fetch("/api/v1/quickpicks");
+    const body = await r.json();
+    qpIntents = (body.data && body.data.intents) || [];
+  } catch (err) {
+    // A catalogue that cannot be fetched leaves the chips absent rather than
+    // rendering a guessed set. The chain is right there and is the real path.
+    qpIntents = [];
+  }
+  return qpIntents;
+}
+
+function qpRender() {
+  const host = $("tk-quick");
+  if (!host) return;
+  if (!tkChain || !qpIntents || !qpIntents.length) { host.innerHTML = ""; return; }
+  host.innerHTML = qpIntents.map(i =>
+    `<button class="btn qp" type="button" data-intent="${esc(i.key)}"` +
+    ` title="${esc(i.description)}"` +
+    ` aria-pressed="${tkPick && tkPick.intent === i.key ? "true" : "false"}">` +
+    `${esc(i.label)}</button>`).join("");
+  host.querySelectorAll("button").forEach(b =>
+    b.onclick = () => qpApply(b.dataset.intent));
+}
+
+/* Say what happened, in the ticket, whether or not it worked. A chip that
+   quietly does nothing when the chain is thin is one the user presses again;
+   `QuickPickView` carries a `reason` for exactly that case. */
+function qpSay(text, ok) {
+  const el = $("tk-qp-why");
+  if (!el) return;
+  el.textContent = text || "";
+  el.classList.toggle("show", !!text);
+  el.classList.toggle("warn", !!text && !ok);
+}
+
+async function qpApply(key) {
   if (!tkChain) return;
-  if (right !== tkRight) {
-    tkRight = right;
+  qpSay("", true);
+  const url = `/api/v1/quickpick?symbol=${encodeURIComponent(tkChain.symbol)}` +
+    `&intent=${encodeURIComponent(key)}` +
+    `&expiration=${encodeURIComponent(tkExp || tkChain.expiration)}` +
+    `&right=${encodeURIComponent(tkRight)}`;
+  let d;
+  try {
+    d = ((await (await fetch(url)).json()) || {}).data;
+  } catch (err) { d = null; }
+  if (!d) { qpSay("That shortcut could not be resolved right now.", false); return; }
+  if (!d.ok) { qpSay(d.reason || "That shortcut found no contract.", false); return; }
+
+  // An expiry intent can move the expiry, which means a different chain.
+  if (d.expiration && d.expiration !== tkChain.expiration) {
+    tkExp = d.expiration;
+    tkSel = null;
+    await loadChain();
+    if (!tkChain) return;
+  }
+  if (d.right && d.right !== tkRight) {
+    tkRight = d.right;
     document.querySelectorAll("#tk-right button").forEach(x =>
-      x.classList.toggle("active", x.dataset.right === right));
+      x.classList.toggle("active", x.dataset.right === d.right));
     renderChain(true);
   }
-  const rows = tkChain.chain.filter(r => r.right === right);
-  if (!rows.length) return;
-  const atm = rows.reduce((a, b) =>
-    Math.abs(b.strike - tkChain.spot) < Math.abs(a.strike - tkChain.spot) ? b : a);
-  selectContract(atm.strike);
+  tkPick = {intent: key, strike: d.strike, right: d.right,
+            expiration: d.expiration};
+  selectContract(d.strike);
+  // The server resolved against ITS chain for that expiry. Normally that is
+  // the same chain this client is showing — but a stale one, or a provider
+  // that answered the two requests differently, leaves `selectContract`
+  // finding no such row and returning silently. A chip that appears to do
+  // nothing is the exact failure §6.3's `reason` field exists to prevent, so
+  // the mismatch is reported rather than swallowed.
+  if (!tkSel || tkSel.strike !== d.strike) {
+    tkPick = null;
+    qpSay(`That shortcut chose $${d.strike}, which is not in the chain on ` +
+          `screen. Reload the chain and try again.`, false);
+    qpRender();
+    return;
+  }
+  // §6.3: "the resulting selection is highlighted in the chain so the user
+  // can see what was picked and why." The highlight is `chMarkSelection`'s
+  // job; the why is the server's sentence, in the ticket beside the contract.
+  qpSay(d.explanation, true);
+  qpRender();
+  const el = chRowEls().find(x => +x.dataset.strike === d.strike);
+  if (el) chRevealRow(el);
 }
 
 function selectContract(strike) {
   const row = tkChain.chain.find(r => r.strike === strike && r.right === tkRight);
   if (!row) return;
   tkSel = row;
+  // Choosing a different contract by hand ends the quick pick. `qpApply` sets
+  // `tkPick` before calling in, so the comparison — rather than an
+  // unconditional clear — is what lets a chip's own selection keep its mark.
+  if (tkPick && (tkPick.strike !== strike || tkPick.right !== row.right)) {
+    tkPick = null;
+    qpSay("", true);
+  }
   $("tk-selected").className = "tk-contract";
   // The expiry reads as a DATE and a DTE, which §3.4 requires be two facts
   // rather than one parenthesising the other — and the DTE is the server's
@@ -8993,6 +9142,7 @@ function selectContract(strike) {
   // doing it, so keyboard navigation could never have worked: focus fell to
   // `<body>` and the next arrow scrolled the page. Two class toggles instead.
   chMarkSelection();
+  qpRender();      // the chips show which one, if any, produced this contract
   // §4.5-3: one contract selection, and §4.5-8: it survives a restart. The
   // server already validates and stores this shape, and drops it by itself
   // when the symbol moves — see `services/workspace.py::_contract`.

@@ -236,7 +236,7 @@ class TradingService:
         return quickpick.contract_for(
             spec, payload.get("chain"), payload.get("spot"),
             current_right=right, expiration=choice.expiration,
-            dte=choice.dte).to_dict()
+            dte=choice.dte, symbol=symbol).to_dict()
 
     def review_order(self, payload: dict) -> dict:
         """The consequence restatement for an order about to be placed (M4-C2).

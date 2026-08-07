@@ -64,21 +64,38 @@ class Intent:
     label: str
     right: str | None = None
     target_dte: int | None = None
+    #: What pressing this chip will do, in a sentence, BEFORE it is pressed
+    #: (M4-C6). A shortcut whose rule is invisible is a shortcut a beginner
+    #: cannot learn from and an experienced trader will not trust — §6.3's
+    #: whole claim is that "the chain then teaches them what the chip chose",
+    #: which requires the chip to have said what it was going to choose.
+    #: It lives beside the rule it describes rather than in `index.html`,
+    #: because a description that drifts from its rule is worse than none.
+    description: str = ""
 
 
 #: The four chips, in the order §6.3 lists them. One tuple, so the client
 #: renders the catalogue rather than restating it — the drift `guide.py`'s
 #: two-way catalogue assertion exists to prevent.
 INTENTS: tuple[Intent, ...] = (
-    Intent(ATM_CALL, "ATM call", right="call"),
-    Intent(ATM_PUT, "ATM put", right="put"),
+    Intent(ATM_CALL, "ATM call", right="call",
+           description="The call whose strike is nearest the current price, "
+                       "on the expiry you already have open."),
+    Intent(ATM_PUT, "ATM put", right="put",
+           description="The put whose strike is nearest the current price, "
+                       "on the expiry you already have open."),
     #: 30 days is the conventional "about a month out" swing horizon, and the
     #: one §6.1 names as the overwhelmingly common intent.
-    Intent(DAY_30, "30 day", target_dte=30),
+    Intent(DAY_30, "30 day", target_dte=30,
+           description="Moves to the listed expiry closest to 30 days out, "
+                       "then takes the strike nearest the current price."),
     #: A week. Not "the nearest expiry": on a Thursday the nearest expiry can
     #: be tomorrow, and a chip labelled "Weekly" landing on a 1-DTE contract
     #: is not what it says on the chip.
-    Intent(WEEKLY, "Weekly", target_dte=7),
+    Intent(WEEKLY, "Weekly", target_dte=7,
+           description="Moves to the listed expiry closest to 7 days out — "
+                       "not simply the nearest one, which on a Thursday can "
+                       "be tomorrow."),
 )
 
 BY_KEY: dict[str, Intent] = {i.key: i for i in INTENTS}
@@ -137,8 +154,37 @@ def expiration_for(intent: Intent, expirations, today: date,
     return ExpiryChoice(expiration=best_e, dte=best_d)
 
 
+def _explain(intent: Intent, *, symbol: str, strike: float, right: str,
+             spot: float, dte) -> str:
+    """Why THIS contract, in one sentence (M4-C6).
+
+    §6.3's promise is that "the chain then teaches them what the chip chose",
+    and a chip that produces a contract without saying how chose it is the
+    magic the prompt for this milestone names as the thing to avoid. Both
+    halves of the rule are stated, because an intent resolves two axes and a
+    user who disagrees with the result needs to know which half to argue with.
+
+    Built here rather than in the client for the same reason `description` is:
+    it describes a rule this module owns, and §6.3 requires Pilot and the AI
+    engine to express the same intents. A second wording in `index.html` would
+    be the suggestion and the action explaining themselves differently.
+    """
+    word = "call" if right == "call" else "put"
+    where = f"the {word} struck nearest {symbol} at ${spot:,.2f}"
+    if intent.target_dte is None:
+        when = "on the expiry you already had open"
+    else:
+        days = "expiring today" if dte == 0 else (
+            f"{dte} day{'s' if dte != 1 else ''} out" if dte is not None
+            else "on the chosen expiry")
+        when = (f"{days} — the listed expiry closest to "
+                f"{intent.target_dte} days")
+    return f"${strike:g} — {where}, {when}."
+
+
 def contract_for(intent: Intent, rows, spot, *, current_right: str = "call",
-                 expiration: str = "", dte: int | None = None) -> QuickPickView:
+                 expiration: str = "", dte: int | None = None,
+                 symbol: str = "") -> QuickPickView:
     """The contract this intent selects, from `chain_payload`'s own rows.
 
     Nearest strike to spot, among the rows of the right the intent names (or
@@ -164,14 +210,19 @@ def contract_for(intent: Intent, rows, spot, *, current_right: str = "call",
             reason=f"this expiry lists no {right}s")
 
     row = min(candidates, key=lambda r: (abs(r["strike"] - spot), r["strike"]))
+    resolved_dte = dte if dte is not None else row.get("dte")
     return QuickPickView(
         ok=True, intent=intent.key, right=right, expiration=expiration,
-        dte=dte if dte is not None else row.get("dte"),
+        dte=resolved_dte,
         strike=float(row["strike"]), mid=row.get("mid"), bid=row.get("bid"),
-        ask=row.get("ask"), delta=row.get("delta"))
+        ask=row.get("ask"), delta=row.get("delta"),
+        explanation=_explain(intent, symbol=symbol or "the underlying",
+                             strike=float(row["strike"]), right=right,
+                             spot=float(spot), dte=resolved_dte))
 
 
 def catalogue() -> list[dict]:
     """The four chips as primitives, for a client to render."""
     return [{"key": i.key, "label": i.label, "right": i.right or "",
-             "target_dte": i.target_dte} for i in INTENTS]
+             "target_dte": i.target_dte, "description": i.description}
+            for i in INTENTS]

@@ -567,7 +567,7 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**6 of 11 commits.** The backend tier (C1–C2) is complete and the
+**7 of 11 commits.** The backend tier (C1–C2) is complete and the
 gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
 commit that protects the seven frontend commits, and seven commits of new
 surface with no behavioural coverage is how a destination ships broken.
@@ -578,8 +578,8 @@ surface with no behavioural coverage is how a destination ships broken.
 | C2 | ✅ | The review view model (`services/review.py`) + `/api/v1/review` | `7ef7968` |
 | C3 | 🟡 | The workspace layout: chart, chain, ticket. **Draggable splitters deferred** — they need a workspace field and are self-contained | `8a4c210` |
 | C4 | ✅ | The ticket, always present, empty and selected states. **Two defects closed**: the stated cost was the mid, and the sizing advisory used the wrong denominator | `5abb748` |
-| C5 | ✅ | The chain: spot-anchored, roving tabindex, Surface-Level columns. Closes **D3** (greek provenance); found the Enter collision and the squashed expiry strip | `TBD-C5` |
-| C6 | ⬜ | Quick picks wired to the ticket and marked in the chain | |
+| C5 | ✅ | The chain: spot-anchored, roving tabindex, Surface-Level columns. Closes **D3** (greek provenance); found the Enter collision and the squashed expiry strip | `68d792e` |
+| C6 | ✅ | Quick picks wired to the ticket and marked in the chain; the catalogue is fetched, and every pick explains both axes it resolved | `TBD-C6` |
 | C7 | ⬜ | The review modal, five elements in order | |
 | C8 | ⬜ | Hold-to-confirm commit control | |
 | C9 | ⬜ | The ticket's blocked state; `OrderManager` refusals re-asserted | |

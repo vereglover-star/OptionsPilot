@@ -37,9 +37,28 @@ class TestCatalogue:
 
     def test_the_catalogue_serialises_to_primitives(self):
         for entry in qp.catalogue():
-            assert set(entry) == {"key", "label", "right", "target_dte"}
+            assert set(entry) == {"key", "label", "right", "target_dte",
+                                  "description"}
             for value in entry.values():
                 assert value is None or isinstance(value, (str, int))
+
+    def test_every_chip_says_what_it_will_do_before_it_is_pressed(self):
+        """M4-C6. §6.3's claim is that "the chain then teaches them what the
+        chip chose", which requires the chip to have said what it was going
+        to choose. A shortcut with an invisible rule is the magic this
+        milestone exists to avoid."""
+        for entry in qp.catalogue():
+            assert entry["description"].strip(), entry["key"]
+            # It must describe the rule, not restate the label.
+            assert entry["description"].lower() != entry["label"].lower()
+
+    def test_an_expiry_intent_names_its_target_in_its_own_description(self):
+        # The number in the description and the number in the rule are one
+        # fact; a description saying "about a month" over a 30-day target is
+        # how the two drift.
+        for key in (qp.DAY_30, qp.WEEKLY):
+            intent = qp.BY_KEY[key]
+            assert str(intent.target_dte) in intent.description, key
 
 
 class TestExpirationChoice:
@@ -114,6 +133,31 @@ class TestContractChoice:
         # The thin-chain case is exactly when the shortcut is most useful.
         got = qp.contract_for(qp.BY_KEY[qp.ATM_CALL], [_row(500)], 471.20)
         assert got.ok and got.strike == 500.0
+
+    def test_a_resolved_pick_explains_BOTH_axes_it_chose(self):
+        """M4-C6. An intent resolves a strike and an expiry, and a user who
+        disagrees with the result needs to know which half to argue with."""
+        rows = [_row(465), _row(470), _row(475)]
+        got = qp.contract_for(qp.BY_KEY[qp.DAY_30], rows, 471.20,
+                              symbol="SPY", expiration="2026-09-06", dte=30)
+        assert got.explanation
+        assert "$470" in got.explanation            # which strike
+        assert "471.20" in got.explanation          # and against what
+        assert "30 days" in got.explanation         # which expiry, and why
+
+    def test_a_strike_intent_says_it_left_the_expiry_alone(self):
+        # The axis a chip does not name is the axis it must not override, and
+        # the explanation has to say so or the user cannot tell whether their
+        # chosen expiry survived.
+        got = qp.contract_for(qp.BY_KEY[qp.ATM_CALL], [_row(470)], 471.20,
+                              symbol="SPY", expiration="2026-08-14", dte=7)
+        assert "expiry you already had" in got.explanation
+
+    def test_an_unresolved_pick_explains_nothing_and_gives_a_reason(self):
+        # `reason` is the sentence in the failure case; an explanation of a
+        # contract that was not chosen would be describing nothing.
+        got = qp.contract_for(qp.BY_KEY[qp.ATM_CALL], [], 471.20, symbol="SPY")
+        assert not got.ok and got.explanation == "" and got.reason
 
     def test_the_quote_travels_with_the_pick(self):
         # So the ticket can populate without a second request against a chain
