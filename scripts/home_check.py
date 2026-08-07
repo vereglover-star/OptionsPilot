@@ -102,6 +102,23 @@ RHYTHM_JS = """() => {
 }"""
 
 
+#: The left edge of each split band's MINOR column. One seam means these are
+#: the same number. Reported as `null` when a band has stacked, which is a
+#: legitimate state and not a seam — the check then fails loudly rather than
+#: comparing two absent values and passing.
+SEAM_JS = """() => {
+  const edge = id => {
+    const e = document.getElementById(id);
+    if (!e) return null;
+    const b = e.getBoundingClientRect();
+    return b.width > 0 ? +b.left.toFixed(1) : null;
+  };
+  const b2 = edge('home-next'), b3 = edge('home-watchlist');
+  return {b2: b2, b3: b3,
+          ok: b2 !== null && b3 !== null && Math.abs(b2 - b3) <= 1};
+}"""
+
+
 def _position(symbol="SPY", strike=470.0, right="call", qty=1, avg=3.0,
               mark=3.5, pnl=50.0):
     return {"contract": f"{symbol}260918C00470000", "underlying": symbol,
@@ -259,6 +276,19 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
             rhythm["ok"], f"expected {rhythm['expected']}px, measured "
                           f"{rhythm['gaps']}")
     page.close()
+
+    # ── one column seam down the whole page (M3.5-C4) ────────────────────────
+    # Asserted from rendered edges at both required sizes, not from the CSS.
+    # The defect it replaces was two bands carrying their own ratios, which is
+    # invisible in a stylesheet review and obvious the moment the two numbers
+    # are put side by side.
+    for width in (1920, 1440):
+        page = open_home(browser, base, FULL, width=width, height=1000,
+                         console=console)
+        seam = page.evaluate(SEAM_JS)
+        c.check(f"band 2 and band 3 share one column seam at {width}px",
+                seam["ok"], f"band2 seam at {seam['b2']}, band3 at {seam['b3']}")
+        page.close()
 
     # ── 5-6: band 2 never reverses ───────────────────────────────────────────
     for width in (1920, 1024):

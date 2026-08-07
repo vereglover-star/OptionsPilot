@@ -240,9 +240,52 @@ def check_instrument(text: str) -> list[str]:
     return problems
 
 
+def style_block(text: str) -> str:
+    """The contents of the single inline `<style>`.
+
+    Scoped rather than run over the whole file because the `<script>` below it
+    contains regex literals and strings that hold `*/` legitimately, and a
+    false positive in a gate is a gate people learn to ignore.
+    """
+    m = re.search(r"<style>(.*?)</style>", text, flags=re.DOTALL)
+    return m.group(1) if m else ""
+
+
+def check_stylesheet_integrity(text: str) -> list[str]:
+    """Every CSS comment opens and closes exactly once.
+
+    Added in M3.5-C4 after editing prose inside a comment left a stray `*/`
+    and three lines of English in the middle of the stylesheet. The browser's
+    error recovery swallowed the rule that followed — `.hp-row`'s grid — so
+    every position row lost its column layout, and the FULL browser suite went
+    green anyway: 36/36 Home checks, zero console errors, because a CSS parse
+    error is not a console error and no assertion measured that particular
+    box. It was found by looking at a screenshot.
+
+    The check is deliberately crude and therefore reliable: strip balanced
+    comments, and any `/*` or `*/` still standing is unbalanced. That catches
+    both an unterminated comment and a stray terminator, which are the two
+    ways prose gets into a stylesheet.
+    """
+    problems: list[str] = []
+    stripped = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    for token, what in (("*/", "closer with no opener"),
+                        ("/*", "opener with no closer")):
+        at = stripped.find(token)
+        if at >= 0:
+            # Report against the ORIGINAL text so the line number is usable.
+            near = stripped[max(0, at - 70):at + 30].strip().replace("\n", " ")
+            problems.append(
+                f"unbalanced CSS comment: a {token} {what}, near {near!r}. "
+                f"A stray comment terminator puts prose into the stylesheet, "
+                f"and the browser silently discards the rule that follows it.")
+    return problems
+
+
 def check() -> list[str]:
     text = INDEX.read_text(encoding="utf-8")
     problems: list[str] = []
+    problems += check_stylesheet_integrity(style_block(text))
 
     # 1. layering — the ramp is readable only where semantics are derived
     allowed = [s for s in (block_span(text, ":root"),

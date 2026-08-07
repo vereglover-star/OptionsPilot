@@ -44,6 +44,19 @@
   --space-5:24px;   /* between panels; the layout gutter */
   --space-6:32px;   /* between bands */
   --space-7:48px;   /* page-level separation */
+
+  /* The two-column split every destination body uses, as ONE fact (M3.5-C4).
+     Home's two split bands each carried their own ratio — 1.45fr:1fr and
+     2fr:1fr — so the vertical seam between the columns stepped sideways 124px
+     halfway down the page (measured at 1920: x=1211, then x=1335). The eye
+     tracks vertical edges, and an edge that moves without a reason reads as
+     misalignment even when a viewer cannot say what is wrong. Two places
+     holding one fact is the drift this codebase keeps paying for; this is the
+     one place. Trade, Portfolio, Research and Journal inherit it via
+     `.dest-split`, which is what makes the seam a property of the product
+     rather than of Home. */
+  --split-major:1.6fr;
+  --split-minor:1fr;
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 
   /* ══ UI V2 primitives (M0-C1) ══════════════════════════════════════════
@@ -270,9 +283,10 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
   padding:var(--space-3) var(--space-2);
   background:var(--surface-base); border-right:1px solid var(--border-subtle);
   overflow:hidden; }
-/* `margin:0; padding:0` is the fix for a defect that shipped through M2 and
-   M3 unseen. `list-style:none` removes the markers but NOT the user agent's
-   `padding-inline-start:40px`, so every rail item began 40px right of the
+/* Zeroing the list's own margin and inline padding is the fix for a defect
+   that shipped through M2 and M3 unseen. `list-style:none` removes the
+   markers but NOT the user agent's 40px inline start padding, so every rail
+   item began 40px right of the
    rail's padding edge. At 200px that is invisible slack. At 72px and 56px it
    pushed the icon column past the rail's right edge, where `overflow:hidden`
    sliced every icon vertically in half — measured, the 16px icon spanned
@@ -337,6 +351,20 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
    contributes nothing to the accessible name, made "1" the name the item
    announced. Hiding a label is what makes an item icon-only; everything that
    only makes sense beside a label goes at the same moment. */
+/* The two-column destination body (M3.5-C4). One class, one ratio, one
+   stacking width — so the seam between the columns is a single unbroken
+   vertical line from the top of the content to the bottom of it, and stays
+   one line in every destination that adopts it.
+
+   It stacks below 1024 rather than at each band's own convenience. Under the
+   shell that width is already covered by `#shell-toosmall`, so the rule is
+   reached only with the flag off; it stays because a layout utility that is
+   correct only above a width its own stylesheet does not enforce is a trap
+   for the next destination to use it. */
+.dest-split { display:grid; gap:var(--space-5); align-items:start;
+  grid-template-columns:minmax(0,var(--split-major)) minmax(0,var(--split-minor)); }
+@media (max-width:1023px) { .dest-split { grid-template-columns:minmax(0,1fr); } }
+
 @media (max-width:1439px) { body.shell-v2 { --rail-w:72px; }
   body.shell-v2 .shell-rail .lbl,
   body.shell-v2 .shell-rail .kbd { display:none; }
@@ -1632,10 +1660,11 @@ body.shell-v2 .home-legacy { display:none; }
 
 /* Band 2. Positions take the larger share — P4: the objects money is actually
    in outrank advice about them. Below 1024 the band stacks, positions first,
-   and it never reverses. */
-.home-band2 { display:grid; gap:var(--space-5);
-  grid-template-columns:minmax(0,1.45fr) minmax(0,1fr); align-items:start; }
-@media (max-width:1023px) { .home-band2 { grid-template-columns:1fr; } }
+   and it never reverses.
+
+   The split itself is `.dest-split` — see the shell section. Band 2 and band
+   3 no longer state a ratio of their own, which is the whole point: the seam
+   is one line down the page. */
 
 /* H3 rows. A real table would be right for many rows; at the two-to-six this
    region holds, a grid row keeps the close action reachable without a header
@@ -1688,11 +1717,12 @@ body.shell-v2 .home-legacy { display:none; }
 .home-empty .btn { margin-top:var(--space-3); }
 .home-note { font-size:var(--text-caption); color:var(--ink-muted); }
 
-/* Band 3. Equity and watchlist side by side at 1920; the watchlist drops
-   below the chart from 1440 down (§2.12). */
-.home-band3 { display:grid; gap:var(--space-5);
-  grid-template-columns:minmax(0,2fr) minmax(0,1fr); align-items:start; }
-@media (max-width:1439px) { .home-band3 { grid-template-columns:1fr; } }
+/* Band 3. Equity and watchlist side by side, on the same seam as band 2.
+   Band 3 used to stack from 1439 down while band 2 stayed split, so between
+   1024 and 1439 the seam simply stopped halfway down the page. Both are
+   `.dest-split` now and both hold the split to 1024: a full-width watchlist
+   draws a 900px bar for a 0-100% value, which is worse than a narrower one,
+   and a seam that runs the whole height is the point of having one. */
 
 /* The plot area is the instrument's recessed interior, so the chart reads as
    INSIDE something (UI_V2_VISUAL_EXPLORATION.md, "Chart presentation"). */
@@ -2076,7 +2106,7 @@ body.shell-v2 .home-legacy { display:none; }
       <!-- Band 2 — what needs you. Positions LEFT, findings RIGHT, and the
            order never reverses at any width (§2.12): consequence ordering
            does not change with viewport. -->
-      <div class="home-band2">
+      <div class="home-band2 dest-split">
 
         <!-- H3 — the highest-consequence objects on the screen, so by P4 they
              take the largest region. Working orders are a SUBSECTION rather
@@ -2112,7 +2142,7 @@ body.shell-v2 .home-legacy { display:none; }
       <!-- Band 3 — context. Deliberately last and deliberately the part that
            may scroll: nothing in it is consequential, which is the point of
            putting it third (§5.5). -->
-      <div class="home-band3">
+      <div class="home-band3 dest-split">
 
         <!-- H5 — 30 days by default, NOT session. A session curve on a
              freshly launched paper account is the least informative large
