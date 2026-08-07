@@ -200,6 +200,15 @@ FULL = dict(
 )
 
 #: Open risk that is a FLOOR: positions exist, none of them is priced.
+#: A day that needs the user. Exercises the one branch of the status line
+#: that three of the eight cases reach and that nothing on the page rendered
+#: before M3.5-C8 — `needs_you` was in the payload and unread.
+URGENT = dict(
+    FULL,
+    status={"text": "SPY 470C is within 2% of its stop at 3.20.",
+            "case": "stop_near", "needs_you": True},
+)
+
 UNPRICED = dict(FULL, open_risk={"dollars": 840.0, "pct_of_account": 8.1,
                                  "positions": 2, "marked": 0})
 
@@ -316,6 +325,32 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     c.check("the bands are separated by exactly one --space-6",
             rhythm["ok"], f"expected {rhythm['expected']}px, measured "
                           f"{rhythm['gaps']}")
+    page.close()
+
+    # ── the status line reads as a headline, not a caption (M3.5-C8) ────────
+    page = open_home(browser, base, FULL, console=console)
+    status_size = page.eval_on_selector(
+        "#home-status", "e => parseFloat(getComputedStyle(e).fontSize)")
+    metric_size = page.eval_on_selector(
+        "#hm-bp-v", "e => parseFloat(getComputedStyle(e).fontSize)")
+    c.check("the status line is not smaller than a standard metric",
+            status_size >= metric_size,
+            f"status {status_size}px vs metric {metric_size}px")
+    calm = page.eval_on_selector(
+        "#home-status",
+        "e => [getComputedStyle(e).fontWeight, e.dataset.needsYou]")
+    page.close()
+    # And when it DOES need the user, it says so by more than hue. Colour
+    # alone is the one thing §6.9 forbids everywhere else in the product, and
+    # these three cases were distinguished from a normal day by hue only.
+    page = open_home(browser, base, URGENT, console=console)
+    urgent = page.eval_on_selector(
+        "#home-status",
+        "e => [getComputedStyle(e).fontWeight, e.dataset.needsYou,"
+        " getComputedStyle(e).color]")
+    c.check("a status line that needs the user is marked by more than colour",
+            urgent[1] == "1" and int(urgent[0]) > int(calm[0]),
+            f"calm={calm} urgent={urgent}")
     page.close()
 
     # ── the three container tiers are distinguishable (M3.5-C6) ─────────────

@@ -1627,8 +1627,28 @@ body.shell-v2 .home-legacy { display:none; }
 /* H1 — on the canvas, no housing. `text-body-lg` because it is prose meant to
    be read at a glance from across a desk, and `max-width` because a sentence
    spanning 1900px is a sentence nobody's eye can track back from. */
-.home-status { font-size:var(--text-body-lg); line-height:1.5;
+/* `text.section` (22px), up from `text.body-lg` (16px), in M3.5-C8. This is
+   the application's single self-report and it answers the FIRST of the three
+   questions Home exists to answer — and it was rendering at 16px directly
+   above a 36px number, so the eye landed on the number and read the sentence
+   second, if at all. Position alone does not make something first; weight
+   does. It stays prose at normal weight rather than becoming a heading,
+   because a heading is a label for what follows and this is a statement.
+
+   Still no housing around it (§2.6): wrapping the product's one self-report
+   in an instrument would rank it as one region among several, which is
+   exactly what it is not. */
+.home-status { font-size:var(--text-section); line-height:1.4;
   color:var(--ink-primary); max-width:72ch; margin:0; }
+/* The four cases that need the user are marked by WEIGHT as well as colour.
+   `needs_you` has been in the payload since M3-C2 and nothing on the page
+   used it; the three cases it covers were distinguished from a normal day by
+   hue alone, which is the one thing §6.9 forbids everywhere else in this
+   product. Weight rather than a rule or a badge because both of those would
+   indent the sentence out of line with the metric cluster underneath it, and
+   an alignment that breaks only in the exceptional state is a layout that
+   jumps exactly when a user most needs it to be still. */
+.home-status[data-needs-you="1"] { font-weight:600; }
 /* The four cases that need the user are marked, but with INK not a badge:
    the sentence already says what is wrong, and a badge beside it would be a
    second owner of the same fact. */
@@ -3681,6 +3701,9 @@ const Home = (() => {
     const p = el("home-status"), t = el("home-status-text");
     if (!p || !t) return;
     p.dataset.case = (status && status.case) || "";
+    // Reads a field the payload has carried since M3-C2 and nothing rendered.
+    // No contract change: `needs_you` is already in `StatusLineView`.
+    p.dataset.needsYou = (status && status.needs_you) ? "1" : "0";
     t.classList.remove("ins-skel");
     t.removeAttribute("style");
     t.textContent = (status && status.text) || "";
