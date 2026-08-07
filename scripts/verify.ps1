@@ -120,6 +120,10 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: Home destination check"
     & $python "$PSScriptRoot\home_check.py" @browserArgs
     $results["Home destination check"] = ($LASTEXITCODE -eq 0)
+
+    Write-Step "Bonus: Trade destination check"
+    & $python "$PSScriptRoot\trade_check.py" @browserArgs
+    $results["Trade destination check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan

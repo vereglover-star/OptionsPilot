@@ -800,6 +800,14 @@ tr.expandable:hover td { background:var(--surface-sunken); }
   border:1px solid var(--border-subtle); color:var(--ink-secondary); font-size:var(--text-caption); font-variant-numeric:tabular-nums;
   transition:all var(--dur-fast); }
 .exp-pills button:hover { border-color:var(--action-primary-fill); }
+/* Date and DTE are two different facts, so they read as two (M4). A beginner
+   needs "0DTE" spelled out as much as a trader needs it abbreviated; the
+   `title` carries the plain-language twin ("Today", "Tomorrow", "7 days"). */
+.exp-pills .exp-when { color:var(--ink-secondary); }
+.exp-pills .exp-dte { margin-left:var(--space-2); color:var(--ink-muted);
+  font-variant-numeric:tabular-nums; }
+.exp-pills button.active .exp-when, .exp-pills button.active .exp-dte {
+  color:var(--ink-primary); }
 .exp-pills button.active { background:var(--action-primary-tint); border-color:var(--action-primary-fill); color:var(--ink-primary); font-weight:600; }
 
 /* option chain */
@@ -8402,13 +8410,28 @@ async function loadChain() {
   if (!tkSel) hideTicket();   // placeholder gains the ATM quick-pick buttons
 }
 
+/* The expiry strip renders the SERVER's labels (M4).
+   It used to compute days-to-expiry itself, as a time delta rounded up:
+   `Math.ceil((new Date(e + "T16:00:00") - now) / 864e5)`. That is one day
+   high at every hour of the trading day except after 16:00 on expiration day
+   — measured, today read "1d", tomorrow "2d", three days out "4d" — and the
+   `T16:00:00` was parsed as LOCAL time while options expire at 16:00 Eastern,
+   so the error grew with the user's distance from New York.
+
+   The same screen already showed the correct figure: the chain rows carry
+   `dte` from `OptionContract.dte()`, a plain calendar difference. One screen,
+   two calculations, two answers — the drift this codebase has paid for three
+   times. The fix is deleting the second one, not improving it.
+   `services/expiry.py` is now the only owner and the labels are unit-tested;
+   `expiries` is an additive field, so `expirations` still exists unchanged. */
 function renderExpPills() {
-  const today = new Date();
-  $("tk-exps").innerHTML = tkChain.expirations.map(e => {
-    const dte = Math.max(0, Math.ceil((new Date(e + "T16:00:00") - today) / 864e5));
-    const label = new Date(e + "T12:00:00").toLocaleDateString(undefined,
-      {month: "short", day: "numeric"}) + ` · ${dte}d`;
-    return `<button data-exp="${e}" class="${e === tkExp ? "active" : ""}">${label}</button>`;
+  const meta = tkChain.expiries || [];
+  $("tk-exps").innerHTML = meta.map(x => {
+    const when = new Date(x.date + "T12:00:00").toLocaleDateString(undefined,
+      {month: "short", day: "numeric"});
+    return `<button data-exp="${x.date}" class="${x.date === tkExp ? "active" : ""}"` +
+      ` title="${when} — ${x.plain}"><span class="exp-when">${when}</span>` +
+      `<span class="exp-dte">${x.label}</span></button>`;
   }).join("");
   document.querySelectorAll("#tk-exps button").forEach(b => b.onclick = () => {
     tkExp = b.dataset.exp; tkSel = null; hideTicket(); loadChain();

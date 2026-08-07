@@ -12,7 +12,7 @@ backend/frontend boundary. C1–C2 are done; **C3–C11 are not started.**
 
 **Continue UI V2 · M4 — Trade at C3**, the workspace layout.
 `ROADMAP-UI-V2.md` §12 is the authority for which commit comes next, and its
-M4 table is current. `verify.ps1` is green across **17 gates** at 2787 tests.
+M4 table is current. `verify.ps1` is green across **17 gates** at 2806 tests.
 
 **M4's backend tier (C1–C2) is complete and shipped**, the same shape M3 took:
 services first, then pixels. Nothing on screen has changed yet. What is

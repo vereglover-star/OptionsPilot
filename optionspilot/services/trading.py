@@ -49,7 +49,7 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, utcnow
-from optionspilot.services import quickpick, review
+from optionspilot.services import expiry, quickpick, review
 from optionspilot.services.errors import ValidationError
 from optionspilot.services.viewmodels import QuickPickView
 
@@ -161,8 +161,18 @@ class TradingService:
                     "liquidity": liquidity_score(c),
                     "dte": c.dte(today),
                 })
+            # `expiries` is ADDITIVE (M4). `expirations` stays a list of ISO
+            # strings so every existing consumer is untouched; the labelled
+            # form is a parallel field. It exists because the client was
+            # computing days-to-expiry itself and getting it wrong by one on
+            # every day but the last — see `services/expiry.py` for the
+            # measured table. The rule now has one owner, in Python, where it
+            # is unit-tested rather than eyeballed.
             return {"symbol": symbol, "spot": spot, "expiration": exp,
-                    "expirations": expirations, "chain": rows}
+                    "expirations": expirations,
+                    "expiries": [e.to_dict()
+                                 for e in expiry.describe(expirations, today)],
+                    "chain": rows}
 
     def quick_pick(self, *, symbol: str, intent: str, expiration: str = "",
                    right: str = "call") -> dict:

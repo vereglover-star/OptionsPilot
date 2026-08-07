@@ -4,13 +4,13 @@ Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
-`V3-ui`, committed `b380141`…`12510b3`). **2787 tests.** Full detail:
+`V3-ui`, committed `b380141`…`12510b3`). **2806 tests.** Full detail:
 **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0–M3.5 are complete; M4 (Trade) is IN
-PROGRESS — its backend tier (C1–C2) has shipped and C3–C11 are not started.** `verify.ps1` is green across all **17** gates at **2787 tests**.
+PROGRESS — its backend tier (C1–C2) has shipped and C3–C11 are not started.** `verify.ps1` is green across all **17** gates at **2806 tests**.
 
 **M4 · Trade — backend tier complete (`1191281`, `7ef7968`).** Two commits,
 both additive: no existing route, contract or payload changed, and no pixel
