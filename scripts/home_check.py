@@ -102,6 +102,31 @@ RHYTHM_JS = """() => {
 }"""
 
 
+#: Every instrument on Home, grouped by tier, with the rendered fill and
+#: radius that make the tiers distinguishable. Relative luminance is computed
+#: so "focal is lighter than standard" can be asserted as a fact about pixels
+#: rather than as a comparison of two token names.
+TIERS_JS = """() => {
+  const lum = c => {
+    const m = c.match(/[\\d.]+/g) || [];
+    const a = m.length > 3 ? parseFloat(m[3]) : 1;
+    return {alpha: a,
+            l: (0.2126 * +m[0] + 0.7152 * +m[1] + 0.0722 * +m[2]) || 0};
+  };
+  const out = {focal: [], standard: [], quiet: []};
+  document.querySelectorAll('#home .ins').forEach(e => {
+    const cs = getComputedStyle(e);
+    const {alpha, l} = lum(cs.backgroundColor);
+    const row = {id: e.id, alpha: alpha, lum: +l.toFixed(1),
+                 radius: parseFloat(cs.borderRadius) || 0,
+                 edge: cs.boxShadow !== 'none'};
+    const tier = e.classList.contains('ins--focal') ? 'focal'
+               : e.classList.contains('ins--quiet') ? 'quiet' : 'standard';
+    out[tier].push(row);
+  });
+  return out;
+}"""
+
 #: The metric cluster in decision-value order (M3.5-C5): am I in trouble, how
 #: exposed am I, can I act — then context. Account equity led this cluster at
 #: display size until M3.5 and is the one figure here nobody acts on.
@@ -291,6 +316,23 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     c.check("the bands are separated by exactly one --space-6",
             rhythm["ok"], f"expected {rhythm['expected']}px, measured "
                           f"{rhythm['gaps']}")
+    page.close()
+
+    # ── the three container tiers are distinguishable (M3.5-C6) ─────────────
+    # Asserted as rendered pixels, because the claim is that a person can SEE
+    # a difference between the tiers. Comparing class names would pass on a
+    # stylesheet where all three resolved to the same fill, which is the state
+    # this milestone found Home in: five regions, one treatment.
+    page = open_home(browser, base, FULL, console=console)
+    tiers = page.evaluate(TIERS_JS)
+    c.check("the quiet tier has no housing of its own",
+            tiers["quiet"] and all(t["alpha"] == 0 and t["radius"] == 0
+                                   for t in tiers["quiet"]),
+            str(tiers["quiet"]))
+    c.check("the standard tier does have housing",
+            tiers["standard"] and all(t["alpha"] > 0 and t["radius"] > 0
+                                      for t in tiers["standard"]),
+            str(tiers["standard"]))
     page.close()
 
     # ── one column seam down the whole page (M3.5-C4) ────────────────────────
