@@ -333,6 +333,26 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
             tiers["standard"] and all(t["alpha"] > 0 and t["radius"] > 0
                                       for t in tiers["standard"]),
             str(tiers["standard"]))
+    # M3.5-C7. "At most one focal region" is the rule that makes the tier mean
+    # anything; two focal regions is the flat field again with extra steps.
+    c.check("exactly one region is focal, and it is what-to-do-next",
+            [t["id"] for t in tiers["focal"]] == ["home-next"],
+            str(tiers["focal"]))
+    c.check("the focal region is visibly lighter than the standard tier",
+            tiers["focal"] and tiers["standard"] and
+            tiers["focal"][0]["lum"] > max(t["lum"] for t in tiers["standard"]),
+            f"focal={tiers['focal']} standard={tiers['standard']}")
+    c.check("and carries an edge as well as a fill, never colour alone",
+            tiers["focal"] and tiers["focal"][0]["edge"], str(tiers["focal"]))
+    # The ranking is the information, and it was declared for two milestones
+    # without being drawn: an <ol> whose markers `list-style:none` removed.
+    ranks = page.evaluate(
+        "() => Array.from(document.querySelectorAll("
+        "  '#hn-body .hn-item[data-kind]:not([data-kind=\\\"\\\"])'))"
+        "  .map(e => getComputedStyle(e, '::before').content)")
+    c.check("each ranked recommendation draws its rank",
+            len(ranks) >= 2 and all(r and r not in ("none", "normal")
+                                    for r in ranks), str(ranks))
     page.close()
 
     # ── one column seam down the whole page (M3.5-C4) ────────────────────────

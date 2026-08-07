@@ -1741,18 +1741,53 @@ body.shell-v2 .home-legacy { display:none; }
 .hp-x:hover { color:var(--market-neg-text); background:var(--surface-base); }
 .hp-x:focus-visible { opacity:1; }
 
-/* H4 items. Numbered, because the ranking IS the information. */
-.home-next-list { list-style:none; margin:0; padding:0; }
-.hn-item { padding:var(--space-3) 0; }
+/* H4 items. Numbered, because the ranking IS the information — and until
+   M3.5-C7 they were not: the list is an `<ol>`, `list-style:none` suppressed
+   its markers, and nothing drew them back. The component's own comment had
+   said "numbered" since M3-C6 while rendering no numbers at all.
+
+   Restored with a CSS counter rather than a rendered `<span>`, so the DOM is
+   exactly the size it was and `renderRecs` is untouched. The numeral spans
+   all rows of its item so text, evidence and action align on one left edge
+   regardless of how many of the three are present. */
+.home-next-list { list-style:none; margin:0; padding:0; counter-reset:hn; }
+.hn-item { padding:var(--space-3) 0; display:grid;
+  grid-template-columns:auto minmax(0,1fr); gap:0 var(--space-3); }
 .hn-item + .hn-item { border-top:1px solid var(--border-subtle); }
+/* Only genuinely ranked items are numbered. The empty and loading states
+   reuse `.hn-item` for shape, and numbering "Nothing else is waiting" as
+   item 1 of a ranking would be a claim about evidence that does not exist. */
+.hn-item[data-kind]:not([data-kind=""]) { counter-increment:hn; }
+.hn-item[data-kind]:not([data-kind=""])::before { content:counter(hn);
+  grid-column:1; grid-row:1 / -1; font-size:var(--text-caption);
+  font-variant-numeric:tabular-nums; font-weight:600; color:var(--ink-muted);
+  line-height:1.5; }
+.hn-item > * { grid-column:2; }
 .hn-text { font-size:var(--text-body); color:var(--ink-primary);
   line-height:1.5; }
 /* Evidence lives INSIDE the item, never in a tooltip — tooltip-only evidence
    is invisible to a keyboard user and to assistive technology (§2.13). */
 .hn-detail { font-size:var(--text-caption); color:var(--ink-muted);
   margin-top:var(--space-1); line-height:1.5; }
-.hn-item[data-kind="risk"] .hn-text { color:var(--status-caution); }
-.hn-act { margin-top:var(--space-2); background:none; border:0;
+/* The caution colour marks the RANK NUMERAL, not the sentence (M3.5-C7).
+   A whole orange sentence made this the most alert-like thing on the screen,
+   in the one region whose brief is to attract attention WITHOUT behaving like
+   an alert. It was also a second owner of a channel the status line already
+   holds: band 1 turns `status-caution` for `stop_near` and `status-critical`
+   for halted and rejected, so urgency is said once, up there. Down here the
+   item is still first in the ranking, still inside the one elevated
+   instrument on the page, and now marked rather than shouted.
+
+   `.home-next-list` is in the selector to match the base rule's specificity
+   (0,3,1) rather than lose to it — the base carries a `:not()` whose argument
+   counts, which is exactly the kind of arithmetic that makes a colour
+   silently not apply. */
+.home-next-list .hn-item[data-kind="risk"]::before {
+  color:var(--status-caution); }
+/* `justify-self:start` because a grid item stretches by default, and a
+   stretched <button> centres its own label — so the action drifted to the
+   middle of the column the moment the item became a grid. */
+.hn-act { justify-self:start; margin-top:var(--space-2); background:none; border:0;
   color:var(--action-primary-text); cursor:pointer; font-size:var(--text-caption);
   padding:var(--space-1) var(--space-2); border-radius:var(--radius-sm);
   margin-left:calc(var(--space-2) * -1); }
@@ -2189,7 +2224,7 @@ body.shell-v2 .home-legacy { display:none; }
              the top three of that ranking VERBATIM and does not re-rank,
              filter or add a fourth. An ordered list, because the ranking is
              the information. -->
-        <div class="ins" id="home-next">
+        <div class="ins ins--focal" id="home-next">
           <div class="ins-head">
             <span class="ins-label">What to do next</span>
           </div>
