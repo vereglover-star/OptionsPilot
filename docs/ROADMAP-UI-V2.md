@@ -576,7 +576,7 @@ surface with no behavioural coverage is how a destination ships broken.
 | --- | --- | --- | --- |
 | C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `1191281` |
 | C2 | ✅ | The review view model (`services/review.py`) + `/api/v1/review` | `7ef7968` |
-| C3 | 🟡 | The workspace layout: chart, chain, ticket. **Draggable splitters deferred** — they need a workspace field and are self-contained | `TBD` |
+| C3 | 🟡 | The workspace layout: chart, chain, ticket. **Draggable splitters deferred** — they need a workspace field and are self-contained | `8a4c210` |
 | C4 | ⬜ | The ticket, always present, empty and selected states | |
 | C5 | ⬜ | The chain: spot-anchored, roving tabindex, Surface-Level columns | |
 | C6 | ⬜ | Quick picks wired to the ticket and marked in the chain | |
