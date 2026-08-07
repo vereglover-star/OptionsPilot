@@ -60,6 +60,16 @@ MOVED = {"Coach": "Journal", "Backtest": "Research", "Learning": "Research",
 #: active, so they hold whatever the breakpoints become.
 RAIL_WIDTHS = (1600, 1439, 1300, 1279, 1100, 1024)
 
+#: The accessible name every rail item must expose at EVERY width. Asserted
+#: through Playwright's role/name engine, which runs the browser's own
+#: accessible-name computation — so it fails if the name comes from a
+#: `display:none` label, which contributes nothing, and passes only if
+#: something the computation can actually see supplies it. Checking for the
+#: presence of an `aria-label` attribute instead would pass on markup that a
+#: screen reader still announces as an empty link.
+RAIL_NAMES = ("Home", "Trade", "Portfolio", "Research", "Journal", "Settings",
+              "Pilot")
+
 #: Every rail icon measured against the rail's own clipping box, plus its
 #: horizontal centring when the rail is in icon-only mode. Centring is only
 #: meaningful there — in expanded mode the icon is deliberately left-aligned
@@ -191,6 +201,13 @@ def run_checks(page, base: str, c: Checks) -> None:
         if geo["iconOnly"]:
             c.check(f"every rail icon is centred in the rail at {width}px",
                     geo["centred"], "; ".join(geo["offcentre"][:3]))
+        # M3.5-C2. The name has to survive the label being hidden, which is
+        # exactly what it did not do before this milestone.
+        rail_el = page.locator("#shell-rail")
+        missing = [n for n in RAIL_NAMES
+                   if rail_el.get_by_role("link", name=n, exact=True).count() != 1]
+        c.check(f"every rail item announces its name at {width}px",
+                not missing, f"unnamed: {missing}")
     page.set_viewport_size({"width": 1600, "height": 1000})
     page.wait_for_timeout(200)
 

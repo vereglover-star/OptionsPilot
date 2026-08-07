@@ -4947,10 +4947,28 @@ window.Shell = (() => {
   }
 
   // ── the rail ─────────────────────────────────────────────────────────────
+  // The accessible name is an ATTRIBUTE, never the visible label, because the
+  // visible label is `display:none` below 1440 and a hidden element
+  // contributes nothing to the accessible-name computation. Measured before
+  // this change, the browser's own ARIA tree read `link ""` for all seven
+  // items at <=1279 and `link "1"` between 1280 and 1439 — the primary
+  // navigation was unusable with a screen reader at two of three supported
+  // widths, and `DESIGN_SYSTEM_V2.md` had specified the fix ("a tooltip and
+  // an accessible name") without it ever being built.
+  //
+  // `title` carries the shortcut as well as the name, so the number hint the
+  // icon-only rail no longer has room to draw survives as a tooltip rather
+  // than being lost. It is present at every width rather than swapped in on
+  // resize: a media-query listener to add and remove it would be new state
+  // reacting to layout, and a duplicate tooltip beside a visible label is the
+  // cheaper of the two costs.
   const railItem = d =>
-    `<li><a href="#" data-dest="${d.id}" role="link"><svg class="ic" viewBox="0 0 16 16">${d.icon}</svg>` +
+    `<li><a href="#" data-dest="${d.id}" role="link" aria-label="${d.label}"` +
+    ` title="${d.label} (${d.key})"><svg class="ic" viewBox="0 0 16 16"` +
+    ` aria-hidden="true">${d.icon}</svg>` +
     `<span class="lbl">${d.label}</span>` +
-    (d.utility ? "" : `<span class="kbd">${d.key}</span>`) + `</a></li>`;
+    (d.utility ? "" : `<span class="kbd" aria-hidden="true">${d.key}</span>`) +
+    `</a></li>`;
 
   function renderRail() {
     if ($("shell-rail-list").children.length) return;   // built once
@@ -4959,7 +4977,8 @@ window.Shell = (() => {
     // Pilot sits with Settings at the foot: both are always-available
     // surfaces rather than places, which is why neither is numbered.
     setHTML("shell-rail-util",
-            `<li><a href="#" data-pilot="1" role="link"><svg class="ic" viewBox="0 0 16 16">` +
+            `<li><a href="#" data-pilot="1" role="link" aria-label="Pilot"` +
+            ` title="Pilot"><svg class="ic" viewBox="0 0 16 16" aria-hidden="true">` +
             `<circle cx="8" cy="8" r="6"/><path d="M8 11V7.5M8 5.2v.1"/></svg>` +
             `<span class="lbl">Pilot</span></a></li>` +
             DESTINATIONS.filter(d => d.utility).map(railItem).join(""));
