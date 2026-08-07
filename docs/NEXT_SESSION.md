@@ -5,8 +5,9 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-07, on stopping **UI V2 · M4 — Trade** at the
-backend/frontend boundary. C1–C2 are done; **C3–C11 are not started.**
+**Last updated:** 2026-08-07. **UI V2 · M4 — Trade** is in progress:
+C1–C2 (backend) and C10 (the gate, brought forward) are done;
+**C3–C9 and C11 are not started.**
 
 ## What to do next
 

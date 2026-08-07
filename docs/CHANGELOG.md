@@ -4,6 +4,43 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [2026-08-07] — UI V2 M4: the Trade gate, and a DTE defect it found
+
+*The browser gate before the destination, as M2 did for the shell.
+`scripts/trade_check.py` is the 18th gate, organised around the seven
+questions §6 says Trade exists to answer, and every section with no behaviour
+yet prints that it is empty rather than reporting success over nothing.*
+
+**Its first section found a real defect.** The expiry strip computed its own
+days-to-expiry as a time delta rounded up, so at 10:00 on any trading day it
+read "1d" for a contract expiring **today**, "2d" for tomorrow, "4d" for three
+days out and "31d" for thirty — one day high at every hour of every day except
+after 16:00 local on expiration day itself. The `T16:00:00` in that formula was
+parsed as *local* time while options expire at 16:00 Eastern, so the error grew
+with the user's distance from New York.
+
+The correct number was already on the same screen: chain rows carry `dte` from
+`OptionContract.dte()`, a plain calendar difference. One screen showed "0 DTE"
+on a row and "1d" on the pill for the same contract — two objects tracking one
+fact, the drift this codebase has paid for in `data/health.py`, the settings
+ranking and the guide catalogue.
+
+The fix is deleting the second calculation. `services/expiry.py` is the one
+owner, pure and unit-tested, serving labels through an **additive** `expiries`
+field on the chain payload; `expirations` is untouched, so no consumer breaks.
+Labels follow the platform convention — 0DTE/Today, 1DTE/Tomorrow, `{n}DTE`
+beyond — and a past expiry reads "Expired" rather than being clamped to zero,
+which is what let the old code render a dead contract as though it expired
+today.
+
+**Audits delivered without code changes**, recorded in the report: the chart
+library is TradingView Lightweight Charts v4.2.3 under Apache-2.0 and its logo
+is a configurable default rather than a licence requirement; the renderer
+fabricates no price movement; and `validate_candles` checks finiteness but not
+OHLC internal consistency, which is recorded as tracked debt.
+
+**C3–C9 and C11 — the Trade destination itself — are not started.**
+
 ## [2026-08-07] — UI V2 M4 (backend tier): quick picks and review
 
 *Two commits, both backend, both additive. No existing route, contract or

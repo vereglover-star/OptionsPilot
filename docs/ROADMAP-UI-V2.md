@@ -567,7 +567,10 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**2 of 11 commits — the backend tier is complete.**
+**3 of 11 commits.** The backend tier (C1–C2) is complete and the
+gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
+commit that protects the seven frontend commits, and seven commits of new
+surface with no behavioural coverage is how a destination ships broken.
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
@@ -580,7 +583,7 @@ mapping.
 | C7 | ⬜ | The review modal, five elements in order | |
 | C8 | ⬜ | Hold-to-confirm commit control | |
 | C9 | ⬜ | The ticket's blocked state; `OrderManager` refusals re-asserted | |
-| C10 | ⬜ | `scripts/trade_check.py` + wired into `verify.ps1` | |
+| C10 | 🟡 | `scripts/trade_check.py` + wired into `verify.ps1` — structure + the expiry-label section; grows per commit | `73e81cd` |
 | C11 | ⬜ | Legacy trade and charts markup deleted | |
 
 **C1 did not land in `services/contracts.py` as §6 says.** That file already
