@@ -157,10 +157,39 @@ def _fill_note(*, kind, side, slippage_pct, limit, delayed_minutes=15):
     return f"Fills on the next scan cycle at the {crossing}{slip}, {delay}."
 
 
+def _buying_power(*, opening: bool, cost, buying_power):
+    """The buying-power impact, as (pct, after, note).
+
+    A separate question from position size, and one the ticket must answer
+    before an order can be composed: position size asks *is this too big*,
+    buying power asks *can I afford this at all*. They are computed from
+    different denominators — equity carries the marked value of open
+    positions, buying power is cash — so on any account holding something they
+    disagree, and reporting one as the other would be a confidently wrong
+    number in the place a user checks before spending.
+
+    A closing order returns cash rather than consuming it, so it has no
+    impact to state and says so instead of printing a negative percentage.
+    """
+    if not isinstance(buying_power, (int, float)) or buying_power <= 0:
+        return None, None, ("Buying power is not available right now."
+                            if opening else "")
+    if not opening:
+        return None, None, ("This order returns cash rather than using buying "
+                            "power.")
+    if cost is None:
+        return None, None, ""
+    return (round(cost / buying_power * 100, 2),
+            round(buying_power - cost, 2),
+            "" if cost <= buying_power else
+            "This costs more than your available buying power.")
+
+
 def review(*, side: str, kind: str, quantity: int, symbol: str, strike: float,
            right: str, expiration: str, dte=None, bid=None, ask=None, mid=None,
-           spot=None, equity=None, limit=None, stop=None, tif: str = "day",
-           slippage_pct: float = 0.0, delayed_minutes: int = 15) -> ReviewView:
+           spot=None, equity=None, buying_power=None, limit=None, stop=None,
+           tif: str = "day", slippage_pct: float = 0.0,
+           delayed_minutes: int = 15) -> ReviewView:
     """The five elements, in order, for any order this product can place."""
     quantity = max(1, int(quantity or 1))
     strike = float(strike)
@@ -212,6 +241,9 @@ def review(*, side: str, kind: str, quantity: int, symbol: str, strike: float,
     else:
         position_note = "This order closes exposure rather than adding it."
 
+    bp_pct, bp_after, bp_note = _buying_power(
+        opening=opening, cost=cost, buying_power=buying_power)
+
     return ReviewView(
         sentence=_sentence(side=side, quantity=quantity, symbol=symbol,
                            strike=strike, right=right, expiration=expiration,
@@ -225,6 +257,11 @@ def review(*, side: str, kind: str, quantity: int, symbol: str, strike: float,
         spot=float(spot) if isinstance(spot, (int, float)) and spot > 0
         else None,
         position_pct=position_pct, position_note=position_note,
+        buying_power=float(buying_power)
+        if isinstance(buying_power, (int, float)) and buying_power > 0
+        else None,
+        buying_power_pct=bp_pct, buying_power_after=bp_after,
+        buying_power_note=bp_note,
         if_nothing=_if_nothing(side=side, kind=kind, symbol=symbol,
                                strike=strike, right=right,
                                expiration=expiration, tif=tif, dte=dte),

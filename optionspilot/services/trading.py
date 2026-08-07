@@ -251,7 +251,12 @@ class TradingService:
                 spot = provider.get_quote(symbol).last
             except Exception:  # noqa: BLE001 — spot is advisory here too
                 spot = None
-            equity = self._orch.broker.get_account().equity
+            account = self._orch.broker.get_account()
+            equity = account.equity
+            # Buying power is CASH, matching `PortfolioService`'s own
+            # `buying_power=acct.cash` rather than a second reading of what
+            # the phrase means (M4-C4).
+            buying_power = account.cash
             slippage = float(self._orch.cfg.broker.slippage_pct)
 
         return review.review(
@@ -260,6 +265,7 @@ class TradingService:
             quantity=int(payload.get("quantity", 1) or 1),
             symbol=symbol, strike=strike, right=right, expiration=expiration,
             dte=dte, bid=bid, ask=ask, mid=mid, spot=spot, equity=equity,
+            buying_power=buying_power,
             limit=payload.get("limit"), stop=payload.get("stop"),
             tif=str(payload.get("tif", "day")), slippage_pct=slippage,
         ).to_dict()

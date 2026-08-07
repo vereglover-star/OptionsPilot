@@ -567,7 +567,7 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**4 of 11 commits.** The backend tier (C1–C2) is complete and the
+**5 of 11 commits.** The backend tier (C1–C2) is complete and the
 gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
 commit that protects the seven frontend commits, and seven commits of new
 surface with no behavioural coverage is how a destination ships broken.
@@ -577,7 +577,7 @@ surface with no behavioural coverage is how a destination ships broken.
 | C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `1191281` |
 | C2 | ✅ | The review view model (`services/review.py`) + `/api/v1/review` | `7ef7968` |
 | C3 | 🟡 | The workspace layout: chart, chain, ticket. **Draggable splitters deferred** — they need a workspace field and are self-contained | `8a4c210` |
-| C4 | ⬜ | The ticket, always present, empty and selected states | |
+| C4 | ✅ | The ticket, always present, empty and selected states. **Two defects closed**: the stated cost was the mid, and the sizing advisory used the wrong denominator | `TBD-C4` |
 | C5 | ⬜ | The chain: spot-anchored, roving tabindex, Surface-Level columns | |
 | C6 | ⬜ | Quick picks wired to the ticket and marked in the chain | |
 | C7 | ⬜ | The review modal, five elements in order | |

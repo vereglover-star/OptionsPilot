@@ -17,7 +17,7 @@ from optionspilot.services import review as rv
 BASE = dict(side="buy_to_open", kind="market", quantity=1, symbol="SPY",
             strike=470.0, right="call", expiration="2026-09-12", dte=7,
             bid=3.85, ask=3.95, mid=3.90, spot=471.20, equity=10000.0,
-            slippage_pct=0.01)
+            buying_power=8000.0, slippage_pct=0.01)
 
 
 def _review(**over):
@@ -139,6 +139,52 @@ class TestElementFourPositionSize:
     def test_zero_equity_is_absence_not_a_denominator(self):
         got = _review(equity=0.0)
         assert got.position_pct is None
+
+
+class TestBuyingPowerImpact:
+    """The ticket's affordability question (M4-C4).
+
+    Deliberately NOT the same number as `position_pct`. Equity carries the
+    marked value of open positions and buying power is cash, so on an account
+    holding anything the two denominators differ — and the ticket asks "can I
+    afford this" while §6.5's element 4 asks "is this too big". Reporting one
+    as the other would be a confidently wrong number in the place a user
+    checks before spending, which is the failure mode this whole module is
+    built to avoid.
+    """
+
+    def test_it_is_a_share_of_cash_not_of_account_value(self):
+        got = _review(equity=10000.0, buying_power=8000.0)
+        assert got.buying_power_pct == round(got.cost / 8000.0 * 100, 2)
+        # The two questions have different answers, and this is the assertion
+        # that fails if someone "simplifies" one into the other.
+        assert got.buying_power_pct != got.position_pct
+
+    def test_it_says_what_is_left_afterwards(self):
+        got = _review(buying_power=8000.0)
+        assert got.buying_power_after == round(8000.0 - got.cost, 2)
+
+    def test_an_unaffordable_order_says_so_rather_than_only_showing_a_number(self):
+        got = _review(quantity=100, buying_power=1000.0)
+        assert got.buying_power_pct > 100
+        assert "more than your available buying power" in got.buying_power_note
+
+    def test_no_buying_power_is_an_absence_with_a_reason_not_a_zero(self):
+        got = _review(buying_power=None)
+        assert got.buying_power_pct is None and got.buying_power_note
+
+    def test_zero_buying_power_is_absence_not_a_denominator(self):
+        got = _review(buying_power=0.0)
+        assert got.buying_power_pct is None and got.buying_power_after is None
+
+    def test_a_closing_order_returns_cash_and_says_so(self):
+        got = _review(side="sell_to_close")
+        assert got.buying_power_pct is None
+        assert "returns cash" in got.buying_power_note
+
+    def test_an_unpriceable_contract_states_no_impact_rather_than_zero(self):
+        got = _review(ask=None)
+        assert got.cost is None and got.buying_power_pct is None
 
 
 class TestElementFiveIfYouDoNothing:

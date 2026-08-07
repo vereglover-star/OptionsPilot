@@ -309,6 +309,21 @@ class ReviewView(ViewModel):
     position_note: str = ""
     if_nothing: str = ""
     fill_note: str = ""
+    #: Buying-power impact (M4-C4). Distinct from `position_pct`, which is a
+    #: share of ACCOUNT VALUE — equity includes the marked value of open
+    #: positions, buying power is the cash actually available to spend, and on
+    #: an account holding anything they are different numbers. The ticket
+    #: states the second because it answers "can I afford this"; §6.5's element
+    #: 4 states the first because it answers "is this too big".
+    #:
+    #: It lives here rather than as a division in `index.html` for the reason
+    #: PRODUCT_STANDARDS.md §3.2 gives about the fill price: the ticket and the
+    #: review modal state the same figure, and two implementations of one
+    #: figure is the drift this codebase has paid for four times.
+    buying_power: float | None = None
+    buying_power_pct: float | None = None
+    buying_power_after: float | None = None
+    buying_power_note: str = ""
 
 
 # ── watchlist ────────────────────────────────────────────────────────────────

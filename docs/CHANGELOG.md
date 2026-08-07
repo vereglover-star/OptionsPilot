@@ -4,6 +4,60 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [Uncommitted] — UI V2 M4: the Trade destination (C4–)
+
+*The frontend tier. C3 put three regions on one screen; these commits make
+them work.*
+
+**C4 — the ticket, always present.** `UI_V2_DESIGN.md` §6.1's second named
+fault is that "the ticket does not exist until a contract is chosen … the
+shape of the decision should be visible before the decision". The order form
+no longer carries `display:none`: side, order type, quantity and time in force
+are on screen from the moment Trade opens, with a disabled submit, the reason
+stated beside it, and "Nothing selected yet."
+
+Four figures replace the single "Estimated cost" line — **entry per contract,
+estimated cost, buying-power impact, and the most you can lose** — labelled in
+the empty state and dashed rather than zeroed, because an absent number with a
+reason is this codebase's oldest rule and a plausible placeholder is what a
+user acts on.
+
+**Two defects closed, both found by writing the figures down.**
+
+*The ticket stated the mid as a cost.* `updateEstimate` computed
+`tkSel.mid * qty * 100`. The mid is not a price anything fills at —
+`PaperBroker` crosses to the ask and applies slippage — so the ticket named a
+cost the system was never going to charge, on the screen where a user decides
+whether they can afford it. Measured against a live SPY chain: a mid of 40.40
+against an expected fill of 40.804, so one contract read $40 light and ten read
+$404 light. `PRODUCT_STANDARDS.md` §3.2 forbids this twice over, and the fill
+model already had exactly one owner in `services/review.py`, pinned by test
+against the broker's own arithmetic. Every figure the ticket shows now comes
+from `/api/v1/review`.
+
+*The sizing advisory compared two different denominators.* `RiskManager` sets
+the per-trade budget as a share of **equity** (`risk_budget = self._equity *
+risk_per_trade_pct / 100`). The ticket computed the order as a share of
+**buying power** — cash — and compared it against that budget, so on any
+account holding an open position the warning tripped at the wrong point. It
+now reads `position_pct`, so both sides of the comparison share a denominator.
+
+`ReviewView` gains `buying_power`, `buying_power_pct`, `buying_power_after`
+and `buying_power_note`. Buying power is a different question from position
+size — *can I afford this* against *is this too big* — and putting the second
+question's division in JavaScript is how one fact acquires two owners.
+
+Fetch discipline, because a ticket recalculates on every keystroke: an
+unchanged draft is not re-fetched, one request is in flight at a time with the
+superseded one aborted and stale responses dropped, and changes are debounced
+so three quick quantity steps are one request. `trade_check.py` asserts all
+three as counts.
+
+**Gate: 18 → 46 checks.** Assertions carry a `[preserved]` or `[guard]` label
+where they cannot fail against the previous build, so the file's own rule —
+every assertion fails against the build it replaces — stays checkable rather
+than aspirational.
+
 ## [2026-08-07] — UI V2 M4: the Trade gate, and a DTE defect it found
 
 *The browser gate before the destination, as M2 did for the shell.

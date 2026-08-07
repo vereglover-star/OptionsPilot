@@ -28,6 +28,12 @@ Two rules this file holds itself to, both learned the hard way in M3:
   * **Every assertion must fail against the previous build.** Where that is
     not obvious, the check says what the old behaviour measured — see the
     expiry-label checks, which carry the numbers the old JavaScript produced.
+    Two kinds of assertion legitimately cannot, and both are LABELLED in
+    their own name rather than left to be discovered by someone re-running
+    the exercise: `[preserved]` marks behaviour that was already correct and
+    is pinned so a later commit cannot remove it, and `[guard]` marks a
+    property of a mechanism the previous build did not have at all. An
+    unlabelled assertion is a claim that reverting the commit turns it red.
 
 Entirely offline. Soft-skips (exit 0) if Playwright isn't installed, matching
 its siblings.
@@ -126,9 +132,42 @@ def _chain_payload(today: date) -> dict:
     }
 
 
+#: A review payload whose every number is deliberately UNREACHABLE from the
+#: chain fixture by arithmetic. The fixture's mid is 3.90, so the build this
+#: milestone replaces would render `$390.00` for a single contract however the
+#: server answered — it multiplied `tkSel.mid` in JavaScript. Nothing here is
+#: 390, 385 or 395, so an assertion that the ticket shows THESE numbers is an
+#: assertion that the ticket reads the server rather than computing its own.
+#:
+#: The arithmetic itself is not tested here and must not be: it is pinned in
+#: `tests/test_services_review.py` against `broker/paper.py`'s own source,
+#: which is a stronger statement than any browser check could make.
+REVIEW_STUB = {
+    "sentence": "You are BUYING 1 SPY $470 call contract expiring 12 Sep "
+                "(7 days from now).",
+    "opening": True, "premium": 4.1234, "cost": 412.34, "cost_note": "",
+    "proceeds": None, "max_loss": 412.34,
+    "max_loss_note": "100% of what you pay — a long option can expire worthless.",
+    "breakeven": 474.12, "breakeven_note": "", "spot": 471.20,
+    "position_pct": 4.12, "position_note": "",
+    "buying_power": 8000.0, "buying_power_pct": 5.15,
+    "buying_power_after": 7587.66, "buying_power_note": "",
+    "if_nothing": "If you do nothing and SPY closes below $470 on 12 Sep, "
+                  "this contract expires worthless and you lose everything "
+                  "you paid for it.",
+    "fill_note": "Fills on the next scan cycle at the ask, worsened by 1% "
+                 "slippage, against a 15-minute delayed quote.",
+}
+
+
 def open_trade(browser, base, *, width=1920, height=1080, console=None,
-               chain=None):
-    """A page showing the Trade destination with a known chain."""
+               chain=None, review=None, review_log=None):
+    """A page showing the Trade destination with a known chain.
+
+    `review_log` collects the body of every `/api/v1/review` request, which is
+    what lets the fetch-discipline assertions count requests rather than
+    trust a comment claiming they are deduplicated.
+    """
     page = browser.new_page(viewport={"width": width, "height": height})
     if console is not None:
         page.on("console",
@@ -138,6 +177,17 @@ def open_trade(browser, base, *, width=1920, height=1080, console=None,
         page.route("**/api/chain*", lambda route: route.fulfill(
             status=200, content_type="application/json",
             body=json.dumps(chain)))
+    if review is not None or review_log is not None:
+        def _review(route, request):
+            if review_log is not None:
+                try:
+                    review_log.append(json.loads(request.post_data or "{}"))
+                except ValueError:
+                    review_log.append({})
+            route.fulfill(status=200, content_type="application/json",
+                          body=json.dumps({"data": review or REVIEW_STUB,
+                                           "meta": {"api_version": "v1"}}))
+        page.route("**/api/v1/review", _review)
     page.goto(base, wait_until="domcontentloaded")
     home_ready(page, 25000)
     goto(page, "trade")
@@ -307,12 +357,203 @@ def check_expiry_labels(browser, base, c: Checks, console: list) -> None:
     page.close()
 
 
+# ── 5-6. What will this trade cost, and what is my actual risk? ──────────────
+
+TICKET_JS = """() => {
+  const vis = id => {
+    const e = document.getElementById(id);
+    if (!e) return false;
+    const b = e.getBoundingClientRect();
+    return b.width > 0 && b.height > 0;
+  };
+  const txt = id => (document.getElementById(id)?.textContent || '').trim();
+  const sub = document.getElementById('tk-submit');
+  return {
+    // The order's SHAPE — the controls §6.2's Empty state says must be
+    // visible before a contract is chosen.
+    kind: vis('tk-kind'), qty: vis('tk-qty'), tif: vis('tk-tif'),
+    side: vis('tk-side-seg'), figures: vis('tk-figures'),
+    selected: txt('tk-selected'),
+    // The four figures, by label and value, read from the rendered <dl> so a
+    // renamed id fails rather than silently passing.
+    labels: Array.from(document.querySelectorAll('#tk-figures dt'))
+                 .map(e => e.textContent.trim()),
+    entry: txt('tk-fig-entry'), cost: txt('tk-fig-cost'),
+    costLabel: txt('tk-fig-cost-label'),
+    bp: txt('tk-fig-bp'), risk: txt('tk-fig-risk'),
+    riskTitle: document.getElementById('tk-fig-risk')?.getAttribute('title') || '',
+    submitDisabled: !!sub && sub.disabled,
+    submitText: txt('tk-submit'),
+    blocked: txt('tk-blocked'),
+    sizing: txt('tk-risk'),
+    sizingHot: !!document.getElementById('tk-risk')
+                 ?.classList.contains('hot'),
+  };
+}"""
+
+
+def check_ticket_empty_state(browser, base, c: Checks, console: list) -> None:
+    """The ticket exists before a contract does (M4-C4).
+
+    Fails against the previous build on every assertion for one reason: the
+    form carried `style="display:none"` and was revealed by `selectContract`.
+    §6.1's second named fault is exactly that — "the ticket does not exist
+    until a contract is chosen … the shape of the decision should be visible
+    before the decision" — so a user could not see what an order involved
+    until after committing to one.
+    """
+    log: list = []
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=log)
+    t = page.evaluate(TICKET_JS)
+
+    for name, key in (("order type", "kind"), ("quantity", "qty"),
+                      ("time in force", "tif"), ("side", "side")):
+        c.check(f"the empty ticket already shows the {name} control",
+                t[key], "not rendered")
+    c.check("the empty ticket names its state plainly",
+            "nothing selected yet" in t["selected"].lower(),
+            t["selected"][:80])
+
+    # §6.2 Disabled: "with the reason stated adjacent, always."
+    c.check("the empty ticket's submit is disabled", t["submitDisabled"])
+    c.check("and says why, adjacent to it, rather than only being grey",
+            "select a contract" in t["blocked"].lower(), t["blocked"][:90])
+
+    # The figures teach the vocabulary before they carry a number.
+    c.check("the four figures are labelled before any of them has a value",
+            t["figures"] and len(t["labels"]) == 4, str(t["labels"]))
+    joined = " | ".join(t["labels"]).lower()
+    for want in ("entry", "estimated cost", "buying power", "lose"):
+        c.check(f"the figures name {want!r}", want in joined, joined)
+    c.check("an unknown figure is a dash, never a zero",
+            t["entry"] == "—" and t["cost"] == "—" and t["risk"] == "—",
+            f"entry={t['entry']!r} cost={t['cost']!r} risk={t['risk']!r}")
+
+    # A FORWARD guard rather than a delta: the previous build made no request
+    # either, because the mechanism did not exist. It is here because the
+    # obvious way to write the always-present ticket is to price it on entry,
+    # and pricing nothing is a request per visit to Trade for no answer.
+    c.check("[guard] an empty ticket asks the server for nothing",
+            not log, f"{len(log)} review request(s)")
+    page.close()
+
+
+def check_ticket_states_the_engines_numbers(browser, base, c: Checks,
+                                            console: list) -> None:
+    """The ticket's cost is the ENGINE's, not the mid (M4-C4).
+
+    The defect this replaces, measured: `updateEstimate` computed
+    `tkSel.mid * qty * 100`. The mid is not a price anything fills at —
+    `PaperBroker` crosses to the ask and applies slippage — so the ticket
+    stated a cost the system was never going to charge, on the screen where a
+    user decides whether they can afford it. PRODUCT_STANDARDS.md §3.2 forbids
+    it twice: never the mid, and the fill model has exactly one owner.
+
+    The fixture's mid is 3.90, so the old build renders `$390.00` for one
+    contract regardless of what the server says. Every number asserted here is
+    unreachable from 3.85/3.90/3.95 by arithmetic, so passing means the ticket
+    READ them rather than computed them.
+    """
+    log: list = []
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=log)
+    page.click("#tk-chain tr[data-strike]")
+    page.wait_for_timeout(600)
+    t = page.evaluate(TICKET_JS)
+
+    c.check("the entry price is the expected FILL, not the mid",
+            "4.12" in t["entry"] and "3.90" not in t["entry"], t["entry"])
+    c.check("the estimated cost is the server's (the old build showed $390.00)",
+            "412.34" in t["cost"] and "390" not in t["cost"], t["cost"])
+    c.check("the maximum loss is stated, even though it equals the cost",
+            "412.34" in t["risk"], t["risk"])
+    c.check("and says WHY it equals the cost, rather than only the number",
+            "expire worthless" in t["riskTitle"].lower(), t["riskTitle"][:90])
+    # 5.15 renders as 5.2: the server carries two decimals and a percentage on
+    # a ticket reads at one. Asserted at the rendered precision deliberately —
+    # this is a check on what the user sees.
+    c.check("the buying-power impact is shown as a share and a remainder",
+            "5.2%" in t["bp"] and "7,587.66" in t["bp"], t["bp"])
+    # The SECOND defect this commit closes, and the quieter of the two.
+    # `RiskManager` sets the per-trade budget as a share of EQUITY
+    # (`risk/manager.py`: `risk_budget = self._equity * risk_per_trade_pct /
+    # 100`). The old ticket line computed `cost / buying_power * 100` — cash,
+    # not account value — and compared it against that budget, so on any
+    # account holding an open position the advisory tripped at the wrong
+    # point in the wrong direction. It now reads `position_pct`, which is
+    # cost over equity, so the two sides of the comparison share a
+    # denominator.
+    c.check("the sizing advisory is measured against account value",
+            "account value" in t["sizing"].lower()
+            and "buying power" not in t["sizing"].lower(), t["sizing"])
+    c.check("and marks itself when the order exceeds the risk budget",
+            t["sizingHot"], t["sizing"])
+
+    # The request describes the order the button would send.
+    c.check("the ticket asked about the order it is displaying",
+            bool(log) and log[-1].get("quantity") == 1
+            and log[-1].get("side") == "buy_to_open"
+            and log[-1].get("right") == "call",
+            json.dumps(log[-1]) if log else "no request")
+
+    # PRESERVED, not new — both of these were already true and are asserted so
+    # that C9's blocked state cannot quietly take them away. Neither
+    # distinguishes this build from the previous one, and saying so is the
+    # point: an assertion whose provenance is unstated gets read as coverage
+    # it does not provide.
+    c.check("[preserved] the submit names the order it will place",
+            "1 ×" in t["submitText"] and "SPY" in t["submitText"],
+            t["submitText"])
+    c.check("[preserved] a selected ticket is not blocked",
+            not t["submitDisabled"])
+    page.close()
+
+
+def check_ticket_does_not_refetch(browser, base, c: Checks,
+                                  console: list) -> None:
+    """A ticket recalculates on every keystroke; it must not re-ask (M4-C4).
+
+    Not a micro-optimisation. The figures are fetched per draft change, and
+    without a fingerprint a quantity stepper held down would issue a request
+    per repeat — against an endpoint that takes the trading lock and walks a
+    provider chain. The assertions are counts, because a comment claiming
+    deduplication is not deduplication.
+    """
+    log: list = []
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=log)
+    page.click("#tk-chain tr[data-strike]")
+    page.wait_for_timeout(600)
+    first = len(log)
+    c.check("selecting a contract prices it exactly once",
+            first == 1, f"{first} request(s)")
+
+    # Re-selecting the SAME contract changes no part of the draft.
+    page.click("#tk-chain tr[data-strike]")
+    page.wait_for_timeout(600)
+    # `[guard]` because a build that never asks also never asks twice: this
+    # only distinguishes anything once the mechanism above it exists.
+    c.check("[guard] re-selecting the same contract asks nothing new",
+            len(log) == first, f"{len(log) - first} extra request(s)")
+
+    # Three quantity steps in quick succession are ONE question.
+    for _ in range(3):
+        page.click("#tk-qty-up")
+    page.wait_for_timeout(700)
+    added = len(log) - first
+    c.check("three quick quantity steps coalesce into one request",
+            added == 1, f"{added} request(s) for 3 steps")
+    c.check("and the one it sent describes the FINAL quantity",
+            bool(log) and log[-1].get("quantity") == 4,
+            str(log[-1].get("quantity")) if log else "no request")
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
         "4. Which contract matches my intent? (M4-C6)",
-        "5. What will this trade cost? (M4-C4/C7)",
-        "6. What is my actual risk? (M4-C7)",
         "7. Should I place this order? (M4-C8/C9)",
     ):
         c.note(label)
@@ -322,6 +563,9 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_workspace(browser, base, c, console)
     check_seam_matches_home(browser, base, c, console)
     check_expiry_labels(browser, base, c, console)
+    check_ticket_empty_state(browser, base, c, console)
+    check_ticket_states_the_engines_numbers(browser, base, c, console)
+    check_ticket_does_not_refetch(browser, base, c, console)
     check_workflow_sections(c)
 
 

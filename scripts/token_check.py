@@ -54,7 +54,7 @@ SCALE_PX = {0, 4, 8, 12, 16, 24, 32, 48}
 # These may only ever DECREASE. Lower them in the same commit that retires
 # the uses; never raise one to make a build pass.
 MAX_LEGACY_FS_MD = 50
-MAX_OFF_SCALE_RHYTHM = 313
+MAX_OFF_SCALE_RHYTHM = 312
 
 # Names retired during M0. A reappearance means someone copied an old rule.
 RETIRED = (

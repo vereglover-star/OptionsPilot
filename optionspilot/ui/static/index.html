@@ -780,12 +780,45 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 .tk-row .lbl { color:var(--ink-muted); font-size:var(--legacy-fs-md); }
 .tk-row select, .tk-row input[type=number] { background:var(--surface-sunken); border:1px solid var(--border-control);
   color:var(--ink-primary); border-radius:var(--radius-sm); padding:var(--space-2) 10px; font-size:var(--legacy-fs-md); }
-.tk-est { display:flex; justify-content:space-between; padding:10px 2px 2px; border-top:1px solid var(--border-subtle);
-  font-size:var(--text-body); }
-.tk-est b { font-variant-numeric:tabular-nums; }
+/* ── the four figures (M4-C4) ─────────────────────────────────────────────
+   One group, one rule above it, no housing of their own. The figures are
+   part of the ticket rather than a panel inside it, and giving them a border
+   would make the ticket read as two instruments — DESIGN_SYSTEM_V2.md §6.6's
+   "a region with two competing centres is two regions".
+
+   `tabular-nums` on the values because the numbers change while the user
+   watches a quantity stepper, and proportional digits make a changing
+   figure jitter horizontally, which reads as instability on the one surface
+   that must not look unstable. */
+.tk-figures { padding-top:var(--space-3); margin-top:var(--space-1);
+  border-top:1px solid var(--border-subtle);
+  display:flex; flex-direction:column; gap:var(--space-2); }
+.tk-fig { display:flex; align-items:baseline; justify-content:space-between;
+  gap:10px; }
+.tk-fig dt { color:var(--ink-muted); font-size:var(--text-caption); }
+.tk-fig dd { font-variant-numeric:tabular-nums; font-size:var(--text-body);
+  text-align:right; }
+/* Quieter by SIZE, not by a fourth ink value — the ramp has three steps and
+   inventing a lighter one is how a token layer rots. */
+.tk-fig-unit { font-size:var(--text-micro); }
+/* An absent figure is absent, not zero. The reason travels with it as a
+   title, so "—" is never the whole answer (PRODUCT_STANDARDS.md §3.2). */
+.tk-fig dd.tk-fig--absent { color:var(--ink-muted); }
+/* The consequence figure outranks the other three, and does so through type
+   and a hairline rather than through colour. §8: rank comes from spacing,
+   typography, elevation and alignment — never from bright colour. */
+.tk-fig--risk { padding-top:var(--space-2);
+  border-top:1px solid var(--border-subtle); }
+.tk-fig--risk dt { color:var(--ink-secondary); font-weight:600; }
+.tk-fig--risk dd { font-size:var(--text-body-lg); font-weight:700; }
 .tk-risk { font-size:var(--text-caption); color:var(--ink-muted); padding:0 2px;
   font-variant-numeric:tabular-nums; }
 .tk-risk.hot { color:var(--status-caution); }
+/* The reason a submit is unavailable, stated adjacent to it — §6.2's Disabled
+   treatment, "always". Empty and therefore invisible when nothing blocks. */
+.tk-blocked { font-size:var(--text-caption); color:var(--ink-muted);
+  padding:var(--space-2) 2px 0; }
+.tk-blocked:empty { display:none; }
 .tk-quick { display:flex; gap:var(--space-2); justify-content:center; margin-top:10px; }
 .tk-pos { display:flex; align-items:center; gap:10px; padding:7px var(--space-2);
   border-radius:var(--radius-sm); font-size:var(--legacy-fs-md); font-variant-numeric:tabular-nums; }
@@ -2634,7 +2667,18 @@ body.shell-v2 .home-legacy { display:none; }
                   aria-label="Learn how the order ticket works">?</button>
         </div>
         <div id="tk-selected" class="empty">Click a chain row to select a contract.</div>
-        <form id="tk-form" style="display:none; margin-top:var(--space-1)">
+        <!-- ══ THE TICKET, ALWAYS PRESENT (M4-C4) ═══════════════════════════
+             The form no longer waits for a contract. §6.1's second named
+             fault is that "the ticket does not exist until a contract is
+             chosen … the shape of the decision should be visible before the
+             decision", and §6.2's Empty state is explicit about what that
+             buys: the user learns the vocabulary before they need it.
+
+             `style="display:none"` is therefore gone from the element rather
+             than being flipped by script — a form that starts hidden and is
+             revealed is still a form that does not exist until something
+             happens, and it would render as a jump on first selection. -->
+        <form id="tk-form" style="margin-top:var(--space-1)">
           <div class="side-seg" id="tk-side-seg">
             <button type="button" class="buy active" data-side="buy_to_open">Buy to open</button>
             <button type="button" class="sell" data-side="sell_to_close">Sell to close</button>
@@ -2671,10 +2715,50 @@ body.shell-v2 .home-legacy { display:none; }
               <input id="tk-trail" type="number" step="0.1" style="width:110px"></div>
             <div class="tk-row" id="tk-f-trailpct" style="display:none"><span class="lbl">or trail %</span>
               <input id="tk-trailpct" type="number" step="0.1" style="width:110px"></div>
-            <div class="tk-est"><span>Estimated <span id="tk-est-kind">cost</span></span>
-              <b id="tk-est">—</b></div>
+            <!-- ══ THE FOUR FIGURES (M4-C4) ═══════════════════════════════
+                 What the user is about to spend, and the worst that can come
+                 of it. Always present — in the empty state they render as
+                 `—` with their labels intact, which is §6.2's Empty state
+                 doing its job: the shape of the decision before the decision.
+
+                 Every one of these numbers comes from `/api/v1/review`, and
+                 that is the point of the commit rather than an
+                 implementation detail. The previous ticket derived its
+                 "Estimated cost" from `tkSel.mid` in JavaScript, which
+                 PRODUCT_STANDARDS.md §3.2 forbids twice over: the mid is
+                 never the price an order fills at, and the fill model already
+                 has exactly one owner in `services/review.py`.
+
+                 A `<dl>`, because each row is a term and its value — a
+                 screen reader then reads "Most you can lose, $395" rather
+                 than two unrelated strings that happen to be adjacent. -->
+            <dl class="tk-figures" id="tk-figures">
+              <div class="tk-fig">
+                <dt>Entry <span class="tk-fig-unit">per contract</span></dt>
+                <dd id="tk-fig-entry">—</dd>
+              </div>
+              <div class="tk-fig">
+                <dt id="tk-fig-cost-label">Estimated cost</dt>
+                <dd id="tk-fig-cost">—</dd>
+              </div>
+              <div class="tk-fig">
+                <dt>Buying power</dt>
+                <dd id="tk-fig-bp">—</dd>
+              </div>
+              <!-- Ranked by type and rule, never by a red fill: §8's
+                   hierarchy row is explicit that rank comes from spacing,
+                   typography and alignment rather than from bright colour. -->
+              <div class="tk-fig tk-fig--risk">
+                <dt>Most you can lose</dt>
+                <dd id="tk-fig-risk">—</dd>
+              </div>
+            </dl>
             <div class="tk-risk" id="tk-risk" style="display:none"></div>
             <button class="btn buy big" type="submit" id="tk-submit">Review order</button>
+            <!-- §6.2's Disabled treatment: "with the reason stated adjacent,
+                 always". C9 fills this with the guardrail reasons; C4 uses it
+                 for the one that exists from the empty state onward. -->
+            <div class="tk-blocked" id="tk-blocked" role="status" aria-live="polite"></div>
             <div class="hint" style="margin-top:2px">Keys: <b>B</b>/<b>S</b> buy/sell ·
               <b>+</b>/<b>−</b> contracts · <b>Enter</b> review</div>
           </div>
@@ -8530,11 +8614,23 @@ async function loadChain() {
    times. The fix is deleting the second one, not improving it.
    `services/expiry.py` is now the only owner and the labels are unit-tested;
    `expiries` is an additive field, so `expirations` still exists unchanged. */
+/* One expiry, formatted the one way (M4-C4). The pills and the ticket's
+   contract line both name the same date, and two format helpers is how they
+   end up disagreeing about a month abbreviation. It reads the SERVER's
+   labels — never a second days-to-expiry calculation (§3.1). */
+function tkExpDate(iso) {
+  return new Date(iso + "T12:00:00").toLocaleDateString(undefined,
+    {month: "short", day: "numeric"});
+}
+function tkExpLabel(iso) {
+  const meta = (tkChain?.expiries || []).find(x => x.date === iso);
+  return meta ? `${tkExpDate(iso)} · ${meta.plain}` : tkExpDate(iso);
+}
+
 function renderExpPills() {
   const meta = tkChain.expiries || [];
   $("tk-exps").innerHTML = meta.map(x => {
-    const when = new Date(x.date + "T12:00:00").toLocaleDateString(undefined,
-      {month: "short", day: "numeric"});
+    const when = tkExpDate(x.date);
     return `<button data-exp="${x.date}" class="${x.date === tkExp ? "active" : ""}"` +
       ` title="${when} — ${x.plain}"><span class="exp-when">${when}</span>` +
       `<span class="exp-dte">${x.label}</span></button>`;
@@ -8618,16 +8714,27 @@ function renderChain(scrollToATM = false) {
   }
 }
 
+/* The ticket's EMPTY state (M4-C4). Named for what it does now: the form is
+   no longer hidden, so this is a state change rather than a disappearance.
+   §6.2: "the full shape of an order — quick picks, order type, quantity,
+   time in force — with a disabled submit and 'Nothing selected yet.' The
+   user learns the vocabulary before they need it."
+
+   The name `hideTicket` is kept because a dozen call sites already say it and
+   renaming them is churn with no reader benefit; what it means has changed
+   and this comment is where that is recorded. */
 function hideTicket() {
-  $("tk-form").style.display = "none";
+  tkSel = null;
   $("tk-selected").className = "empty";
   $("tk-selected").innerHTML = tkChain
-    ? `Click a chain row to select a contract — or jump straight to the money:
+    ? `<b>Nothing selected yet.</b> Pick a strike from the chain — or jump
+       straight to the money:
        <div class="tk-quick">
-         <button class="btn" onclick="atmPick('call')">⚡ Nearest ATM call</button>
-         <button class="btn" onclick="atmPick('put')">⚡ Nearest ATM put</button>
+         <button class="btn" type="button" onclick="atmPick('call')">⚡ Nearest ATM call</button>
+         <button class="btn" type="button" onclick="atmPick('put')">⚡ Nearest ATM put</button>
        </div>`
-    : "Load a chain to build an order.";
+    : `<b>Nothing selected yet.</b> Load a chain to build an order.`;
+  tkPaintFigures(null);
 }
 
 function atmPick(right) {
@@ -8650,15 +8757,20 @@ function selectContract(strike) {
   if (!row) return;
   tkSel = row;
   $("tk-selected").className = "tk-contract";
+  // The expiry reads as a DATE and a DTE, which §3.4 requires be two facts
+  // rather than one parenthesising the other — and the DTE is the server's
+  // `dte`, never a second calculation (§3.1, and the M4 audit that found one).
+  // The mid is LABELLED as an estimate rather than shown as the headline
+  // price: §3.2 forbids presenting a mark as a tradeable price, and the
+  // tradeable number now has its own row in the figures below.
   $("tk-selected").innerHTML =
-    `<div class="name">${tkChain.symbol} $${row.strike} ${row.right === "call" ? "Call" : "Put"}
-       <span class="desc" style="color:var(--ink-muted); font-weight:400">· exp ${tkChain.expiration} (${row.dte} DTE)</span></div>
-     <div class="mid">$${row.mid.toFixed(2)}</div>
+    `<div class="name">${tkChain.symbol} $${row.strike} ${row.right === "call" ? "Call" : "Put"}</div>
+     <div class="meta">${tkExpLabel(tkChain.expiration)} · ${row.dte}DTE</div>
      <div class="meta">bid <span style="color:var(--market-pos-text)">${row.bid.toFixed(2)}</span>
        · ask <span style="color:var(--market-neg-text)">${row.ask.toFixed(2)}</span>
+       · mid ${row.mid.toFixed(2)} <span class="tk-fig-unit">est.</span>
        · Δ ${row.delta.toFixed(2)} · IV ${(row.iv * 100).toFixed(1)}%
        · OI ${row.open_interest} · liq ${row.liquidity.toFixed(0)}/100</div>`;
-  $("tk-form").style.display = "";
   tkSyncTicket();          // a new contract can invalidate the armed side/type
   updateEstimate();
   renderChain();
@@ -8672,31 +8784,170 @@ function selectContract(strike) {
   });
 }
 
-function updateEstimate() {
-  if (!tkSel) return;
-  const qty = Math.max(1, +$("tk-qty").value || 1);
+/* ── the ticket's numbers (M4-C4) ─────────────────────────────────────────
+   Every figure the ticket states comes from `/api/v1/review`, and the reason
+   is PRODUCT_STANDARDS.md §3.2 rather than convenience.
+
+   What this replaced: `updateEstimate` computed `px * qty * 100` where `px`
+   was `tkSel.mid`. The mid is not a price anything fills at — `PaperBroker`
+   crosses to the ask and applies slippage — so the ticket stated a cost the
+   system was never going to charge, on the screen where a user decides
+   whether they can afford it. Measured on a real SPY chain: mid 40.40 against
+   an expected fill of 40.804, so a single contract read $40 light and ten
+   read $404 light. The fill model already had exactly ONE owner in
+   `services/review.py`, pinned by test against the broker's own arithmetic;
+   this is the ticket joining the review modal in reading it rather than
+   keeping a second, wrong copy in JavaScript.
+
+   Three rules on the fetching, because a ticket recalculates on every
+   keystroke of a quantity box:
+
+     1. **A draft that has not changed is not re-fetched.** The fingerprint is
+        the request body itself, so this is exact rather than a guess.
+     2. **One request in flight.** A superseded request is aborted, and a
+        response whose sequence number is stale is dropped rather than
+        painted — otherwise a slow first answer overwrites a fast second one
+        and the ticket shows the cost of an order the user has moved past.
+     3. **Debounced**, so holding the quantity stepper is one request. */
+const TK_DASH = "—";
+let tkFigures = null;         // the last painted ReviewView, or null
+let tkFigKey = "";            // fingerprint of the draft it describes
+let tkFigSeq = 0;             // monotonic; a stale response is dropped
+let tkFigTimer = null, tkFigCtl = null;
+
+/* The order draft, in exactly the shape `/api/v1/review` and `/api/orders`
+   both take. One builder, so the numbers the ticket shows describe the order
+   the submit button will actually send. */
+function tkDraft() {
+  if (!tkSel || !tkChain) return null;
   const kind = $("tk-kind").value;
-  const px = kind === "limit" && +$("tk-limit").value ? +$("tk-limit").value : tkSel.mid;
-  const est = px * qty * 100;
+  return {
+    side: tkSide, kind, tif: $("tk-tif").value,
+    symbol: tkChain.symbol, expiration: tkChain.expiration,
+    strike: tkSel.strike, right: tkSel.right,
+    quantity: Math.max(1, +$("tk-qty").value || 1),
+    limit: kind === "limit" ? (+$("tk-limit").value || 0) : 0,
+    stop: (kind === "stop_loss" || kind === "take_profit")
+      ? (+$("tk-stop").value || 0) : 0,
+  };
+}
+
+/* A figure that is not available is absent WITH its reason, never a zero and
+   never a bare dash. §3.2's last row, and this codebase's oldest rule: a
+   confidently wrong number is worse than an absent one. */
+function tkFig(id, value, note) {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = value == null ? TK_DASH : value;
+  el.classList.toggle("tk-fig--absent", value == null);
+  if (note) el.title = note; else el.removeAttribute("title");
+}
+
+function tkPaintFigures(r) {
+  tkFigures = r;
   const buying = tkSide === "buy_to_open";
-  $("tk-est-kind").textContent = buying ? "cost" : "credit";
-  $("tk-est").textContent = "≈ " + fmt$(est);
-  // risk context: order size as a share of buying power, warmed when it
-  // exceeds the configured per-trade risk budget (advisory — the backend
-  // gate is authoritative)
+  $("tk-fig-cost-label").textContent = buying
+    ? "Estimated cost" : "Estimated credit";
+
+  if (!r) {
+    // The EMPTY state. Labels stay, values are dashes — §6.2's "the full
+    // shape of an order … the user learns the vocabulary before they need it".
+    ["tk-fig-entry", "tk-fig-cost", "tk-fig-bp", "tk-fig-risk"]
+      .forEach(id => tkFig(id, null, "Select a contract to see this."));
+    $("tk-risk").style.display = "none";
+    tkArmSubmit();
+    return;
+  }
+
+  tkFig("tk-fig-entry", r.premium == null ? null : fmt$(r.premium),
+        r.cost_note || "The price this order is expected to fill at.");
+  const money = buying ? r.cost : r.proceeds;
+  tkFig("tk-fig-cost", money == null ? null : fmt$(money), r.cost_note);
+  tkFig("tk-fig-bp",
+        r.buying_power_pct == null ? null
+          : `${r.buying_power_pct.toFixed(1)}% · ${fmt$(r.buying_power_after)} left`,
+        r.buying_power_note);
+  tkFig("tk-fig-risk", r.max_loss == null ? null : fmt$(r.max_loss),
+        r.max_loss_note);
+
+  // Position size against the configured per-trade risk budget. Advisory and
+  // stated as such — `RiskManager` remains the only gate, and R-3 forbids
+  // this milestone changing that.
   const risk = $("tk-risk");
-  const bp = lastMetrics?.buying_power;
-  if (buying && bp > 0) {
-    const pct = est / bp * 100;
-    const budget = lastStatus?.risk_settings?.risk_per_trade_pct;
+  const budget = lastStatus?.risk_settings?.risk_per_trade_pct;
+  if (r.position_pct != null) {
     risk.style.display = "";
-    risk.className = "tk-risk" + (budget != null && pct > budget ? " hot" : "");
-    risk.textContent = `≈ ${pct.toFixed(1)}% of buying power` +
+    risk.className = "tk-risk" +
+      (budget != null && r.position_pct > budget ? " hot" : "");
+    risk.textContent = `${r.position_pct.toFixed(1)}% of account value` +
       (budget != null ? ` · risk budget ${budget}%/trade` : "");
+  } else if (r.position_note) {
+    risk.style.display = "";
+    risk.className = "tk-risk";
+    risk.textContent = r.position_note;
   } else risk.style.display = "none";
-  const sub = $("tk-submit");
+
+  tkArmSubmit();
+}
+
+/* The submit's label, colour and availability. Split out because C9 adds
+   guardrail reasons to the same control and they must not be two mechanisms
+   fighting over one button. */
+function tkArmSubmit() {
+  const sub = $("tk-submit"), buying = tkSide === "buy_to_open";
   sub.className = "btn big " + (buying ? "buy" : "sell");
-  sub.textContent = `Review ${buying ? "buy" : "sell"} · ${qty} × ${tkChain.symbol} $${tkSel.strike} ${tkSel.right === "call" ? "C" : "P"}`;
+  if (!tkSel || !tkChain) {
+    sub.disabled = true;
+    sub.textContent = "Review order";
+    $("tk-blocked").textContent =
+      "Select a contract from the chain to review an order.";
+    return;
+  }
+  sub.disabled = false;
+  $("tk-blocked").textContent = "";
+  const qty = Math.max(1, +$("tk-qty").value || 1);
+  sub.textContent = `Review ${buying ? "buy" : "sell"} · ${qty} × ` +
+    `${tkChain.symbol} $${tkSel.strike} ${tkSel.right === "call" ? "C" : "P"}`;
+}
+
+function updateEstimate() {
+  const draft = tkDraft();
+  if (!draft) { tkPaintFigures(null); return; }
+  const key = JSON.stringify(draft);
+  // Rule 1: an unchanged draft is not a new question.
+  if (key === tkFigKey && tkFigures) { tkArmSubmit(); return; }
+  tkFigKey = key;
+  // The label and the button follow the draft immediately; only the numbers
+  // wait for the server, so the control never lags the user's own input.
+  tkArmSubmit();
+  clearTimeout(tkFigTimer);
+  tkFigTimer = setTimeout(() => tkFetchFigures(draft, key), 140);
+}
+
+async function tkFetchFigures(draft, key) {
+  const seq = ++tkFigSeq;
+  if (tkFigCtl) tkFigCtl.abort();          // rule 2: one request in flight
+  const ctl = tkFigCtl = new AbortController();
+  try {
+    const resp = await fetch("/api/v1/review", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(draft), signal: ctl.signal});
+    const body = await resp.json();
+    if (seq !== tkFigSeq || key !== tkFigKey) return;   // superseded
+    if (!resp.ok || !body.data) throw new Error("review unavailable");
+    tkPaintFigures(body.data);
+  } catch (err) {
+    if (err.name === "AbortError" || seq !== tkFigSeq) return;
+    // A failure states itself rather than leaving the previous order's
+    // numbers on screen under a new contract's name.
+    tkFigures = null;
+    ["tk-fig-entry", "tk-fig-cost", "tk-fig-bp", "tk-fig-risk"].forEach(
+      id => tkFig(id, null, "The cost estimate could not be reached."));
+    $("tk-risk").style.display = "none";
+    tkArmSubmit();
+  } finally {
+    if (tkFigCtl === ctl) tkFigCtl = null;
+  }
 }
 
 /* ── order-ticket guardrails (V0.6.1) ────────────────────────────────────────
@@ -8750,7 +9001,11 @@ function tkPaintSide() {
    list — and deliberately NOT recursive: it mutates tkSide directly rather
    than calling back into setSide(). */
 function tkSyncTicket() {
-  if (!tkSel) return;
+  // Runs in the EMPTY state too since M4-C4. With nothing selected `tkHeld`
+  // is 0, so the empty ticket shows the same coherent shape a selected one
+  // does — Sell to close disabled with its reason, exit order types withdrawn
+  // from the buy side. That IS §6.2's Empty state: the full shape of an
+  // order, including which parts of it are unavailable and why.
   const held = tkHeld();
   const sell = document.querySelector('#tk-side-seg button[data-side="sell_to_close"]');
   const kindSel = $("tk-kind");
@@ -8839,7 +9094,7 @@ function renderTkPositions() {
   const ps = lastStatus?.positions || [];
   // A position list can change what the ticket is allowed to offer (selling
   // needs something to sell), so re-run the guardrail on every push.
-  if ($("tk-form") && $("tk-form").style.display !== "none") tkSyncTicket();
+  if ($("tk-form")) tkSyncTicket();
   setHTML("tk-positions", ps.length === 0
     ? `<div class="tell"><b>Nothing open</b>
          Positions you open appear here with their live profit and loss and a
@@ -10451,8 +10706,7 @@ const GUIDE_TUTORIALS = {
       {tab:"trade", el:"#tk-symbol", title:"Start with a chain",
        body:"Type a symbol and load its option chain. Pick a contract from the list and the ticket arms itself around it. If you would rather not read a chain yet, there are two shortcuts that grab the nearest at-the-money call or put for you."},
       {tab:"trade", el:"#tk-form", title:"The ticket will not let you build a broken order",
-       body:"Order types that cannot apply are removed rather than left to fail — you will never see <b>Buy to open</b> offering a stop loss, because a stop is an exit. When something disappears, a line underneath says why. Every order is reviewed in a confirmation dialog before it goes anywhere.",
-       when:() => $("tk-form").style.display !== "none"},
+       body:"Order types that cannot apply are removed rather than left to fail — you will never see <b>Buy to open</b> offering a stop loss, because a stop is an exit. When something disappears, a line underneath says why. Every order is reviewed in a confirmation dialog before it goes anywhere."},
       {el:'nav button[data-tab="watchlist"]', title:"The AI only sees what you point it at",
        body:"The watchlist is the scan universe. Every cycle, the engine looks at these symbols and no others.",
        advance:{click:'nav button[data-tab="watchlist"]'}, do:"Click Watchlist"},
@@ -10512,13 +10766,16 @@ const GUIDE_TUTORIALS = {
       {el:"#tk-chain", title:"Pick a contract",
        body:"Click any row to arm the ticket around it. If reading a chain is not something you want to do yet, the two shortcut buttons pick the nearest at-the-money call or put for you."},
       {el:"#tk-side-seg", title:"Buy to open, or sell to close",
-       body:"These are not \"buy\" and \"sell\" in the usual sense. <b>Buy to open</b> starts a position. <b>Sell to close</b> exits one you already hold — so it is only available for contracts you actually own, and the ticket will tell you when you do not.",
-       when:() => $("tk-form").style.display !== "none"},
+       body:"These are not \"buy\" and \"sell\" in the usual sense. <b>Buy to open</b> starts a position. <b>Sell to close</b> exits one you already hold — so it is only available for contracts you actually own, and the ticket will tell you when you do not."},
       {el:"#tk-kind", title:"The order type list changes with the side",
-       body:"On the buy side you get Market and Limit. Stop loss, take profit and trailing stop are <b>exit</b> orders — they can only close something you hold — so they are removed rather than left to fail when you submit. If one disappears, the line underneath says why.",
-       when:() => $("tk-form").style.display !== "none"},
+       body:"On the buy side you get Market and Limit. Stop loss, take profit and trailing stop are <b>exit</b> orders — they can only close something you hold — so they are removed rather than left to fail when you submit. If one disappears, the line underneath says why."},
+      // No `when` on these three since M4-C4: the ticket is always present, so
+      // a step gated on it existing would be gated on a condition that is now
+      // permanently true — which reads as a guard and is in fact dead code.
+      {el:"#tk-figures", title:"What it costs, and the worst case",
+       body:"Four figures, all of them the numbers the <b>engine</b> will actually use. <b>Entry</b> is the price this order is expected to fill at — the ask plus slippage on a buy, not the mid. <b>Most you can lose</b> is stated even when it equals the cost, because \"a long option can expire worthless\" is the fact most beginners have not met yet."},
       {el:"#tk-risk", title:"How big is this, really",
-       body:"The ticket shows the order as a share of your buying power and warns when it exceeds your configured risk budget. On manual trades this is advice, not a block — but oversizing is one of the things the coach will pick up afterwards.",
+       body:"The ticket shows the order as a share of your account value and warns when it exceeds your configured risk budget. On manual trades this is advice, not a block — but oversizing is one of the things the coach will pick up afterwards.",
        when:() => $("tk-risk").style.display !== "none"},
       {el:"#tk-working", title:"Working orders",
        body:"Anything that did not fill immediately waits here and is checked against fresh quotes every scan cycle. Day orders expire at 4:00 pm ET; GTC orders wait until they fill or you cancel them. A sell order cancels itself if the position closes first."},
