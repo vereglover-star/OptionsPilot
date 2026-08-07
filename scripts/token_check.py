@@ -226,6 +226,29 @@ def check_instrument(text: str) -> list[str]:
                 f"plot area. DV rule C-6 forbids the accent there; use a "
                 f"--market-* colour.")
 
+    # The equity chart's viewBox must be as tall as what `drawEquity` draws.
+    # It was 180 against an H of 200 and `preserveAspectRatio="none"`, so the
+    # bottom 20 user units fell outside the box and were CLIPPED rather than
+    # scaled — which is precisely where the curve's lowest point and its
+    # baseline are drawn. The worst day on the chart was the one you could not
+    # see, and no assertion anywhere could have noticed: the payload was right,
+    # the SVG was right, and the pixels were missing. Read from the same
+    # brace-matched function body as the C-6 check above.
+    if plot:
+        m_h = re.search(r"\bH\s*=\s*([0-9]+)", plot)
+        m_vb = re.search(r'id="he-chart"[^>]*viewBox="0 0 [0-9]+ ([0-9]+)"',
+                         text)
+        if not m_h or not m_vb:
+            problems.append(
+                "could not read drawEquity's H or #he-chart's viewBox — the "
+                "chart-clipping check is inert.")
+        elif m_h.group(1) != m_vb.group(1):
+            problems.append(
+                f"#he-chart's viewBox is {m_vb.group(1)} tall but drawEquity "
+                f"draws to {m_h.group(1)}. With preserveAspectRatio=\"none\" "
+                f"the difference is CLIPPED, not scaled, and it clips the "
+                f"bottom of the curve.")
+
     outer, inner = radius_of(".ins"), radius_of(".ins-well")
     if outer is None:
         problems.append(".ins has no tokenised border-radius.")

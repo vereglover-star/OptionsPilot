@@ -1617,12 +1617,25 @@ html.gd-nomotion #gd-ring::after { display:none; }
    The gate was not merely silent about the defect, it was biased towards it.
    The rhythm assertion added in this commit is the counterweight. */
 body:not(.shell-v2) #home { display:none; }
+/* Home fills the content area rather than ending wherever its content does,
+   so the last band can take the slack instead of the slack sitting under it
+   as a void (M3.5-C9). The section is in the chain because a percentage
+   height needs a definite parent, and `<main>` is the definite one. */
+body.shell-v2 #tab-dashboard { height:100%; }
 /* A CLASS, not an id, because it brackets the legacy blocks on either side of
    `#intel-panel`. The intelligence panel is not part of the dashboard layout
    Home replaces — M5 relocates it to Journal › Progress — so it stays visible
    here rather than disappearing a whole subsystem a milestone early. */
 body.shell-v2 .home-legacy { display:none; }
-.home { display:flex; flex-direction:column; gap:var(--space-6); }
+.home { display:flex; flex-direction:column; gap:var(--space-6); height:100%;
+  /* The vertical budget everything OTHER than the position rows consumes:
+     band 1, the two band gaps, the region heads, working orders and band 3.
+     Measured at 1920x1080, and named so the number has an owner rather than
+     sitting anonymously inside a `calc`. It does not need to be exact — the
+     gate asserts the OUTCOME (band 3 still on screen with 14 positions), so
+     if this drifts out of date the suite says so rather than the layout
+     quietly failing. */
+  --home-rows-reserve:700px; }
 
 /* H1 — on the canvas, no housing. `text-body-lg` because it is prose meant to
    be read at a glance from across a desk, and `max-width` because a sentence
@@ -1734,6 +1747,24 @@ body.shell-v2 .home-legacy { display:none; }
    3 no longer state a ratio of their own, which is the whole point: the seam
    is one line down the page. */
 
+/* Positions grow into the space they are given and then scroll their own body
+   (M3.5-C9). Before this they grew without limit: measured with 14 positions,
+   band 3 ended at 1256px inside a 1080px viewport — the milestone's headline
+   promise is that Home does not scroll, and every payload the suite had ever
+   driven held two positions, so the one region that can be arbitrarily long
+   was never asked the question.
+
+   A cap rather than a flex chain, deliberately. Making the whole column
+   shrink needs `align-items:stretch` on the band, which equalises the two
+   columns — and that would stretch the focal instrument to the height of a
+   fourteen-row list to hold two sentences. Space belongs to the region that
+   has content for it.
+
+   The floor keeps roughly four rows visible on a short window, because a
+   scroller shorter than its own rows is worse than a scroller. */
+#hp-body { max-height:max(160px, calc(100vh - var(--home-rows-reserve)));
+  overflow-y:auto; min-height:0; }
+
 /* H3 rows. A real table would be right for many rows; at the two-to-six this
    region holds, a grid row keeps the close action reachable without a header
    row eating a third of the vertical budget. Semantics are carried by the
@@ -1825,11 +1856,39 @@ body.shell-v2 .home-legacy { display:none; }
    1024 and 1439 the seam simply stopped halfway down the page. Both are
    `.dest-split` now and both hold the split to 1024: a full-width watchlist
    draws a 900px bar for a 0-100% value, which is worse than a narrower one,
-   and a seam that runs the whole height is the point of having one. */
+   and a seam that runs the whole height is the point of having one.
+
+   Band 3 is the band that takes the slack (M3.5-C9), so it grows and its
+   children stretch — overriding `.dest-split`'s `align-items:start` here
+   only. Stretching is invisible on the watchlist, which is quiet-tier and
+   therefore has no housing to grow, and is exactly what the chart wants. */
+.home-band3 { flex:1 1 auto; align-items:stretch; min-height:0; }
+#home-equity { display:flex; flex-direction:column; min-height:0; }
+/* Grows into the slack, but only so far. Uncapped it took every spare pixel
+   on a 1080px monitor and stood 420px tall — dominant again, which is the
+   complaint this commit started from. The band still stretches to the bottom
+   of the page, so what is left over sits inside a quiet, housing-less region
+   rather than as a void beneath the content. */
+#he-well { flex:1 1 auto; min-height:120px; max-height:260px; }
 
 /* The plot area is the instrument's recessed interior, so the chart reads as
    INSIDE something (UI_V2_VISUAL_EXPLORATION.md, "Chart presentation"). */
-.home-chart { display:block; width:100%; height:180px; }
+/* The chart no longer states a height; it fills whatever band 3 is given, to
+   a floor of 120px (M3.5-C9).
+
+   Two complaints had to be answered at once and they pull against each other:
+   the plot was the largest allocation on the page — 1099x252 with its housing,
+   for a 30-day line that moves imperceptibly day to day, while a position row
+   a user acts on got 40px — and the page ALSO left 38% of its height unused.
+   Simply shrinking the plot fixes the first and makes the second worse.
+
+   So band 3 takes the slack instead of the slack sitting under it. The chart
+   is no longer dominant, because Positions above it now grows first and the
+   chart only gets what is left; and there is no void, because the last band
+   reaches the bottom. `preserveAspectRatio="none"` means the drawing stretches
+   to whatever height it is handed, so `drawEquity` needs no knowledge of this
+   and is untouched. */
+.home-chart { display:block; width:100%; height:100%; }
 
 /* H6 rows. The confidence bar carries a TICK at the confidence that symbol
    actually needed — a bar with no reference line says "71%" and leaves the
@@ -2270,7 +2329,13 @@ body.shell-v2 .home-legacy { display:none; }
             </div>
           </div>
           <div class="ins-well flush" id="he-well">
-            <svg id="he-chart" class="home-chart" viewBox="0 0 960 180"
+            <!-- The viewBox height must equal `drawEquity`'s H. It was 180
+                 against an H of 200, so with `preserveAspectRatio="none"` the
+                 bottom 20 user units were outside the box and CLIPPED rather
+                 than scaled — which is exactly where the curve's lowest point
+                 is drawn. The worst day on the chart was the one you could not
+                 see. Both sibling charts already use 200. -->
+            <svg id="he-chart" class="home-chart" viewBox="0 0 960 200"
                  preserveAspectRatio="none" role="img"
                  aria-label="Account equity over time"></svg>
           </div>

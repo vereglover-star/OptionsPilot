@@ -200,6 +200,19 @@ FULL = dict(
 )
 
 #: Open risk that is a FLOOR: positions exist, none of them is priced.
+#: A busy account. Every payload in this suite held two positions, so nothing
+#: ever asked what happens when a region has more rows than the screen has
+#: room for — and the answer, measured before M3.5-C9, was that Positions grew
+#: without limit and pushed band 3 clean off the bottom of the viewport. The
+#: no-scroll commitment (§5.6) is asserted at two sizes and was only ever
+#: exercised against a nearly empty account.
+BUSY = dict(
+    FULL,
+    positions=[_position("SPY", 470.0 + i, "call" if i % 2 else "put",
+                         1, 3.0, 3.5, 50.0 - i * 7)
+               for i in range(14)],
+)
+
 #: A day that needs the user. Exercises the one branch of the status line
 #: that three of the eight cases reach and that nothing on the page rendered
 #: before M3.5-C8 — `needs_you` was in the payload and unread.
@@ -326,6 +339,25 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
             rhythm["ok"], f"expected {rhythm['expected']}px, measured "
                           f"{rhythm['gaps']}")
     page.close()
+
+    # ── a busy account does not push band 3 off the screen (M3.5-C9) ────────
+    # Positions grows into the space it is given and then scrolls its own
+    # body, rather than growing without limit. Asserted with 14 positions
+    # because every other payload in this file has two, which is how a region
+    # with no height cap survived a milestone whose headline promise is that
+    # Home does not scroll.
+    for width, height in ((1920, 1080), (1440, 900)):
+        page = open_home(browser, base, BUSY, width=width, height=height,
+                         console=console)
+        b3 = bottom_of(page, ".home-band3")
+        c.check(f"a 14-position account still fits at {width}x{height}",
+                b3 <= height, f"band 3 ends at {b3:.0f}px of {height}px")
+        rows = page.eval_on_selector(
+            "#hp-body", "e => [e.scrollHeight > e.clientHeight + 1,"
+                        " getComputedStyle(e).overflowY]")
+        c.check(f"and reaches its extra rows by scrolling at {width}x{height}",
+                rows[0] and rows[1] in ("auto", "scroll"), str(rows))
+        page.close()
 
     # ── the status line reads as a headline, not a caption (M3.5-C8) ────────
     page = open_home(browser, base, FULL, console=console)
