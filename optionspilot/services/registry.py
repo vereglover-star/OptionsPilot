@@ -36,6 +36,38 @@ from optionspilot.services.watchlist import WatchlistService
 from optionspilot.services.workspace import WorkspaceService
 
 
+def _text_of(item) -> str:
+    """The headline of an intelligence record, whatever shape it arrives in.
+
+    `intelligence/` records are read STRUCTURALLY across this boundary — the
+    engine imports `core` only and nothing imports its record classes — so this
+    reads keys rather than attributes, and tolerates a plain string.
+    """
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        # `headline` first: it is what `intelligence/risk.py::_observation` and
+        # the recommendation records actually call this field. The rest are
+        # tolerated shapes, not guesses — a key list that misses the real one
+        # renders an item with no text, which is what the first version of this
+        # did (two blank rows at the top of H4, found by looking at the screen).
+        for key in ("headline", "title", "text", "message", "summary", "name"):
+            value = item.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
+def _detail_of(item) -> str:
+    """Its evidence line, if it carries one."""
+    if isinstance(item, dict):
+        for key in ("detail", "rationale", "why", "evidence", "body"):
+            value = item.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
 class ServiceRegistry:
     """The application layer, bound to one running orchestrator."""
 
@@ -133,7 +165,88 @@ class ServiceRegistry:
             # around it, which is why `ChartService` takes one injected too.
             performance=lambda: self.portfolio.performance(self._now_et()),
             facts=self._status_facts,
+            intelligence=self._next_actions,
+            working_orders=self._working_orders,
+            equity=lambda: list(getattr(self.trading, "equity_history", [])),
         )
+
+    # ── H4: what to do next ──────────────────────────────────────────────────
+
+    def _working_orders(self) -> list:
+        book = getattr(self._orch, "orders", None)
+        if book is None or not hasattr(book, "working"):
+            return []
+        out = []
+        for order in book.working():
+            out.append({
+                "id": getattr(order, "id", ""),
+                "contract": getattr(order, "contract_symbol", ""),
+                "kind": getattr(getattr(order, "kind", None), "value",
+                                str(getattr(order, "kind", ""))),
+                "quantity": getattr(order, "quantity", 0),
+                "limit": getattr(order, "limit_price", None),
+                "stop": getattr(order, "stop_price", None),
+            })
+        return out
+
+    def _next_actions(self) -> list | None:
+        """H4's ranking: risk condition -> evidenced finding -> cleared setups.
+
+        The priority order is `UI_V2_DESIGN.md` §5.4's, and the UI renders this
+        list verbatim — it does not re-rank, filter or extend it (§2.4). What
+        this method must not do is *invent* a ranking: within each tier the
+        order is the source's own, because `intelligence/` already ranks with a
+        false-discovery correction applied and a second sort here would be an
+        opinion about evidence formed by the layer with the least of it.
+
+        Returns `None` when the analysis could not be read at all. "No
+        findings" and "I could not look" are different answers and §2.10
+        requires the second to be visible — a silent empty region is
+        indistinguishable from "nothing is wrong".
+        """
+        items: list[dict] = []
+        try:
+            summary = self.intelligence.summary()
+        except Exception:  # noqa: BLE001 - the region reports, Home survives
+            return None
+
+        # 1. Risk conditions that are true right now.
+        risk = summary.get("risk") or {}
+        if risk.get("assessable"):
+            for obs in (risk.get("observations") or [])[:2]:
+                text = _text_of(obs)
+                # An item with no headline is a blank row, and a blank row in a
+                # ranked list reads as "something is here that I cannot show
+                # you". Drop it rather than rendering it.
+                if text:
+                    items.append({"kind": "risk", "text": text,
+                                  "detail": "", "action": None})
+
+        # 2. One evidenced behavioural finding, with its evidence attached.
+        #    `intelligence/` never states what it cannot evidence, so whatever
+        #    reaches here already carries its sample size — and §2.13 requires
+        #    that to be IN the item, not in a tooltip, because tooltip-only
+        #    evidence is invisible to a keyboard and to assistive technology.
+        for rec in (summary.get("recommendations") or [])[:1]:
+            text = _text_of(rec)
+            if text:
+                items.append({"kind": "finding", "text": text,
+                              "detail": _detail_of(rec),
+                              "action": {"label": "Show me", "tab": "coach"}})
+
+        # 3. Cleared setups — the engine's current opportunities, compact.
+        signals = (self.trading.last_summary or {}).get("signals") or {}
+        cleared = [(sym, sig) for sym, sig in signals.items()
+                   if isinstance(sig, dict) and sig.get("accepted")]
+        for sym, sig in cleared[:3]:
+            conf = sig.get("confidence")
+            items.append({
+                "kind": "setup", "symbol": sym,
+                "text": f"{sym} {sig.get('direction', '')}".strip(),
+                "detail": f"{round(conf * 100)}% confidence" if conf else "",
+                "action": {"label": "Trade", "tab": "trade", "symbol": sym},
+            })
+        return items
 
     # ── the facts only a host can answer ─────────────────────────────────────
 

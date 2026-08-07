@@ -1562,6 +1562,64 @@ body.shell-v2 .home-legacy { display:none; }
 @media (max-width:900px) {
   .ins-cell + .ins-cell { border-left:0; border-top:1px solid var(--border-subtle); }
 }
+
+/* Band 2. Positions take the larger share — P4: the objects money is actually
+   in outrank advice about them. Below 1024 the band stacks, positions first,
+   and it never reverses. */
+.home-band2 { display:grid; gap:var(--space-5);
+  grid-template-columns:minmax(0,1.45fr) minmax(0,1fr); align-items:start; }
+@media (max-width:1023px) { .home-band2 { grid-template-columns:1fr; } }
+
+/* H3 rows. A real table would be right for many rows; at the two-to-six this
+   region holds, a grid row keeps the close action reachable without a header
+   row eating a third of the vertical budget. Semantics are carried by the
+   accessible names, which name their subject ("Close SPY 470 call"). */
+.hp-row { display:grid; grid-template-columns:1fr auto auto auto;
+  gap:var(--space-3); align-items:center; padding:var(--space-2) var(--space-2);
+  border-radius:var(--radius-sm); }
+.hp-row + .hp-row { margin-top:var(--space-1); }
+.hp-row:hover { background:var(--surface-sunken); }
+.hp-row:hover .hp-x, .hp-row:focus-within .hp-x { opacity:1; }
+.hp-name { font-size:var(--text-body); color:var(--ink-primary);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hp-sub { font-size:var(--text-caption); color:var(--ink-muted); }
+.hp-num { font-variant-numeric:tabular-nums; font-size:var(--text-body);
+  text-align:right; white-space:nowrap; }
+.hp-num.pos { color:var(--market-pos-text); }
+.hp-num.neg { color:var(--market-neg-text); }
+/* The close action is quiet until the row is hovered or focused, but it is
+   never removed from the tab order — a control that only exists on hover is a
+   control a keyboard user does not have. */
+.hp-x { opacity:0; transition:opacity var(--dur-fast) var(--ease-move);
+  background:none; border:0; color:var(--ink-muted); cursor:pointer;
+  font-size:var(--text-body); padding:0 var(--space-2);
+  border-radius:var(--radius-sm); }
+.hp-x:hover { color:var(--market-neg-text); background:var(--surface-base); }
+.hp-x:focus-visible { opacity:1; }
+
+/* H4 items. Numbered, because the ranking IS the information. */
+.home-next-list { list-style:none; margin:0; padding:0; }
+.hn-item { padding:var(--space-3) 0; }
+.hn-item + .hn-item { border-top:1px solid var(--border-subtle); }
+.hn-text { font-size:var(--text-body); color:var(--ink-primary);
+  line-height:1.5; }
+/* Evidence lives INSIDE the item, never in a tooltip — tooltip-only evidence
+   is invisible to a keyboard user and to assistive technology (§2.13). */
+.hn-detail { font-size:var(--text-caption); color:var(--ink-muted);
+  margin-top:var(--space-1); line-height:1.5; }
+.hn-item[data-kind="risk"] .hn-text { color:var(--status-caution); }
+.hn-act { margin-top:var(--space-2); background:none; border:0;
+  color:var(--action-primary-text); cursor:pointer; font-size:var(--text-caption);
+  padding:var(--space-1) var(--space-2); border-radius:var(--radius-sm);
+  margin-left:calc(var(--space-2) * -1); }
+.hn-act:hover { background:var(--surface-sunken); }
+
+/* Empty regions. Every one contains a VERB (P9) — an empty state is the first
+   step, not the word "None". */
+.home-empty { font-size:var(--text-body); color:var(--ink-secondary);
+  line-height:1.6; padding:var(--space-2) 0; }
+.home-empty .btn { margin-top:var(--space-3); }
+.home-note { font-size:var(--text-caption); color:var(--ink-muted); }
 </style>
 </head>
 <body data-palette="#3987e5">
@@ -1881,6 +1939,42 @@ body.shell-v2 .home-legacy { display:none; }
           </div>
         </dl>
       </div>
+
+      <!-- Band 2 — what needs you. Positions LEFT, findings RIGHT, and the
+           order never reverses at any width (§2.12): consequence ordering
+           does not change with viewport. -->
+      <div class="home-band2">
+
+        <!-- H3 — the highest-consequence objects on the screen, so by P4 they
+             take the largest region. Working orders are a SUBSECTION rather
+             than a separate panel, because "a stop I have resting" and "a
+             position I hold" are one mental object. -->
+        <div class="ins" id="home-positions">
+          <div class="ins-head">
+            <span class="ins-label">Positions <span class="ins-count"
+                  id="hp-count"></span></span>
+            <button class="ins-act" id="hp-manage" type="button">Manage ›</button>
+          </div>
+          <div id="hp-body"></div>
+          <div class="ins-group" id="hp-working-group" hidden>
+            <div class="ins-sub">Working orders <span class="ins-count"
+                 id="hp-working-count"></span></div>
+            <div id="hp-working"></div>
+          </div>
+        </div>
+
+        <!-- H4 — the specification-critical region. `intelligence/` ranks it
+             with a false-discovery correction already applied; this renders
+             the top three of that ranking VERBATIM and does not re-rank,
+             filter or add a fourth. An ordered list, because the ranking is
+             the information. -->
+        <div class="ins" id="home-next">
+          <div class="ins-head">
+            <span class="ins-label">What to do next</span>
+          </div>
+          <ol id="hn-body" class="home-next-list"></ol>
+        </div>
+      </div>
     </div>
 
     <div class="home-legacy">
@@ -1888,30 +1982,6 @@ body.shell-v2 .home-legacy { display:none; }
     <div class="cards" id="cards"></div>
     </div>
 
-    <!-- Trading Intelligence Engine — every figure below is a projection of one
-         analysis (/api/intelligence/summary); nothing here computes its own. -->
-    <div class="panel" id="intel-panel" style="display:none">
-      <h2>Trading intelligence
-        <span class="hint" style="display:inline" id="intel-meta"></span></h2>
-      <div class="cards" id="intel-scores"></div>
-      <div class="grid2">
-        <div>
-          <h3 class="sub">What to do next</h3>
-          <div id="intel-actions"><div class="empty">—</div></div>
-          <h3 class="sub">Risk</h3>
-          <div id="intel-risk"><div class="empty">—</div></div>
-        </div>
-        <div>
-          <h3 class="sub">Goals</h3>
-          <div id="intel-goals"></div>
-          <h3 class="sub">Achievements</h3>
-          <div id="intel-achievements"></div>
-        </div>
-      </div>
-      <h3 class="sub">Your progress</h3>
-      <div id="intel-timeline"><div class="empty">—</div></div>
-      <div class="hint" id="intel-notes"></div>
-    </div>
 
     <div class="home-legacy">
     <div class="dash-grid">
@@ -2137,6 +2207,38 @@ body.shell-v2 .home-legacy { display:none; }
 
   <!-- COACH (Human Mode reviews + profile) -->
   <section id="tab-coach" style="display:none">
+    <!-- Trading Intelligence Engine. Moved here from the Dashboard in
+         M3-C6. Home's H4 now renders this engine's top-ranked items, and
+         leaving the full panel on the same screen put two 'What to do next'
+         regions one above the other — the exact fault UI_V2_DESIGN.md §5.1
+         names as the current Dashboard's problem. Journal is where M5 puts
+         it permanently (DESTINATIONS maps coach -> Journal), so this is the
+         relocation M5 would perform anyway, done a milestone early because
+         M3 is what created the duplication. Nothing is removed. -->
+    <!-- Trading Intelligence Engine — every figure below is a projection of one
+         analysis (/api/intelligence/summary); nothing here computes its own. -->
+    <div class="panel" id="intel-panel" style="display:none">
+      <h2>Trading intelligence
+        <span class="hint" style="display:inline" id="intel-meta"></span></h2>
+      <div class="cards" id="intel-scores"></div>
+      <div class="grid2">
+        <div>
+          <h3 class="sub">What to do next</h3>
+          <div id="intel-actions"><div class="empty">—</div></div>
+          <h3 class="sub">Risk</h3>
+          <div id="intel-risk"><div class="empty">—</div></div>
+        </div>
+        <div>
+          <h3 class="sub">Goals</h3>
+          <div id="intel-goals"></div>
+          <h3 class="sub">Achievements</h3>
+          <div id="intel-achievements"></div>
+        </div>
+      </div>
+      <h3 class="sub">Your progress</h3>
+      <div id="intel-timeline"><div class="empty">—</div></div>
+      <div class="hint" id="intel-notes"></div>
+    </div>
     <!-- Learning the software, kept deliberately separate from learning to
          trade. These come from measured FEATURE usage (/api/guide); the panels
          below come from measured TRADES. Merging them would give two engines
@@ -2931,11 +3033,13 @@ function switchTab(name) {
     b ? b.querySelector(".lbl").textContent : (TAB_LABELS[name] || name);
   // The one workspace fact with no localStorage key of its own to intercept.
   if (window.Workspace) Workspace.push({tab: name});
-  if (name === "dashboard") { Intel.enterDashboard();
-    if (window.Home) Home.enter(); }
+  if (name === "dashboard") { if (window.Home) Home.enter(); }
   if (name === "charts") loadChart();
   if (name === "trade") loadTrade();
-  if (name === "coach") loadCoach();
+  // The intelligence panel moved to this tab in M3-C6, so its polling starts
+  // and stops with this tab rather than with the Dashboard.
+  if (name === "coach") { loadCoach(); Intel.enterDashboard(); }
+  else Intel.leaveDashboard();
   if (name === "watchlist") loadWatchlist();
   if (name === "journal") loadJournal();
   if (name === "learning") loadLearning();
@@ -3580,6 +3684,163 @@ const Home = (() => {
 })();
 window.Home = Home;
 
+/* Bands 2 and 3. Split from `Home` so each band's rendering stays readable on
+   its own; `Home` owns the fetch and the state, these own the markup. */
+const HomeBands = (() => {
+  const el = id => document.getElementById(id);
+  const money0 = v => (v < 0 ? "-$" : "$") +
+    Math.abs(v).toLocaleString(undefined, {maximumFractionDigits:0});
+
+  /* "SPY 470C 12 Sep" — the contract as a person says it, not as OCC encodes
+     it. The OCC symbol is unreadable at a glance and this region's whole job
+     is to be read at a glance. */
+  function contractName(p) {
+    const right = (p.right || "").toLowerCase().startsWith("c") ? "C" : "P";
+    let when = "";
+    try {
+      when = new Date(p.expiration + "T00:00:00").toLocaleDateString(
+        undefined, {day:"numeric", month:"short"});
+    } catch { when = p.expiration || ""; }
+    return `${p.underlying} ${p.strike}${right} ${when}`;
+  }
+
+  /* Accessible names name their SUBJECT, never just "Close" (§2.13). */
+  function closeLabel(p) {
+    const right = (p.right || "").toLowerCase().startsWith("c") ? "call" : "put";
+    return `Close ${p.underlying} ${p.strike} ${right}`;
+  }
+
+  function renderPositions(d) {
+    const body = el("hp-body"), count = el("hp-count");
+    if (!body) return;
+    const rows = d.positions || [];
+    if (count) count.textContent = rows.length ? `(${rows.length})` : "";
+
+    if (!rows.length) {
+      /* P9: every empty region contains a verb, and this one's first action is
+         genuinely different from the other empty regions' — three distinct
+         next steps, not the same button repeated. */
+      body.innerHTML = `<div class="home-empty">You have no open positions.
+        One appears the moment an order fills.
+        <div><button class="btn" type="button" data-home-go="trade"
+             >Place a practice trade</button></div></div>`;
+    } else {
+      body.innerHTML = rows.map(p => {
+        const pnl = p.unrealized;
+        const pct = p.avg_price ? (pnl / (p.avg_price * p.quantity * 100)) * 100 : 0;
+        const tone = pnl > 0 ? "pos" : pnl < 0 ? "neg" : "";
+        /* The sign is carried in TEXT, always, and the direction word rides in
+           the accessible name — "up 18.2 percent" (§2.13). */
+        const dir = pnl > 0 ? "up" : pnl < 0 ? "down" : "flat";
+        return `<div class="hp-row" data-symbol="${esc(p.underlying)}">
+          <span class="hp-name">${esc(contractName(p))}
+            <span class="hp-sub">×${p.quantity}</span></span>
+          <span class="hp-num ${tone}">${pnl > 0 ? "+" : ""}${fmt$(pnl)}</span>
+          <span class="hp-num ${tone}" aria-label="${dir} ${Math.abs(pct).toFixed(1)} percent"
+            >${pct > 0 ? "+" : ""}${pct.toFixed(1)}%</span>
+          <button class="hp-x" type="button" data-home-close="${esc(p.contract)}"
+            aria-label="${esc(closeLabel(p))}">✕</button>
+        </div>`;
+      }).join("");
+    }
+
+    /* Working orders: hidden entirely when zero. A heading with nothing under
+       it is noise, and unlike positions there is no meaningful first action
+       distinct from placing a trade (§2.9). */
+    const group = el("hp-working-group"), list = el("hp-working");
+    const orders = d.working_orders || [];
+    if (group) group.hidden = orders.length === 0;
+    if (list && orders.length) {
+      el("hp-working-count").textContent = `(${orders.length})`;
+      list.innerHTML = orders.map(o => `<div class="hp-row">
+        <span class="hp-name">${esc(o.contract || "")}
+          <span class="hp-sub">${esc(o.kind || "")}${
+            o.stop ? " @ " + o.stop.toFixed(2) : o.limit ? " @ " + o.limit.toFixed(2) : ""
+          }</span></span>
+        <span></span><span></span>
+        <button class="ins-act" type="button" data-home-go="trade">edit</button>
+      </div>`).join("");
+    }
+  }
+
+  function renderNext(d) {
+    const body = el("hn-body");
+    if (!body) return;
+    const items = d.next_actions;
+
+    /* `null` means the engine could not be read. NEVER a silent empty panel —
+       silence is indistinguishable from "no findings", which is a claim about
+       the user that the data did not support (§2.10). */
+    if (items === null || items === undefined) {
+      body.innerHTML = `<li class="hn-item"><div class="hn-text"
+        >I could not read your trade history just now.</div>
+        <button class="hn-act" type="button" data-home-retry="1">Try again</button></li>`;
+      return;
+    }
+    if (!items.length) {
+      body.innerHTML = `<li class="hn-item"><div class="hn-text"
+        >Nothing else is waiting.</div>
+        <div class="hn-detail">This region fills as the engine finds something
+        it can evidence about your trading.</div></li>`;
+      return;
+    }
+    body.innerHTML = items.map(it => {
+      const act = it.action
+        ? `<button class="hn-act" type="button" data-home-go="${esc(it.action.tab || "")}"
+             ${it.action.symbol ? `data-home-symbol="${esc(it.action.symbol)}"` : ""}
+           >${esc(it.action.label || "Show me")} ›</button>` : "";
+      return `<li class="hn-item" data-kind="${esc(it.kind || "")}">
+        <div class="hn-text">${esc(it.text || "")}</div>
+        ${it.detail ? `<div class="hn-detail">${esc(it.detail)}</div>` : ""}
+        ${act}</li>`;
+    }).join("");
+  }
+
+  /* One delegated listener for the whole destination rather than a handler per
+     row: the rows are re-rendered on every refresh, and per-row handlers would
+     have to be re-attached each time (and would leak the ones that were not). */
+  function wire() {
+    const root = el("home");
+    if (!root || root.dataset.wired) return;
+    root.dataset.wired = "1";
+    root.addEventListener("click", ev => {
+      const go = ev.target.closest("[data-home-go]");
+      if (go) {
+        const symbol = go.getAttribute("data-home-symbol");
+        if (symbol && window.Ctx) Ctx.setSymbol(symbol);
+        switchTab(go.getAttribute("data-home-go"));
+        return;
+      }
+      const retry = ev.target.closest("[data-home-retry]");
+      if (retry) { Home.load(); return; }
+      const close = ev.target.closest("[data-home-close]");
+      if (close) {
+        /* Nothing on Home places, modifies or closes anything without the
+           review + commit path (§2.6). The ✕ is a shortcut TO the review, not
+           to the close — so it hands off to Portfolio rather than acting. */
+        switchTab("portfolio");
+        return;
+      }
+      const row = ev.target.closest(".hp-row[data-symbol]");
+      if (row) switchTab("portfolio");
+    });
+    const manage = el("hp-manage");
+    if (manage) manage.onclick = () => switchTab("portfolio");
+  }
+
+  return {
+    render(d) { wire(); renderPositions(d); renderNext(d); },
+    failed() {
+      wire();
+      const body = el("hn-body");
+      if (body) body.innerHTML = `<li class="hn-item"><div class="hn-text"
+        >Home could not be loaded.</div>
+        <button class="hn-act" type="button" data-home-retry="1">Try again</button></li>`;
+    },
+  };
+})();
+window.HomeBands = HomeBands;
+
 const Intel = (() => {
   let summary = null;          // /api/intelligence/summary
   let timer = null;
@@ -3887,18 +4148,27 @@ const Intel = (() => {
 
   /* ── lifecycle ─────────────────────────────────────────────────────── */
 
+  /* Named for the Dashboard because that is where the panel used to live;
+     M3-C6 moved it to Journal › Review and the name is kept so every existing
+     caller and the intelligence gate keep working. The tab it guards against
+     moved with it — polling on `#tab-dashboard` after the relocation would
+     have refreshed forever on a screen the panel is no longer on. */
   function enterDashboard() {
     loadSummary();
     if (timer) clearInterval(timer);
     // A settings-style page polling from a hidden tab is meaningful traffic in
-    // the system it reports on; skip the tick unless the dashboard is showing.
+    // the system it reports on; skip the tick unless the panel is showing.
     timer = setInterval(() => {
       if (document.visibilityState === "visible" &&
-          $("tab-dashboard").style.display !== "none") loadSummary();
+          $("tab-coach").style.display !== "none") loadSummary();
     }, REFRESH_MS);
   }
 
-  return { loadSummary, enterDashboard, renderCoach, renderLessons,
+  function leaveDashboard() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  return { loadSummary, enterDashboard, leaveDashboard, renderCoach, renderLessons,
            tradeInsight, get summary() { return summary; } };
 })();
 
@@ -10658,9 +10928,10 @@ MarketData.init();
 Guide.init();
 Workspace.init();
 // The Dashboard is the landing tab and switchTab() never runs for it at
-// startup, so its intelligence panel has to be kicked here. Home is in the
-// same position and for the same reason.
-Intel.enterDashboard();
+// startup, so Home has to be kicked here. The intelligence panel is NOT
+// started: M3-C6 moved it to Journal › Review, and starting a 60s poll at
+// boot for a panel on a tab nobody has opened is traffic the system spends on
+// itself. `switchTab("coach")` starts it.
 Home.enter();
 
 const RuntimePrefs = (() => {

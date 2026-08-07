@@ -61,8 +61,16 @@ def home_ready(page, timeout: int = 25000) -> None:
     Expressed as "either Home is up" so it holds on both sides of the flag,
     exactly like `ready()` above, and so M3-C10's deletion of `#hero` is not a
     sixth simultaneous breakage.
+
+    **`attached`, not `visible`, and that is the whole subtlety.** Since M1 the
+    workspace restores the tab the user was last on, so the landing screen is
+    not necessarily Home — and a visibility wait would then block for the full
+    timeout on a perfectly healthy app. This answers "has the app rendered its
+    markup", which is what every caller actually wants; a caller that needs
+    Home *on screen* navigates to it and asserts that itself.
     """
-    page.wait_for_selector("#home-metrics, #hero", timeout=timeout)
+    page.wait_for_selector("#home-metrics, #hero", state="attached",
+                           timeout=timeout)
 
 
 def destination_of(page, tab: str) -> str:

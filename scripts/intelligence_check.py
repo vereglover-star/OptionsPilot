@@ -206,7 +206,14 @@ def contains(haystack: str, needle: str) -> bool:
 def run_checks(page, base: str, c: Checks) -> None:
     api = json.loads(urllib.request.urlopen(base + "/api/intelligence").read())
 
-    # ── 1–8: the dashboard panel exists and is populated ─────────────────
+    # ── 1–8: the panel exists and is populated ───────────────────────────
+    # M3-C6 moved the intelligence panel from the Dashboard to Journal ›
+    # Review. Home's H4 renders this engine's top-ranked items, and leaving
+    # the full panel on the same screen put two "What to do next" regions one
+    # above the other. Navigated through `shell_nav.goto`, which clicks the
+    # real controls, so this also proves the panel is REACHABLE from the
+    # navigation rather than merely present in the DOM.
+    goto(page, "coach")
     page.wait_for_selector("#intel-panel", state="visible", timeout=20000)
     page.wait_for_function(
         "() => document.querySelector('#intel-scores').children.length > 1",
@@ -289,6 +296,16 @@ def run_checks(page, base: str, c: Checks) -> None:
                          "window": "last_20_trades", "unit": "R"}).encode(),
         headers={"Content-Type": "application/json"}, method="POST"))
     page.reload()
+    # A reload lands on the Dashboard, and since M3-C6 the panel is not there.
+    # Navigating back is not test scaffolding — it is the assertion that the
+    # panel survives a reload at its new address, which is the thing a
+    # relocation is most likely to have broken.
+    #
+    # `home_ready` first: immediately after a reload neither navigation has
+    # rendered yet, and `goto` would try to click a control that does not
+    # exist for another few hundred milliseconds.
+    home_ready(page, 25000)
+    goto(page, "coach")
     page.wait_for_function(
         "() => document.querySelector('#intel-goals')"
         " && document.querySelector('#intel-goals').textContent.length > 20",
