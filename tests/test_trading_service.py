@@ -296,6 +296,53 @@ class TestTheChainPayloadIsUnchanged:
         assert server.chain_payload("spy")["symbol"] == "SPY"
 
 
+class TestQuickPicksResolveAgainstTheRealChain:
+    """M4-C1. `quickpick.py` is tested exhaustively against synthetic rows in
+    `test_services_quickpick.py`; these assert the WIRING — that the service
+    supplies it with the provider's real expirations and the real chain, and
+    that the two-phase shape actually fetches the chain of the expiry the
+    intent chose rather than the one already loaded."""
+
+    def test_an_atm_call_resolves_to_the_strike_nearest_spot(self, server):
+        payload = server.chain_payload("SPY")
+        got = server.services.trading.quick_pick(symbol="SPY",
+                                                 intent="atm_call")
+        assert got["ok"] and got["right"] == "call"
+        calls = [r["strike"] for r in payload["chain"] if r["right"] == "call"]
+        nearest = min(calls, key=lambda s: abs(s - payload["spot"]))
+        assert got["strike"] == nearest
+
+    def test_an_expiry_intent_fetches_the_chain_of_the_expiry_it_chose(self, server):
+        # The whole reason resolution is two-phase. If the service resolved the
+        # strike against the loaded chain instead, this would come back on the
+        # first expiration whatever the intent asked for.
+        exps = [e.isoformat() for e in server.orch.provider.get_expirations("SPY")]
+        got = server.services.trading.quick_pick(symbol="SPY", intent="day_30")
+        assert got["expiration"] in exps
+        assert got["dte"] is not None
+
+    def test_an_expiry_intent_keeps_the_right_the_user_was_on(self, server):
+        got = server.services.trading.quick_pick(symbol="SPY", intent="weekly",
+                                                 right="put")
+        assert got["right"] == "put"
+
+    def test_a_symbol_with_no_expirations_says_why(self, server):
+        server.orch.provider.get_expirations = lambda symbol: []
+        got = server.services.trading.quick_pick(symbol="ZZZZ",
+                                                 intent="atm_call")
+        assert not got["ok"]
+        assert "no listed expirations" in got["reason"]
+        assert got["strike"] is None
+
+    def test_an_unknown_intent_is_refused_by_name_rather_than_crashing(self, server):
+        got = server.services.trading.quick_pick(symbol="SPY", intent="lunch")
+        assert not got["ok"] and got["reason"]
+
+    def test_the_symbol_is_upper_cased_here_too(self, server):
+        assert server.services.trading.quick_pick(
+            symbol="spy", intent="atm_call")["ok"]
+
+
 class TestTheScanLifecycleIsUnchanged:
     def test_a_cycle_records_state_summary_and_equity(self, server):
         server.run_cycle_now()

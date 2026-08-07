@@ -233,6 +233,44 @@ class OpenRiskView(ViewModel):
     marked: int
 
 
+# ── trade ────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True, slots=True)
+class QuickPickView(ViewModel):
+    """What a quick-pick chip resolved to, or why it could not. New in M4.
+
+    **`ok` and `reason` are both carried, and neither is derivable from the
+    other by a client.** A resolution can fail for reasons that are about the
+    market rather than about the user — no listed expirations, no spot price,
+    an expiry that lists no puts — and each of those needs a different sentence
+    on screen. Returning `None` would make every one of them read as "nothing
+    happened", which is the state a user responds to by clicking the chip
+    again.
+
+    Same rule as `StatusLineView.needs_you` and `intelligence/`'s
+    `assessable=False` with the reason quoted: the answer "I could not" is a
+    first-class answer, and it is not the same answer as "there is nothing".
+
+    `strike` is `None` rather than `0.0` when unresolved, because a strike of
+    zero is a price and this is an absence. The quote fields are carried
+    straight from the chain row so the ticket can populate without a second
+    request against a chain that may already have moved.
+    """
+
+    ok: bool = False
+    intent: str = ""
+    right: str = ""
+    expiration: str = ""
+    dte: int | None = None
+    strike: float | None = None
+    mid: float | None = None
+    bid: float | None = None
+    ask: float | None = None
+    delta: float | None = None
+    reason: str = ""
+
+
 # ── watchlist ────────────────────────────────────────────────────────────────
 
 

@@ -49,7 +49,9 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, utcnow
+from optionspilot.services import quickpick
 from optionspilot.services.errors import ValidationError
+from optionspilot.services.viewmodels import QuickPickView
 
 log = get_logger("ui")
 
@@ -161,6 +163,45 @@ class TradingService:
                 })
             return {"symbol": symbol, "spot": spot, "expiration": exp,
                     "expirations": expirations, "chain": rows}
+
+    def quick_pick(self, *, symbol: str, intent: str, expiration: str = "",
+                   right: str = "call") -> dict:
+        """Resolve a quick-pick chip into a concrete contract (M4-C1).
+
+        **Server-side, and that is the decision.** The client already holds a
+        chain payload and could pick the nearest strike itself in ten lines of
+        JavaScript — and then the rule would live in two languages. §6.3 says
+        the chips are the same intents Pilot expresses and the same the AI
+        engine states its opportunities in, so "the suggestion and the action
+        are the same object" only holds if there is one implementation of what
+        an intent means. This is it; `quickpick.py` holds the rules and this
+        method supplies it with data.
+
+        The two-phase shape is why `quickpick` splits its axes: the expiry is
+        chosen from dates alone, THEN that expiry's chain is fetched. Choosing
+        both at once would need the chain for an expiration not yet chosen.
+        """
+        spec = quickpick.BY_KEY.get(str(intent or ""))
+        if spec is None:
+            return QuickPickView(
+                intent=str(intent or ""), right=right,
+                reason="that is not one of the quick picks").to_dict()
+
+        symbol = str(symbol or "").upper()
+        with self._lock:
+            expirations = [e.isoformat()
+                           for e in self._orch.provider.get_expirations(symbol)]
+        choice = quickpick.expiration_for(spec, expirations,
+                                          self._clock().date(), expiration)
+        if not choice.ok:
+            return QuickPickView(intent=spec.key, right=spec.right or right,
+                                 reason=choice.reason).to_dict()
+
+        payload = self.chain_payload(symbol, choice.expiration)
+        return quickpick.contract_for(
+            spec, payload.get("chain"), payload.get("spot"),
+            current_right=right, expiration=choice.expiration,
+            dte=choice.dte).to_dict()
 
     def place_order(self, payload: dict) -> dict:
         kind = OrderKind(str(payload.get("kind", "market")))

@@ -23,6 +23,7 @@ REQUIRED_PATHS = {
     "/api/v1/status", "/api/v1/runtime", "/api/v1/workspace",
     "/api/v1/notifications", "/api/v1/capabilities", "/api/v1/sync",
     "/api/v1/home", "/api/v1/openapi.json",
+    "/api/v1/quickpicks", "/api/v1/quickpick",
 }
 
 # Every region `UI_V2_WIREFRAMES.md` §2.4 puts on Home, as the payload must name
@@ -131,6 +132,42 @@ def check_home(client) -> None:
     json.dumps(body, allow_nan=False)
 
 
+#: Every field a quick-pick resolution carries. A chip that resolves and then
+#: cannot say WHY it failed is the defect `quickpick.py` exists to avoid, so
+#: `ok` and `reason` are both part of the contract rather than one being
+#: inferred from the other.
+QUICKPICK_FIELDS = ("ok", "intent", "right", "expiration", "dte", "strike",
+                    "mid", "bid", "ask", "delta", "reason")
+
+
+def check_quickpicks(client) -> None:
+    """The catalogue and one real resolution (M4-C1).
+
+    The catalogue is asserted because the client renders the chips FROM it
+    rather than restating them, which is the two-catalogue drift
+    `guide.py::TestCatalogueContract` exists to prevent — there, in both
+    directions, after it had already happened twice in this codebase.
+    """
+    intents = client.get("/api/v1/quickpicks").json()["data"]["intents"]
+    keys = [i["key"] for i in intents]
+    if keys != ["atm_call", "atm_put", "day_30", "weekly"]:
+        raise SystemExit(f"quick-pick catalogue changed shape: {keys}")
+    for entry in intents:
+        if not entry.get("label"):
+            raise SystemExit(f"quick pick {entry['key']} has no label to render")
+
+    # A resolution against a symbol this offline test cannot price must still
+    # answer in the contract's shape AND say why — never a bare failure.
+    body = client.get("/api/v1/quickpick",
+                      params={"symbol": "SPY", "intent": "atm_call"}).json()["data"]
+    missing = [f for f in QUICKPICK_FIELDS if f not in body]
+    if missing:
+        raise SystemExit(f"quick-pick payload is missing fields: {missing}")
+    if not body["ok"] and not body["reason"]:
+        raise SystemExit("a quick pick failed to resolve and did not say why")
+    json.dumps(body, allow_nan=False)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="optionspilot-api-") as root:
         app = create_app(AppConfig(), run_loop=False, data_dir=root)
@@ -147,6 +184,7 @@ def main() -> int:
             validate_openapi(openapi)
             check_workspace(client)
             check_home(client)
+            check_quickpicks(client)
     print("API CONTRACT PASS")
     return 0
 

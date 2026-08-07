@@ -20,6 +20,7 @@ from optionspilot.services.contracts import (
     ClientCapabilities, context_from_headers, error_envelope, success_envelope,
 )
 from optionspilot.services import intelligence as intel_view
+from optionspilot.services import quickpick
 from optionspilot.services import LocalSyncProvider
 from optionspilot.services import sync as sync_boundaries
 from optionspilot.services.errors import ServiceError
@@ -146,6 +147,20 @@ def register_v1_routes(app: FastAPI, server) -> None:
     @app.get("/api/v1/home", tags=["home"])
     def home(request: Request):
         return _safe(request, lambda: server.services.home.view().to_dict())
+
+    # Quick picks (M4-C1). Two routes, because a client needs to know what the
+    # chips ARE before it can press one, and the catalogue must not be a second
+    # copy of `quickpick.INTENTS` living in `index.html` — the two-catalogue
+    # drift `guide.py` has a bidirectional test for.
+    @app.get("/api/v1/quickpicks", tags=["trade"])
+    def quickpicks(request: Request):
+        return _safe(request, lambda: {"intents": quickpick.catalogue()})
+
+    @app.get("/api/v1/quickpick", tags=["trade"])
+    def quickpick_resolve(request: Request, symbol: str, intent: str,
+                          expiration: str = "", right: str = "call"):
+        return _safe(request, lambda: server.services.trading.quick_pick(
+            symbol=symbol, intent=intent, expiration=expiration, right=right))
 
     @app.get("/api/v1/notifications", tags=["notifications"])
     def notifications(request: Request, limit: int = 15):

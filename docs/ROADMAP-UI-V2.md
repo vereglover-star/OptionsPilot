@@ -565,6 +565,79 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
+### M4 · V0.14.0 Trade — in progress
+
+**1 of 11 commits.**
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `TBD` |
+| C2 | ⬜ | The review view model in `services/trading.py` | |
+| C3 | ⬜ | The workspace layout: chart, chain, ticket; splitters persisted | |
+| C4 | ⬜ | The ticket, always present, empty and selected states | |
+| C5 | ⬜ | The chain: spot-anchored, roving tabindex, Surface-Level columns | |
+| C6 | ⬜ | Quick picks wired to the ticket and marked in the chain | |
+| C7 | ⬜ | The review modal, five elements in order | |
+| C8 | ⬜ | Hold-to-confirm commit control | |
+| C9 | ⬜ | The ticket's blocked state; `OrderManager` refusals re-asserted | |
+| C10 | ⬜ | `scripts/trade_check.py` + wired into `verify.ps1` | |
+| C11 | ⬜ | Legacy trade and charts markup deleted | |
+
+**C1 did not land in `services/contracts.py` as §6 says.** That file already
+exists and holds the *transport* contract vocabulary — `Principal`,
+`RequestContext`, the success and error envelopes — created in V0.7.0, after
+this roadmap was written. Putting option-contract intent resolution there
+would have put two unrelated meanings of "contract" in one module, against
+`CLAUDE.md`'s one-concept-per-file rule. It is `services/quickpick.py`,
+following the `statusline.py` precedent from M3: a pure module of primitives
+with the service wiring beside it.
+
+**Resolution is server-side and two-phase.** The client holds a chain payload
+and could pick the nearest strike itself, and then the rule would live in two
+languages — §6.3 says the chips are the same intents Pilot and the AI engine
+express, which only holds if there is one implementation of what an intent
+means. Two-phase because an intent has two axes: "ATM call" chooses a strike
+within the loaded expiry, "30 day" chooses an expiry and leaves the strike rule
+alone. Choosing both at once would need the chain of an expiration not yet
+chosen.
+
+### M3.5 · Home polish — complete
+
+**Complete: 10 of 10 commits.** Unplanned; added after using M3. See §6's M3.5
+detail for what M4–M6 inherit.
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | Rail `<ul>` UA padding; rail geometry gate | `f87debe` |
+| C2 | ✅ | Accessible names on every rail item | `ea1c060` |
+| C3 | ✅ | Visibility rules may only hide; the inert band gap | `0f64553` |
+| C4 | ✅ | `.dest-split`; unbalanced-CSS-comment gate | `08f6753` |
+| C5 | ✅ | Metrics by decision value; the 28px tier | `8f19de4` |
+| C6 | ✅ | Three instrument tiers | `55b4fb9` |
+| C7 | ✅ | What-to-do-next elevated and numbered | `619259e` |
+| C8 | ✅ | Status line sized as a headline | `1305ec3` |
+| C9 | ✅ | Positions grow then scroll; chart viewBox clipping | `ff21ad9` |
+| C10 | ✅ | Two rail states; the continuous left column | `ec79c7c` |
+| — | ✅ | Docs closeout | `88596ca` |
+
+### M3 · V0.13.0 Home — complete
+
+**Complete: 10 of 10 commits.** Backfilled: this section's own convention was
+not followed during M3, which is exactly the gap it exists to close.
+
+| Commit | Status | Description | Hash |
+| --- | --- | --- | --- |
+| C1 | ✅ | Open risk in `PortfolioService` | `895704d` |
+| C2 | ✅ | The status-line view model, eight cases | `4392c7f` |
+| C3 | ✅ | `GET /api/v1/home`; contract check updated | `4914e19` |
+| C4 | ✅ | The `instrument` component | `fa807ed` |
+| C5 | ✅ | Band 1: status line and the metric cluster | `48720db` |
+| C6 | ✅ | Band 2: positions and what-to-do-next | `102318a` |
+| C7 | ✅ | Band 3: equity and the watchlist tick | `da33250` |
+| C8 | ✅ | The four states under the shape invariant | `7d0be69` |
+| C9 | ✅ | `scripts/home_check.py`, the 17th gate | `ef5ddb3` |
+| C10 | ✅ | Legacy dashboard deleted (**navigation was not** — see §9) | `b6eb00b` |
+
 ### M2 · V0.12.0 The shell — complete
 
 **Complete: 11 of 11 commits.** The shell is the default. The old navigation
