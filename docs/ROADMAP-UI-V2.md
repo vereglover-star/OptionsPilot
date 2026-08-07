@@ -602,7 +602,7 @@ between destinations needs no edit in any suite.
 | M0 · V0.10.0 Foundation | C1–C9 | ✅ **complete** | see above |
 | M1 · V0.11.0 Workspace context | C1–C7 | ✅ **complete** | see above |
 | M2 · V0.12.0 Shell | C1–C11 | ✅ **complete** | `b380141`…`12510b3` |
-| M3 · V0.13.0 Home | C1–C10 | ⬜ not started | — |
+| M3 · V0.13.0 Home | C1–C10 | 🟨 **in progress** — C1–C3 (backend) done; C4–C10 (frontend, gate, deletions) remain | `895704d`…`4914e19` |
 | M4 · V0.14.0 Trade | C1–C11 | ⬜ not started | — |
 | M5 · V0.15.0 Portfolio & Journal | C1–C9 | ⬜ not started | — |
 | M6 · V0.16.0 Research & Settings | C1–C8 | ⬜ not started | — |

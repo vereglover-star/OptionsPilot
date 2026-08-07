@@ -4,14 +4,25 @@ Read `AI_HANDOFF.md` first if you haven't. This file is the "what's done,
 what's next" tracker — keep it current as you work.
 
 **Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell** (branch
-`V3-ui`, committed `b380141`…`12510b3`). **2645 tests.** Full detail:
+`V3-ui`, committed `b380141`…`12510b3`). **2716 tests.** Full detail:
 **`docs/CHANGELOG.md`**.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0, M1 and M2 are complete and nothing is
-in progress.** `verify.ps1` is green across all **16** gates at **2645 tests**,
-with the new shell ON by default.
+**The UI V2 programme is under way. M0, M1 and M2 are complete; M3 is in
+progress at C4.** `verify.ps1` is green across all **16** gates at **2716
+tests**, with the new shell ON by default.
+
+**M3 · Home — C1–C3 done (`895704d`…`4914e19`), C4–C10 remain.** The backend
+tier is complete and serving: `PortfolioService.open_risk`, the status line in
+`services/statusline.py` (eight cases, plus the precedence the design docs do
+not state), and `HomeService` + `GET /api/v1/home` assembling six regions from
+four owners in one request while failing per region. **No pixel has moved** —
+`#tab-dashboard` still holds the legacy markup and nothing consumes the new
+endpoint yet, which is why the milestone is safely resumable here. Remaining:
+C4 the instrument component (reused by every later milestone, so worth
+building carefully), C5–C7 the three bands, C8 the four states, C9
+`scripts/home_check.py`, C10 the legacy dashboard and navigation deletions.
 
 **The updater took two fixes and the second is not yet released.** v0.12.3
 (unreleased) makes the *installer* the single owner of relaunching after an

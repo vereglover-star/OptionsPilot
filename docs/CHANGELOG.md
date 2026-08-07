@@ -47,6 +47,51 @@ nobody reads, the app never coming back, and every other test still green.
 16 gates, 2,645 tests. The behaviour itself still needs a real packaged build;
 `docs/AUTO_UPDATER.md` §7 carries the three-case checklist.
 
+## [Uncommitted] — UI V2 M3: Home's backend tier (C1–C3)
+
+*Three commits. No pixel has moved; every figure Home will show now exists,
+is tested, and is served.*
+
+**Open risk** — the number that answers "how exposed am I", which no current
+screen states and which a user can only reach today by opening Portfolio and
+adding positions up in their head. It is a **maximum**, and that is the
+design: every position this broker can hold is long, so the premium currently
+in it is the most it can lose, and the mark is that premium. Loss-to-stop was
+the alternative and was rejected twice — the stop is on the underlying, so
+converting it needs a delta, and the only delta a `Position` persists is its
+*entry* snapshot; a live risk figure from a stale greek states what cannot be
+evidenced. And if the number must be wrong, a maximum is wrong in the
+direction that does not surprise anyone about money.
+
+**The status line**, the sentence the design documents call the most
+important in the product because it is the first thing read on every launch.
+Eight situations, one test each — and the ranking those documents leave
+open, which is the actual work: halt outranks rejected order outranks
+approaching stop outranks degraded quotes, and all four outrank the first-run
+welcome, because a greeting that hid a halt would be the sentence lying on
+the one launch where a user has least context to catch it. The rule the whole
+feature rests on — *it never says "nothing needs you" unless nothing does* —
+is asserted over the phrase itself across every case, so a future case that
+reuses the wording without clearing the alarms fails the build.
+
+**Home as one payload.** Six regions from four owners in a single request,
+because six round trips means six chances to arrive late and six
+independently shifting regions — the layout jump this milestone exists to
+remove. The regions still fail *individually*: a broken broker names itself
+and the status line survives, and `next_actions` comes back `null` rather
+than empty when the intelligence engine could not be read, because "no
+findings" and "I could not look" are different answers and a silent empty
+panel is indistinguishable from "nothing is wrong".
+
+A spec conflict found and recorded rather than quietly resolved: the design
+document puts the win-rate evidence floor at 30 closed trades, the wireframe
+draws the same card as "0 of 5". Five is the *intelligence* region's
+threshold, not this metric's; implemented at 30, which is the ladder
+`intelligence/` already judges its own claims against.
+
+C4–C10 — the instrument component, the three bands, the four states, the
+`home_check.py` gate and the legacy deletions — are not in this entry.
+
 ## [2026-08-06] — About dialog wording cleanup (v0.12.2)
 
 *Small UI polish release. No functional or architectural changes.*

@@ -9,9 +9,22 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 
 ## What to do next
 
-**Start UI V2 · M3 — Home**, the first Flight Deck destination.
+**Continue UI V2 · M3 — Home at C4.** C1–C3 (the backend tier) are done and
+committed: `open_risk` on `PortfolioService`, the status line in
+`services/statusline.py`, and `HomeService` + `GET /api/v1/home` with the
+contract check extended to a real round trip. **No pixel has moved yet** —
+`#tab-dashboard` still holds the legacy markup and nothing consumes the new
+endpoint. C4 (the instrument component) is next and is the piece every later
+milestone reuses, so it is worth building carefully.
+
+Two things C4+ inherits: the win-rate floor is 30 (`stats.MIN_SAMPLE_HIGH`)
+and the wireframe's "0 of 5" is a different threshold belonging to H4 — see
+the M3 tracker row; and `HomeView.errors` names failing regions, so the four
+states (C8) render per region rather than per screen.
+
+
 `docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
-`verify.ps1` is green across **16 gates** at 2645 tests.
+`verify.ps1` is green across **16 gates** at 2716 tests.
 
 **Owed first, and it needs a human:** the updater's *relaunch* fix (v0.12.3,
 unreleased) has no automated proof and cannot have one — `verify.ps1` does not
