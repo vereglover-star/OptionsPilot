@@ -102,6 +102,22 @@ RHYTHM_JS = """() => {
 }"""
 
 
+#: The metric cluster in decision-value order (M3.5-C5): am I in trouble, how
+#: exposed am I, can I act — then context. Account equity led this cluster at
+#: display size until M3.5 and is the one figure here nobody acts on.
+METRIC_ORDER = ["today", "risk", "bp", "account", "win"]
+
+#: The rendered size of each metric's value, so the three type tiers are
+#: asserted as sizes on screen rather than as class names in the markup.
+METRIC_SIZES_JS = """() => {
+  const out = {};
+  for (const k of ['today', 'risk', 'bp', 'account', 'win']) {
+    const e = document.getElementById('hm-' + k + '-v');
+    out[k] = e ? Math.round(parseFloat(getComputedStyle(e).fontSize)) : 0;
+  }
+  return out;
+}"""
+
 #: The left edge of each split band's MINOR column. One seam means these are
 #: the same number. Reported as `null` when a band has stacked, which is a
 #: legitimate state and not a seam — the check then fails loudly rather than
@@ -321,10 +337,21 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
                 "!e.closest('[aria-live]')"))
 
     # ── 10-13: the populated numbers reach the screen ────────────────────────
-    c.check("the account value is the one metric at display size",
-            page.eval_on_selector(
-                "#hm-account-v",
-                "e => parseFloat(getComputedStyle(e).fontSize) >= 32"))
+    # M3.5-C5. The cluster is ordered by decision value and typed in three
+    # tiers. Both are asserted from what the browser rendered, because the
+    # claim is about what a person sees first, not about class names.
+    order = page.eval_on_selector_all(
+        "#home-metric-cells .ins-cell", "e => e.map(x => x.dataset.metric)")
+    c.check("the metrics run in decision-value order", order == METRIC_ORDER,
+            str(order))
+    sizes = page.evaluate(METRIC_SIZES_JS)
+    c.check("today's P&L is the one metric at display size",
+            sizes["today"] >= 32 and
+            all(v < 32 for k, v in sizes.items() if k != "today"), str(sizes))
+    c.check("open risk is typed one tier below it, and the rest one below "
+            "that",
+            sizes["today"] > sizes["risk"] > sizes["bp"] and
+            sizes["bp"] == sizes["account"] == sizes["win"], str(sizes))
     c.check("open risk states its share of the account",
             "8.1%" in page.inner_text("#hm-risk-c"))
     c.check("a sufficient sample shows the win rate with its n",

@@ -1626,8 +1626,12 @@ body.shell-v2 .home-legacy { display:none; }
    start of row two, drawn against nothing. The dividers come off entirely at
    that width and spacing carries the separation, which the direction already
    sanctions: space and surface each do their own job. */
+/* The whole cluster steps down one tier together, so the 36/28/22 ranking
+   becomes 28/22/22 rather than collapsing to a single size — the hierarchy is
+   the point, and it is the thing least affordable to lose on a small screen. */
 @media (max-width:1279px) {
   .home-val-lead { font-size:var(--text-title); }
+  .home-val-second { font-size:var(--text-section); }
   .home-metrics .ins-cell + .ins-cell { border-left:0; }
   .home-metrics .ins-cell { padding-left:0; padding-right:var(--space-5); }
 }
@@ -1637,9 +1641,20 @@ body.shell-v2 .home-legacy { display:none; }
 .home-val { font-size:var(--text-section); font-weight:600;
   color:var(--ink-primary); font-variant-numeric:tabular-nums;
   letter-spacing:-.01em; line-height:1.15; }
-/* `text.display` is used EXACTLY ONCE per product, on the Home account value
-   (UI_V2_VISUAL_EXPLORATION.md, "Typography style"). This is that use. */
+/* Three tiers across the cluster, where there were two (M3.5-C5).
+   `--text-title` was defined for "destination and modal titles", used nowhere
+   on Home, and the rendered scale jumped 36 -> 22 with nothing between; five
+   metrics then sat at 36 and 22-22-22-22, which is one loud number and a flat
+   field rather than a hierarchy. The middle step now carries the second
+   decision number, so the cluster reads 36 / 28 / 22-22-22.
+
+   `text.display` is still used EXACTLY ONCE per product
+   (UI_V2_VISUAL_EXPLORATION.md, "Typography style"). It has moved from the
+   account value to today's P&L, which is the change of mind this milestone
+   records: the rule was always "one number leads", and the argument is only
+   ever about which one deserves it. */
 .home-val-lead { font-size:var(--text-display); }
+.home-val-second { font-size:var(--text-title); }
 .home-ctx { font-size:var(--text-caption); color:var(--ink-muted);
   font-variant-numeric:tabular-nums; }
 .home-val.pos { color:var(--market-pos-text); }
@@ -2068,23 +2083,27 @@ body.shell-v2 .home-legacy { display:none; }
            reads as a single instrument you scan across, which is what a
            metric strip is. A <dl> so the screen-reader order is
            label -> value -> context (§2.13). -->
+      <!-- Ordered by DECISION VALUE, not by magnitude (M3.5-C5). Account
+           equity led this cluster at display size and is the one number here
+           a trader never acts on: in a paper account it barely moves, and in
+           any account it is a reassurance figure rather than a decision one.
+           The three questions §5.2 says Home answers are all asked of the
+           first three cells now — am I in trouble (today), how exposed am I
+           (open risk), can I act (buying power) — and account and win rate
+           follow as context. Robinhood leads with balance because it is an
+           investing app for positions held for years; an options position
+           decays daily, and a balance communicates nothing about that. -->
       <div class="ins" id="home-metrics">
         <dl class="ins-cluster home-metrics" id="home-metric-cells">
-          <div class="ins-cell" data-metric="account">
-            <dt class="ins-label">Account</dt>
-            <dd><span class="home-val home-val-lead" id="hm-account-v"
-                      ><span class="ins-skel"></span></span>
-              <span class="home-ctx" id="hm-account-c"></span></dd>
-          </div>
           <div class="ins-cell" data-metric="today">
             <dt class="ins-label">Today</dt>
-            <dd><span class="home-val" id="hm-today-v"
+            <dd><span class="home-val home-val-lead" id="hm-today-v"
                       ><span class="ins-skel"></span></span>
               <span class="home-ctx" id="hm-today-c"></span></dd>
           </div>
           <div class="ins-cell" data-metric="risk">
             <dt class="ins-label">Open risk</dt>
-            <dd><span class="home-val" id="hm-risk-v"
+            <dd><span class="home-val home-val-second" id="hm-risk-v"
                       ><span class="ins-skel"></span></span>
               <span class="home-ctx" id="hm-risk-c"></span></dd>
           </div>
@@ -2093,6 +2112,12 @@ body.shell-v2 .home-legacy { display:none; }
             <dd><span class="home-val" id="hm-bp-v"
                       ><span class="ins-skel"></span></span>
               <span class="home-ctx" id="hm-bp-c"></span></dd>
+          </div>
+          <div class="ins-cell" data-metric="account">
+            <dt class="ins-label">Account</dt>
+            <dd><span class="home-val" id="hm-account-v"
+                      ><span class="ins-skel"></span></span>
+              <span class="home-ctx" id="hm-account-c"></span></dd>
           </div>
           <div class="ins-cell" data-metric="win">
             <dt class="ins-label">Win rate</dt>
