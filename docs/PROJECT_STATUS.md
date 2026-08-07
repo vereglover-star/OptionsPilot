@@ -7,7 +7,7 @@ For "what do I do right now," see `NEXT_SESSION.md`.
 
 **Last verified:** 2026-08-06, **UI V2 · M2 — the shell, CLOSED**.
 `verify.ps1` green across **all 17 gates**: full `pytest` suite
-(**2716 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
+(**2746 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
 checks, API contract check, pip check, `scripts/marketdata_stress.py` **88/88**
 offline, and the six browser suites (`browser_check`, `chart_check`,
 `marketdata_check`, `intelligence_check`, `guide_check`, `workspace_check`,
@@ -21,7 +21,7 @@ correct first move is to re-run the same state — a bisect against it produced 
 confidently wrong conclusion during V0.9.2-C3.
 
 **Still not verified by hand:** no market-data adapter has ever been exercised
-against its real API with a real key — all 2716 tests run against canned
+against its real API with a real key — all 2746 tests run against canned
 payloads, so the response shapes are as *documented*, not as *observed*. The
 84-item market-data manual QA (`docs/QA_MARKET_DATA.md`) has **not** been run.
 The ISCC compile + real install/upgrade runs and a live end-to-end update
@@ -48,7 +48,7 @@ every automated check in the project.
 
 **V0.9.2 — complete the service extraction. CLOSED 2026-08-04**, 12 commits
 (`cefe4da`…C12). `ui/server.py` went from 1,892 to **1,629 lines**; the suite
-from 2,247 to 2,414 (the suite is **2716 tests** today, after the release
+from 2,247 to 2,414 (the suite is **2746 tests** today, after the release
 automation that followed). The error hierarchy, four extractions
 (`ChartService`, `MarketDataAdminService`, `TradingService`, `BacktestService`),
 the guide moved into `services/`, services raising `ServiceError` and the
@@ -645,7 +645,7 @@ by business decision — see `ROADMAP.md` ▸ Deferred.
 
 ## Test count
 
-**2716 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
+**2746 tests, 100% passing** (`.\scripts\test.ps1`, ~95s).
 
 ### Backend coverage — 91.49% (baseline recorded V0.9.0-C4)
 

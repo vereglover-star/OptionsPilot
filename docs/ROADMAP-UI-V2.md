@@ -571,7 +571,7 @@ mapping.
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
-| C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `TBD` |
+| C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `1191281` |
 | C2 | ⬜ | The review view model in `services/trading.py` | |
 | C3 | ⬜ | The workspace layout: chart, chain, ticket; splitters persisted | |
 | C4 | ⬜ | The ticket, always present, empty and selected states | |
