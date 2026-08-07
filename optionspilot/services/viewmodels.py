@@ -329,6 +329,12 @@ class ReviewView(ViewModel):
     buying_power_pct: float | None = None
     buying_power_after: float | None = None
     buying_power_note: str = ""
+    #: The ONE term most worth explaining about this order, for the Guided
+    #: Surface Level only (M4-C7, §6.5). Always computed and always served —
+    #: whether it is DISPLAYED is a presentation decision the client makes
+    #: from the level, and a view model that withheld it would make the
+    #: server responsible for a question it cannot see the answer to.
+    guided_note: str = ""
 
 
 # ── watchlist ────────────────────────────────────────────────────────────────

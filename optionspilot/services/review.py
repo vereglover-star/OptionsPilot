@@ -136,6 +136,55 @@ def _if_nothing(*, side, kind, symbol, strike, right, expiration, tif, dte):
             f"with {symbol} until {when}.")
 
 
+def _guided_note(*, side, kind, symbol, right, dte, tif):
+    """The ONE term most worth explaining about this particular order (M4-C7).
+
+    §6.5: "At the Guided Surface Level, Review adds one Pilot line explaining
+    the single most consequential term in the order. At Full, it does not."
+
+    *One* line, and which one is a ranking rather than a list — a review that
+    explains four things at once has explained nothing, and §8.1-2's rule that
+    Guided hides complexity but never consequence cuts both ways: piling
+    caveats onto the beginner's screen is its own kind of hiding.
+
+    The ranking is by how surprising the term is when it bites, not by how
+    important it sounds:
+
+      1. Expiring today, because a beginner reading "0DTE" often does not know
+         it means *hours*.
+      2. An exit order's trigger, because stop/target/trail fire on the
+         UNDERLYING here and not on the premium — the single most common
+         wrong assumption this product's guardrails already exist to catch.
+      3. A limit order may never fill, which is the failure people read as the
+         app being broken.
+      4. Short-dated decay, which is the thing that takes money from a
+         directionally correct trade.
+      5. Otherwise decay in general, for a long option.
+
+    A closing order gets none of these: nothing about exiting a position is
+    the kind of surprise this line exists for.
+    """
+    if kind in ("stop_loss", "take_profit", "trailing_stop"):
+        return (f"This triggers on the price of {symbol} itself, not on the "
+                f"option's premium.")
+    if kind == "limit":
+        rest = "until you cancel it" if tif == "gtc" else "at the end of today"
+        return (f"A limit order can go unfilled. If the price never reaches "
+                f"yours, nothing happens and the order expires {rest}.")
+    if side not in _OPENING_SIDES:
+        return ""
+    if dte == 0:
+        return ("This contract expires TODAY. After the close it is worth "
+                "whatever it is in the money by, or nothing at all.")
+    if isinstance(dte, int) and 0 < dte <= 7:
+        word = "call" if right == "call" else "put"
+        return (f"With {dte} day{'s' if dte != 1 else ''} left, time decay is "
+                f"the strongest force on this {word}'s price — being right "
+                f"slowly is still a loss.")
+    return ("An option loses value as expiry approaches even when the "
+            "underlying does not move. Time is a cost you are paying.")
+
+
 def _fill_note(*, kind, side, slippage_pct, limit, delayed_minutes=15):
     """The honesty line. How the fill will ACTUALLY happen.
 
@@ -270,4 +319,6 @@ def review(*, side: str, kind: str, quantity: int, symbol: str, strike: float,
                                expiration=expiration, tif=tif, dte=dte),
         fill_note=_fill_note(kind=kind, side=side, slippage_pct=slippage_pct,
                              limit=limit, delayed_minutes=delayed_minutes),
+        guided_note=_guided_note(side=side, kind=kind, symbol=symbol,
+                                 right=right, dte=dte, tif=tif),
     )

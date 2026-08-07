@@ -973,6 +973,225 @@ def check_quick_pick_that_cannot_resolve(browser, base, c: Checks,
     page.close()
 
 
+# ── 6. What is my actual risk? ───────────────────────────────────────────────
+
+REVIEW_JS = """() => {
+  // Null-safe throughout. Reverting this commit removes `#review-overlay`
+  // entirely, and an evaluate that throws turns a gate which has found
+  // something into a gate that crashed — the third time that pattern has
+  // cost a run in this file.
+  const ov = document.getElementById('review-overlay');
+  if (!ov) return {open: false, order: [], sentence: '', costLabel: '',
+                   cost: '', maxloss: '', breakeven: '', size: '',
+                   nothing: '', guided: '', fill: '', absent: [],
+                   missing: true};
+  const open = ov.classList.contains('show');
+  const txt = id => (document.getElementById(id)?.textContent || '').trim();
+  // The five elements read in DOCUMENT ORDER, so the assertion is about the
+  // order a person reads them in and not about the ids existing.
+  const modal = document.querySelector('#review-overlay .modal');
+  const order = modal ? Array.from(
+    modal.querySelectorAll('#rv-sentence, #rv-cost, #rv-maxloss,' +
+                           ' #rv-breakeven, #rv-size, #rv-nothing'))
+    .map(e => e.id) : [];
+  return {
+    open, order,
+    sentence: txt('rv-sentence'),
+    costLabel: txt('rv-cost-label'), cost: txt('rv-cost'),
+    maxloss: txt('rv-maxloss'), breakeven: txt('rv-breakeven'),
+    size: txt('rv-size'), nothing: txt('rv-nothing'),
+    guided: txt('rv-guided'), fill: txt('rv-fill'), missing: false,
+    // Every element must be RENDERED even when its number does not apply,
+    // carrying the reason in place of the figure.
+    absent: Array.from(
+      document.querySelectorAll('#review-overlay .rv-absent')).map(e => e.id),
+  };
+}"""
+
+
+def _open_review(page):
+    page.click("#tk-chain tr[data-strike='470']")
+    page.wait_for_timeout(500)
+    page.click("#tk-submit")
+    page.wait_for_timeout(500)
+
+
+def check_review_states_the_consequences(browser, base, c: Checks,
+                                         console: list) -> None:
+    """§6.5's five elements, in order (M4-C7).
+
+    What this replaces, measured: the generic `confirmModal`, a key/value
+    table of the order's MECHANICS — Contract, Action, Contracts, Time in
+    force — closing with one "Estimated cost ≈ $390.00" derived from the mid.
+    It never stated the maximum loss, the breakeven, the position size or the
+    passive outcome, which are §6.5's elements 2 through 5. Every assertion
+    below fails against it.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[])
+    _open_review(page)
+    r = page.evaluate(REVIEW_JS)
+
+    c.check("submitting opens the review", r["open"])
+    if not r["open"]:
+        page.close()
+        return
+
+    # THE ORDER IS NORMATIVE. §6.5 lists five elements "in this order,
+    # always" — the sentence before the numbers because a person reads what
+    # they are doing before what it costs, and the passive outcome last
+    # because it is what they are still thinking about when it closes.
+    c.check("the five elements appear in §6.5's order",
+            r["order"] == ["rv-sentence", "rv-cost", "rv-maxloss",
+                           "rv-breakeven", "rv-size", "rv-nothing"],
+            str(r["order"]))
+
+    # 1. A sentence, with no abbreviation on it.
+    s = r["sentence"]
+    c.check("element 1 is a sentence naming side, size, contract and expiry",
+            "BUYING" in s and "SPY" in s and "call" in s and s.endswith("."),
+            s[:110])
+    c.check("and it uses no abbreviation on that line",
+            "DTE" not in s and " C " not in s and "0DTE" not in s, s[:110])
+
+    # 2. Cost, and maximum loss stated even when it equals cost.
+    c.check("element 2 states the cost", "412.34" in r["cost"], r["cost"])
+    c.check("and the maximum loss, even though it equals the cost",
+            "412.34" in r["maxloss"], r["maxloss"])
+    c.check("saying WHY it equals the cost", "worthless" in r["maxloss"].lower(),
+            r["maxloss"][:90])
+
+    # 3. Breakeven with spot beside it, so the distance needs no arithmetic.
+    c.check("element 3 states the breakeven", "474.12" in r["breakeven"],
+            r["breakeven"])
+    c.check("with spot beside it rather than in another panel",
+            "471.20" in r["breakeven"], r["breakeven"])
+
+    # 4. Position size as a percentage of the account.
+    c.check("element 4 states the position size as a share of the account",
+            "4.1%" in r["size"] and "account" in r["size"].lower(), r["size"])
+
+    # 5. The passive outcome — the one no retail interface states at commit.
+    c.check("element 5 states what happens if you do nothing",
+            "do nothing" in r["nothing"].lower()
+            and "worthless" in r["nothing"].lower(), r["nothing"][:110])
+
+    # The honesty line beneath the five.
+    c.check("and it says how the fill will actually happen",
+            "delayed" in r["fill"].lower() and "cycle" in r["fill"].lower(),
+            r["fill"][:110])
+
+    c.check("nothing is left as an unexplained blank", r["absent"] == [],
+            str(r["absent"]))
+
+    # Cancel means cancel: no order, and focus returns rather than stranding
+    # a keyboard user at the top of the page.
+    page.click("#rv-cancel")
+    page.wait_for_timeout(300)
+    r2 = page.evaluate(REVIEW_JS)
+    c.check("cancelling closes it", not r2["open"])
+    landed = page.evaluate(
+        "() => document.activeElement && document.activeElement.id")
+    c.check("and gives focus back rather than dropping it on the body",
+            landed not in ("", None, "body"), str(landed))
+    page.close()
+
+
+def check_review_renders_every_order_type(browser, base, c: Checks,
+                                          console: list) -> None:
+    """The shape does not change with the order type (M4-C7).
+
+    A `sell_to_close` has proceeds rather than a cost, no new maximum loss and
+    no breakeven. Those elements must still be PRESENT, carrying the reason
+    where the number would be — a modal whose shape changes with the order
+    type is one a user has to re-read every time, and a missing row is
+    indistinguishable from a row that was forgotten.
+    """
+    closing = dict(REVIEW_STUB)
+    closing.update(opening=False, cost=None, proceeds=384.15, max_loss=None,
+                   max_loss_note="This order reduces an existing position, so "
+                                 "it adds no new risk.",
+                   breakeven=None,
+                   breakeven_note="Breakeven applies to opening a position, "
+                                  "not to closing one.",
+                   position_pct=None,
+                   position_note="This order closes exposure rather than "
+                                 "adding it.",
+                   buying_power_pct=None, guided_note="",
+                   sentence="You are SELLING 1 SPY $470 call contract "
+                            "expiring 12 Sep (7 days from now).")
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review=closing,
+                      review_log=[])
+    _open_review(page)
+    r = page.evaluate(REVIEW_JS)
+    if not r["open"]:
+        c.check("a closing order can be reviewed", False, "review did not open")
+        page.close()
+        return
+
+    c.check("a closing order still renders all five elements",
+            r["order"] == ["rv-sentence", "rv-cost", "rv-maxloss",
+                           "rv-breakeven", "rv-size", "rv-nothing"],
+            str(r["order"]))
+    c.check("its money is labelled proceeds, not cost",
+            "proceeds" in r["costLabel"].lower(), r["costLabel"])
+    # The three that do not apply say WHY, in place of the number.
+    c.check("maximum loss says it adds no new risk, rather than $0.00",
+            "no new risk" in r["maxloss"].lower() and "$0" not in r["maxloss"],
+            r["maxloss"][:90])
+    c.check("breakeven says it applies to opening, rather than showing 0",
+            "opening a position" in r["breakeven"].lower(), r["breakeven"][:90])
+    c.check("position size says it closes exposure rather than showing 0%",
+            "closes exposure" in r["size"].lower() and "0%" not in r["size"],
+            r["size"][:90])
+    c.check("and all three are marked as absences, not as figures",
+            sorted(r["absent"]) == ["rv-breakeven", "rv-maxloss", "rv-size"],
+            str(r["absent"]))
+    page.close()
+
+
+def check_review_explains_at_guided_only(browser, base, c: Checks,
+                                         console: list) -> None:
+    """§6.5's Guided line, and its absence at Full (M4-C7)."""
+    stub = dict(REVIEW_STUB)
+    stub["guided_note"] = ("This contract expires TODAY. After the close it "
+                           "is worth whatever it is in the money by, or "
+                           "nothing at all.")
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review=stub,
+                      review_log=[])
+
+    page.evaluate("() => Ctx.setSurfaceLevel(1)")
+    page.wait_for_timeout(300)
+    _open_review(page)
+    r = page.evaluate(REVIEW_JS)
+    c.check("Guided adds one line explaining the order's most consequential term",
+            "expires TODAY" in r["guided"], r["guided"][:90])
+    if not r["open"]:
+        c.check("Full does not, because it is explanation and not consequence",
+                False, "the review modal did not open")
+        page.close()
+        return
+    page.click("#rv-cancel")
+    page.wait_for_timeout(300)
+
+    page.evaluate("() => Ctx.setSurfaceLevel(3)")
+    page.wait_for_timeout(300)
+    page.click("#tk-submit")
+    page.wait_for_timeout(500)
+    r = page.evaluate(REVIEW_JS)
+    # §6.5: "At Full, it does not." The five elements are unchanged — Surface
+    # Level never hides consequence, only explanation (§8.1-2).
+    c.check("Full does not, because it is explanation and not consequence",
+            r["guided"] == "", r["guided"][:90])
+    c.check("and the five elements are identical at both levels",
+            "412.34" in r["maxloss"] and "do nothing" in r["nothing"].lower(),
+            f"{r['maxloss'][:40]} | {r['nothing'][:40]}")
+    page.evaluate("() => Ctx.setSurfaceLevel(3)")
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
@@ -992,6 +1211,9 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_ticket_does_not_refetch(browser, base, c, console)
     check_quick_picks(browser, base, c, console)
     check_quick_pick_that_cannot_resolve(browser, base, c, console)
+    check_review_states_the_consequences(browser, base, c, console)
+    check_review_renders_every_order_type(browser, base, c, console)
+    check_review_explains_at_guided_only(browser, base, c, console)
     check_workflow_sections(c)
 
 

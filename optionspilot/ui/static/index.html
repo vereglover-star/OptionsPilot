@@ -907,6 +907,54 @@ tr.atm-marker td::before, tr.atm-marker td::after { content:"—"; margin:0 var(
 .modal .acts .btn { flex:1; padding:10px 0; text-align:center; }
 
 /* ── software update dialog ─────────────────────────────────────────────── */
+/* ── the review modal (M4-C7) ─────────────────────────────────────────────
+   §6.5's five elements, ranked by type and space rather than by colour. The
+   loudest thing on the screen is the SENTENCE, not a number and not the
+   button — a person reads what they are about to do before what it costs,
+   and the point of this modal is that it describes the trade in the language
+   someone would use to explain it to a friend.
+
+   Nothing here animates beyond the modal's own entrance. §2.1-6: "the order
+   ticket and the review modal are the least animated surfaces in the
+   product, deliberately." */
+.modal.review { width:min(560px, 94vw); max-width:560px; }
+.rv-head { display:flex; align-items:baseline; gap:var(--space-3);
+  margin-bottom:var(--space-3); }
+.rv-x { all:unset; cursor:pointer; margin-left:auto; padding:0 var(--space-2);
+  color:var(--ink-muted); font-size:var(--text-body-lg); border-radius:var(--radius-sm); }
+.rv-x:hover { color:var(--ink-primary); }
+.rv-sentence { font-size:var(--text-body-lg); line-height:1.5;
+  margin-bottom:var(--space-4); }
+.rv-figures { display:flex; flex-direction:column; gap:var(--space-2);
+  padding:var(--space-3) 0; border-top:1px solid var(--border-subtle);
+  border-bottom:1px solid var(--border-subtle); }
+.rv-fig { display:flex; align-items:baseline; justify-content:space-between;
+  gap:var(--space-4); }
+.rv-fig dt { color:var(--ink-muted); white-space:nowrap; }
+.rv-fig dd { font-variant-numeric:tabular-nums; text-align:right; }
+/* The absent case carries the reason IN PLACE of the number, at caption size
+   so it cannot be mistaken for a figure. §3.2's last row. */
+.rv-fig dd.rv-absent { color:var(--ink-muted); font-size:var(--text-caption);
+  font-variant-numeric:normal; text-align:right; max-width:60%; }
+.rv-fig dd .rv-aside { color:var(--ink-muted); font-size:var(--text-caption);
+  font-weight:400; margin-left:var(--space-2); }
+/* Maximum loss outranks the other three figures, through weight and size —
+   never through a red fill. §8: rank comes from typography, not colour, and
+   a review painted with alarm reads as a warning to dismiss rather than a
+   fact to absorb. */
+.rv-fig--loss dt { color:var(--ink-secondary); font-weight:600; }
+.rv-fig--loss dd { font-size:var(--text-body-lg); font-weight:700; }
+.rv-nothing { margin-top:var(--space-4); line-height:1.55; }
+.rv-guided { margin-top:var(--space-3); padding:var(--space-3);
+  background:var(--surface-sunken); border-radius:var(--radius-sm);
+  color:var(--ink-secondary); font-size:var(--text-caption); line-height:1.55; }
+.rv-guided:empty { display:none; }
+.rv-fill { margin-top:var(--space-3); color:var(--ink-muted);
+  font-size:var(--text-caption); line-height:1.5; }
+.rv-acts { display:flex; flex-direction:column; gap:var(--space-3);
+  margin-top:var(--space-4); }
+.rv-acts .btn { text-align:center; }
+
 .modal.update { max-width:560px; width:560px; }
 .upd-head { display:flex; align-items:center; gap:var(--space-3); margin-bottom:6px; }
 .upd-head .upd-ic { font-size:var(--text-title); line-height:1; }
@@ -3575,6 +3623,83 @@ body.shell-v2 .home-legacy { display:none; }
   </div>
 </div>
 
+<!-- ══ REVIEW (M4-C7) ═══════════════════════════════════════════════════════
+     UI_V2_DESIGN.md §6.5: "Review is not a confirmation dialog. It is the one
+     place in the product where the trade is described in the language a
+     person would use to explain it to a friend, and where the worst case is
+     stated before it can happen."
+
+     What it replaces is exactly the fault §6.1 names — the generic
+     `confirmModal`, a key/value table restating the MECHANICS of the order
+     (contract, action, contracts, time in force) and finishing with one
+     estimated cost derived from the mid. It never said what the trade could
+     cost you, where it breaks even, how big it is against the account, or
+     what happens if you do nothing.
+
+     Five elements, IN THIS ORDER, always. The order is normative: the
+     sentence before the numbers because a person reads what they are doing
+     before what it costs, and "if you do nothing" last because it is the
+     thing they will still be thinking about after the modal closes.
+
+     Every element renders even when its number is absent — a `sell_to_close`
+     has no maximum loss and no breakeven, and those slots carry the server's
+     reason rather than disappearing. A modal whose shape changes with the
+     order type is one a user has to re-read every time. -->
+<div class="overlay" id="review-overlay">
+  <div class="modal review" role="dialog" aria-modal="true"
+       aria-labelledby="rv-title">
+    <div class="rv-head">
+      <h3 id="rv-title">Review your order</h3>
+      <button class="rv-x" id="rv-close" aria-label="Close review">×</button>
+    </div>
+
+    <!-- 1. A sentence. No abbreviation anywhere on this line — §6.5. -->
+    <p class="rv-sentence" id="rv-sentence"></p>
+
+    <!-- 2-4. Cost, maximum loss, breakeven with spot beside it, size. -->
+    <dl class="rv-figures">
+      <div class="rv-fig">
+        <dt id="rv-cost-label">Cost today</dt>
+        <dd id="rv-cost">—</dd>
+      </div>
+      <div class="rv-fig rv-fig--loss">
+        <dt>Most you can lose</dt>
+        <dd id="rv-maxloss">—</dd>
+      </div>
+      <div class="rv-fig">
+        <dt>Breakeven at expiry</dt>
+        <dd id="rv-breakeven">—</dd>
+      </div>
+      <div class="rv-fig">
+        <dt>Position size</dt>
+        <dd id="rv-size">—</dd>
+      </div>
+    </dl>
+
+    <!-- 5. The passive outcome. Options are the instrument where doing
+         nothing has a consequence, and no retail interface says so at the
+         moment of commitment. -->
+    <p class="rv-nothing" id="rv-nothing"></p>
+
+    <!-- Guided Surface Level only (§6.5). Hidden, not absent, at Full. -->
+    <p class="rv-guided" id="rv-guided"></p>
+
+    <!-- The honesty line: how the fill will ACTUALLY happen. Not a
+         disclaimer — it is what prevents the "why didn't I get that price"
+         confusion that follows every paper fill. -->
+    <p class="rv-fill" id="rv-fill"></p>
+
+    <div class="rv-acts">
+      <!-- M4-C8 replaces this with the hold-to-confirm control. It is a plain
+           button here so C7 leaves the application working (R-4) with the
+           behaviour it already had, rather than shipping a review nobody can
+           act on for the length of one commit. -->
+      <button class="btn primary big" id="rv-commit">Place order</button>
+      <button class="btn" id="rv-cancel">Cancel <span class="kbd">Esc</span></button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/lightweight-charts.js"></script>
 <script>
 "use strict";
@@ -3729,6 +3854,13 @@ document.addEventListener("keydown", e => {
   // order from behind the shortcut-reference card)
   if ($("tab-trade").style.display !== "none" && tkSel &&
       !$("confirm-overlay").classList.contains("show") &&
+      // The review modal is a third overlay and needs the same exclusion
+      // (M4-C7). Without it, Enter behind an open review re-submits the
+      // ticket underneath — and since M4-C8 makes Enter the keyboard commit
+      // gesture INSIDE the modal, the same press would both commit and
+      // re-open. The `!tkSel` guard does not help: a contract is by
+      // definition selected whenever a review is on screen.
+      !$("review-overlay").classList.contains("show") &&
       !$("keys-overlay").classList.contains("show")) {
     const k = e.key.toLowerCase();
     if (k === "b") setSide("buy_to_open");
@@ -9319,6 +9451,107 @@ async function tkFetchFigures(draft, key) {
   }
 }
 
+/* ── review (M4-C7) ───────────────────────────────────────────────────────
+   §6.5's five elements, in order, for every order type. The whole modal is a
+   render of `ReviewView` — this function decides nothing about the trade, it
+   only lays out what `services/review.py` said. That is why the closing-order
+   case needs no branch here: the view model already carries `None` plus a
+   reason for every element that does not apply, and `rvFig` renders a reason
+   exactly where the number would have been.
+
+   Element ORDER is normative and is expressed in the markup, not here, so it
+   cannot be reordered by an edit to a loop. */
+let rvResolve = null;      // the open review's promise resolver
+let rvLastFocus = null;    // what to give focus back to on close
+
+function rvFig(id, value, note, aside) {
+  const el = $(id);
+  if (!el) return;
+  const absent = value == null;
+  el.classList.toggle("rv-absent", absent);
+  if (absent) {
+    // The reason, in place of the number. Never a zero, never a blank.
+    el.textContent = note || "Not available.";
+    return;
+  }
+  el.innerHTML = esc(value) +
+    (aside ? ` <span class="rv-aside">${esc(aside)}</span>` : "");
+}
+
+function rvPaint(r) {
+  $("rv-sentence").textContent = r.sentence || "";
+
+  // 2. Cost, and the maximum loss — stated even when it equals the cost,
+  //    *especially* then, because "you can lose all of it" is the fact
+  //    beginners most often do not know (§6.5).
+  const opening = r.opening !== false;
+  $("rv-cost-label").textContent = opening ? "Cost today" : "Proceeds today";
+  const money = opening ? r.cost : r.proceeds;
+  rvFig("rv-cost", money == null ? null : fmt$(money), r.cost_note,
+        opening && r.cost_note ? r.cost_note : "");
+  rvFig("rv-maxloss", r.max_loss == null ? null : fmt$(r.max_loss),
+        r.max_loss_note, r.max_loss_note);
+
+  // 3. Breakeven, with spot beside it so the distance needs no arithmetic.
+  rvFig("rv-breakeven", r.breakeven == null ? null : fmt$(r.breakeven),
+        r.breakeven_note,
+        r.spot == null ? ""
+          : `${tkChain ? tkChain.symbol : "it"} is ${fmt$(r.spot)} now`);
+
+  // 4. Position size, which is how risk is actually judged.
+  rvFig("rv-size", r.position_pct == null ? null : `${r.position_pct.toFixed(1)}% of account`,
+        r.position_note,
+        r.buying_power_pct == null ? ""
+          : `${r.buying_power_pct.toFixed(1)}% of buying power`);
+
+  // 5. The passive outcome.
+  $("rv-nothing").textContent = r.if_nothing || "";
+
+  // §6.5: "At the Guided Surface Level, Review adds one Pilot line explaining
+  // the single most consequential term in the order. At Full, it does not."
+  // Taken literally — level 1 only. Focused's row in §8.2 is "tooltip on
+  // hover", which is a different mechanism, and inventing a middle behaviour
+  // here would be a design decision R-6 forbids.
+  $("rv-guided").textContent =
+    Ctx.surfaceLevel() <= 1 ? (r.guided_note || "") : "";
+
+  $("rv-fill").textContent = r.fill_note || "";
+}
+
+/* Open the modal over a `ReviewView`. Resolves true if the user commits.
+   C8 replaces the plain button in `#rv-commit-host` with the hold gesture;
+   the promise contract is the same either way, which is what lets that
+   commit be about the gesture alone. */
+function rvOpen(r) {
+  rvPaint(r);
+  rvLastFocus = document.activeElement;
+  $("review-overlay").classList.add("show");
+  const commit = $("rv-commit");
+  if (commit) commit.focus();
+  return new Promise(resolve => { rvResolve = resolve; });
+}
+
+function rvClose(result) {
+  $("review-overlay").classList.remove("show");
+  if (rvResolve) { rvResolve(result); rvResolve = null; }
+  // Focus goes back where it came from. A modal that closes into `<body>`
+  // strands a keyboard user at the top of the page.
+  if (rvLastFocus && document.contains(rvLastFocus)) rvLastFocus.focus();
+  rvLastFocus = null;
+}
+
+const rvIsOpen = () => $("review-overlay").classList.contains("show");
+
+$("rv-commit").onclick = () => rvClose(true);
+$("rv-cancel").onclick = () => rvClose(false);
+$("rv-close").onclick = () => rvClose(false);
+$("review-overlay").onclick = e => {
+  if (e.target === $("review-overlay")) rvClose(false);
+};
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && rvIsOpen()) { e.stopPropagation(); rvClose(false); }
+}, true);
+
 /* ── order-ticket guardrails (V0.6.1) ────────────────────────────────────────
    An order the broker is going to refuse should not be assemblable in the
    first place. `OrderManager.place` rejects three combinations outright — a
@@ -9519,32 +9752,50 @@ $("tk-qty").oninput = updateEstimate;
 $("tk-limit").oninput = updateEstimate;
 $("tk-kind").onchange = () => { tkKindFields(); updateEstimate(); };
 
-const KIND_LABEL = {market: "Market", limit: "Limit", stop_loss: "Stop loss",
-                    take_profit: "Take profit", trailing_stop: "Trailing stop"};
+/* `KIND_LABEL` lived here and is gone with the generic confirm modal it fed
+   (M4-C7). The review's sentence comes from `services/review.py`, which spells
+   the order type out in prose rather than in a lookup table — §6.5 forbids an
+   abbreviation anywhere on that line. */
+
+/* The review the modal will show, for the draft currently in the ticket.
+   Reuses `tkFigures` when the ticket's own figures already describe this
+   exact draft — which is the normal case, because the figures were fetched
+   when the user last changed something. Re-asking would be the duplicate
+   fetch the ticket was built to avoid, and it would also let the modal show
+   a different set of numbers than the ticket underneath it. */
+async function tkReviewForSubmit(draft) {
+  const key = JSON.stringify(draft);
+  if (tkFigures && key === tkFigKey) return tkFigures;
+  const resp = await fetch("/api/v1/review", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(draft)});
+  const body = await resp.json();
+  if (!resp.ok || !body.data) throw new Error("review unavailable");
+  return body.data;
+}
 
 $("tk-form").onsubmit = async e => {
   e.preventDefault();
   if (!tkSel) return;
-  const kind = $("tk-kind").value;
-  const qty = Math.max(1, +$("tk-qty").value || 1);
-  const buying = tkSide === "buy_to_open";
-  const px = kind === "limit" && +$("tk-limit").value ? +$("tk-limit").value : tkSel.mid;
-  const rows = [
-    ["Contract", `${tkChain.symbol} $${tkSel.strike} ${tkSel.right === "call" ? "Call" : "Put"} · ${tkChain.expiration}`],
-    ["Action", `${buying ? "Buy to open" : "Sell to close"} · ${KIND_LABEL[kind]}`],
-    ["Contracts", String(qty)],
-    ["Time in force", $("tk-tif").value.toUpperCase()],
-  ];
-  if (kind === "limit") rows.push(["Limit price", "$" + (+$("tk-limit").value || 0).toFixed(2)]);
-  if (kind === "stop_loss" || kind === "take_profit")
-    rows.push(["Underlying trigger", "$" + (+$("tk-stop").value || 0).toFixed(2)]);
-  if (kind === "trailing_stop")
-    rows.push(["Trail", ($("tk-trail").value || "0") + " pts / " + ($("tk-trailpct").value || "0") + "%"]);
-  rows.push([buying ? "Estimated cost" : "Estimated credit", "≈ " + fmt$(px * qty * 100)]);
-  const ok = await confirmModal(
-    `${buying ? "Buy" : "Sell"} ${qty} × ${tkChain.symbol} $${tkSel.strike} ${tkSel.right === "call" ? "C" : "P"}`,
-    rows, buying ? "Place buy order" : "Place sell order", buying ? "buy" : "sell");
+  const draft = tkDraft();
+  if (!draft) return;
+  const kind = draft.kind, qty = draft.quantity;
+
+  // §6.5: review is not a confirmation dialog. The generic `confirmModal`
+  // that used to sit here restated the order's MECHANICS — contract, action,
+  // contracts, time in force — and finished with a cost derived from the mid.
+  // It never said what the trade could cost you, where it breaks even, how
+  // big it is against the account, or what happens if you do nothing.
+  let r;
+  try {
+    r = await tkReviewForSubmit(draft);
+  } catch (err) {
+    toast("Could not price this order for review — nothing was placed.", false);
+    return;
+  }
+  const ok = await rvOpen(r);
   if (!ok) return;
+
   const body = {
     kind, side: tkSide,
     tif: $("tk-tif").value, symbol: tkChain.symbol,

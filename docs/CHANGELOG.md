@@ -132,6 +132,42 @@ expiry, and when that named a strike the loaded chain did not contain,
 is the exact failure `QuickPickView.reason` exists to prevent. It now reports
 the mismatch.
 
+**C7 — review, as a consequence restatement.** §6.5: "Review is not a
+confirmation dialog. It is the one place in the product where the trade is
+described in the language a person would use to explain it to a friend, and
+where the worst case is stated before it can happen."
+
+What it replaces is the generic `confirmModal` — a key/value table restating
+the order's *mechanics* (Contract, Action, Contracts, Time in force) and
+closing with one estimated cost derived from the mid. It never stated the
+maximum loss, the breakeven, the position size, or what happens if you do
+nothing, which are §6.5's elements 2 through 5.
+
+The five elements now render **in order, always**: the sentence, cost and
+maximum loss, breakeven with spot beside it, position size, and the passive
+outcome — with the honesty line about how the fill actually happens beneath
+them. The order is expressed in the markup rather than in a loop, so it
+cannot be reordered by an edit to rendering code.
+
+**The shape does not change with the order type.** A `sell_to_close` has
+proceeds rather than a cost, no new maximum loss and no breakeven; those rows
+still render, carrying the server's reason where the number would be. A modal
+whose shape changes with the order type is one a user has to re-read every
+time, and a missing row is indistinguishable from a forgotten one.
+
+`ReviewView` gains `guided_note` — §6.5's one line explaining the single most
+consequential term, shown at the Guided Surface Level and not at Full. It is
+a *ranking*, not a list: expiring today, then an exit order's trigger being
+the underlying, then a limit that may never fill, then short-dated decay. A
+review that explains four things at once has explained nothing.
+
+The modal reuses the figures the ticket already fetched when the draft has
+not changed, so opening a review costs no request. Escape, the close button,
+the backdrop and Cancel all resolve it, and focus returns to where it came
+from rather than to `<body>`.
+
+**Gate: 107 → 131 checks.**
+
 **Gate: 89 → 107 checks.** `/api/v1/quickpick` is stubbed by running the real
 `services/quickpick.py` rules over the fixture chain, so only the transport
 is faked; the catalogue route is deliberately left live, because what is

@@ -235,6 +235,51 @@ class TestTheHonestyLine:
             assert got.fill_note.strip(), f"{kind} explained no fill"
 
 
+class TestTheGuidedLine:
+    """§6.5's one explanatory line, for the Guided Surface Level (M4-C7).
+
+    ONE line, chosen by a ranking rather than accumulated as a list — a
+    review that explains four things at once has explained nothing, and
+    §8.1-2's rule that Guided hides complexity but never consequence cuts
+    both ways.
+    """
+
+    def test_an_expiry_today_is_said_in_hours_not_in_jargon(self):
+        note = _review(dte=0).guided_note
+        assert "expires TODAY" in note and "0DTE" not in note
+
+    def test_an_exit_order_names_the_underlying_as_its_trigger(self):
+        # The single most common wrong assumption the guardrails already exist
+        # to catch: these fire on the underlying, not on the premium.
+        note = _review(side="sell_to_close", kind="stop_loss",
+                       stop=465.0).guided_note
+        assert "price of SPY itself" in note and "premium" in note
+
+    def test_a_limit_order_warns_that_it_may_never_fill(self):
+        assert "can go unfilled" in _review(kind="limit", limit=3.5).guided_note
+
+    def test_a_short_dated_option_is_told_about_decay(self):
+        note = _review(dte=5).guided_note
+        assert "time decay" in note and "5 days" in note
+
+    def test_a_longer_dated_option_still_gets_the_general_case(self):
+        assert _review(dte=60).guided_note.strip()
+
+    def test_a_plain_closing_order_gets_no_line_rather_than_a_filler_one(self):
+        # Nothing about exiting a position is the kind of surprise this line
+        # exists for, and inventing one to fill the slot is decoration.
+        assert _review(side="sell_to_close", kind="market").guided_note == ""
+
+    def test_exactly_one_line_is_produced_for_every_order_shape(self):
+        for kind in ("market", "limit", "stop_loss", "take_profit",
+                     "trailing_stop"):
+            for side in ("buy_to_open", "sell_to_close"):
+                for dte in (0, 5, 60):
+                    note = _review(kind=kind, side=side, dte=dte, limit=3.5,
+                                   stop=465.0).guided_note
+                    assert "\n" not in note, f"{kind}/{side}/{dte} gave two"
+
+
 class TestSerialisation:
     def test_it_is_json_safe_primitives(self):
         import json
