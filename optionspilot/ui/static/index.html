@@ -232,7 +232,7 @@ button { font-family:inherit; }
            overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
 
 body.shell-v2 { display:grid; height:100vh; min-height:0; overflow:hidden;
-  grid-template-columns:var(--rail-w, 200px) 1fr;
+  grid-template-columns:var(--rail-w, 216px) 1fr;
   grid-template-rows:48px 1fr 28px;
   grid-template-areas:"frame frame" "rail main" "strip strip"; }
 /* The legacy chrome does not move and is not deleted — it is simply not
@@ -247,11 +247,26 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
 
 .shell-frame[hidden], .shell-rail[hidden], .shell-strip[hidden] { display:none; }
 
+/* No left padding on the frame itself: the wordmark's own box supplies it, so
+   that box can be exactly `--rail-w` wide and its right border can continue
+   the rail's border as ONE vertical line from the top of the window to the
+   system strip (M3.5-C10).
+
+   That line is the single highest-leverage change in this milestone and it
+   costs one border. Before it, nothing in the interface ran the full height:
+   the wordmark was 86px wide and overhung a 72px rail by 30px and a 56px rail
+   by 46px, so the rail's border cut vertically THROUGH the word and the two
+   never agreed on where the left column ended. Cockpits read as engineered
+   because their lines continue. */
 .shell-frame { display:flex; align-items:center; gap:var(--space-3);
-  padding:0 var(--space-4); background:var(--surface-base);
+  padding:0 var(--space-4) 0 0; background:var(--surface-base);
   border-bottom:1px solid var(--border-subtle); min-width:0; }
-.sf-mark { font-weight:700; letter-spacing:.3px; white-space:nowrap; }
+.sf-mark { font-weight:700; letter-spacing:.3px; white-space:nowrap;
+  width:var(--rail-w, 216px); box-sizing:border-box; flex:0 0 auto;
+  padding:0 var(--space-4); align-self:stretch; display:flex;
+  align-items:center; border-right:1px solid var(--border-subtle); }
 .sf-mark b { color:var(--action-primary-text); font-weight:inherit; }
+.sf-mark-min { display:none; }
 .sf-dest { font-size:var(--text-body-lg); font-weight:650; white-space:nowrap; }
 .sf-sec { color:var(--ink-muted); font-weight:400; }
 .sf-sec:not(:empty)::before { content:" › "; color:var(--ink-disabled); }
@@ -365,12 +380,33 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
   grid-template-columns:minmax(0,var(--split-major)) minmax(0,var(--split-minor)); }
 @media (max-width:1023px) { .dest-split { grid-template-columns:minmax(0,1fr); } }
 
-@media (max-width:1439px) { body.shell-v2 { --rail-w:72px; }
+/* TWO rail states, not three (M3.5-C10). It was 200 / 72 / 56 across two
+   breakpoints, so a window drag produced two collapse events — and §6.9
+   rightly forbids animating the collapse, which makes each one a jump. The
+   fix for a jarring transition is FEWER transitions, not smoother ones. The
+   72px middle state is deleted outright: it showed no label, which is the
+   entire definition of icon-only, so it was a second icon-only mode differing
+   from the first by 16px of padding.
+
+   216 and 64 rather than 200 and 56. Taking off the rail's 8px padding, 64
+   leaves a 48px box for a 44px hit target with clearance, where 56 left
+   exactly 40px and nothing spare for the active indicator; WCAG 2.5.8's floor
+   is 24px and 44px is the comfortable standard. And 216 = 64 + 152, which is
+   what lets the header's left zone be exactly rail-width in BOTH states —
+   without that, the vertical rule is nearly continuous, which is worse than
+   not attempting it.
+
+   This supersedes the 200/72/56 in DESIGN_SYSTEM_V2.md §5.2, updated in the
+   same commit rather than left to disagree. */
+@media (max-width:1279px) {
+  body.shell-v2 { --rail-w:64px; }
   body.shell-v2 .shell-rail .lbl,
-  body.shell-v2 .shell-rail .kbd { display:none; }
+  body.shell-v2 .shell-rail .kbd,
+  body.shell-v2 .sf-mark-full { display:none; }
+  body.shell-v2 .sf-mark-min { display:inline; }
+  body.shell-v2 .sf-mark { padding:0 var(--space-2); justify-content:center; }
   body.shell-v2 .shell-rail a { justify-content:center;
     padding:var(--space-2) var(--space-1); } }
-@media (max-width:1279px) { body.shell-v2 { --rail-w:56px; } }
 /* Below the supported minimum, a message rather than a degraded layout
    (DESIGN_SYSTEM_V2.md §5.3). */
 #shell-toosmall { display:none; position:fixed; inset:0; z-index:90;
@@ -554,17 +590,35 @@ nav[aria-label="Main"] .paper-wrap { padding:0 var(--space-3); }
 nav[aria-label="Main"] .spacer { flex:1; }
 
 /* below ~1180px the sidebar collapses to an icon rail (tooltips carry the
-   labels); the header pills reclaim the freed width instead of wrapping */
+   labels); the header pills reclaim the freed width instead of wrapping.
+
+   EVERY selector here is `nav[aria-label="Main"]`, never a bare `nav`
+   (M3.5-C10). It used to be bare, and `#shell-rail` is also a `<nav>` — so
+   below 1180px the LEGACY rule silently pinned the V2 shell's rail to 56px
+   wide with the legacy padding and centring, overriding `--rail-w` and every
+   rule scoped under `body.shell-v2`. The whole migration strategy
+   rests on the two navigations not being able to touch each other, and one
+   unscoped element selector was quietly breaking that at exactly the widths
+   hardest to eyeball. Found by asserting that the rail and the header's left
+   zone end on the same x, not by looking.
+
+   M2-C9 fixed precisely this bug for the block above — read its comment — and
+   did not come down here. A scoping fix applied to a file's base rules and
+   not to its media queries is half a fix, and the half that is left is the
+   half that only shows up at small widths.
+
+   `main` stays unscoped: `body.shell-v2 > main` sets its own padding at a
+   higher specificity, so the shell already wins that one. */
 @media (max-width:1180px) {
-  nav { width:56px; padding:18px var(--space-2); align-items:center; }
-  nav .logo { padding:var(--space-1) 0 14px; }
-  nav .logo .full { display:none; }
-  nav .logo .mini { display:inline; }
-  nav button { padding:10px; justify-content:center; width:100%; box-sizing:border-box; }
-  nav button .lbl, nav button .kbd { display:none; }
-  nav .paper-wrap { padding:0; }
-  nav .paper-wrap .badge { writing-mode:vertical-rl; letter-spacing:1px; padding:var(--space-2) 3px; }
-  nav .ver { display:none; }
+  nav[aria-label="Main"] { width:56px; padding:18px var(--space-2); align-items:center; }
+  nav[aria-label="Main"] .logo { padding:var(--space-1) 0 14px; }
+  nav[aria-label="Main"] .logo .full { display:none; }
+  nav[aria-label="Main"] .logo .mini { display:inline; }
+  nav[aria-label="Main"] button { padding:10px; justify-content:center; width:100%; box-sizing:border-box; }
+  nav[aria-label="Main"] button .lbl, nav[aria-label="Main"] button .kbd { display:none; }
+  nav[aria-label="Main"] .paper-wrap { padding:0; }
+  nav[aria-label="Main"] .paper-wrap .badge { writing-mode:vertical-rl; letter-spacing:1px; padding:var(--space-2) 3px; }
+  nav[aria-label="Main"] .ver { display:none; }
   main { padding:var(--space-4) 18px; }
 }
 .badge { display:inline-block; font-size:var(--text-micro); font-weight:700; letter-spacing:.6px;
@@ -1965,7 +2019,16 @@ body.shell-v2 .home-legacy { display:none; }
 
      Everything here is inert until `body.shell-v2` is set. -->
 <div id="shell-frame" class="shell-frame" role="banner" hidden>
-  <span class="sf-mark">Options<b>Pilot</b></span>
+  <!-- Two visual marks, one accessible name. "OptionsPilot" is 86px wide and
+       cannot fit a 64px rail column; clipping it to try is what made the rail
+       look like it was sliding under the header. The visible spans are both
+       `aria-hidden` and the name comes from the `.sr-only` text, so what is
+       announced does not change with the viewport. -->
+  <span class="sf-mark">
+    <span class="sr-only">OptionsPilot</span>
+    <span class="sf-mark-full" aria-hidden="true">Options<b>Pilot</b></span>
+    <span class="sf-mark-min" aria-hidden="true">O<b>P</b></span>
+  </span>
   <span class="sf-dest"><span id="sf-dest-name">Home</span><span
         id="sf-dest-section" class="sf-sec"></span></span>
   <button id="sf-context" class="sf-context" type="button"

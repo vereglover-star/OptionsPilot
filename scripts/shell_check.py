@@ -70,6 +70,35 @@ RAIL_WIDTHS = (1600, 1439, 1300, 1279, 1100, 1024)
 RAIL_NAMES = ("Home", "Trade", "Portfolio", "Research", "Journal", "Settings",
               "Pilot")
 
+#: The left column, measured across the frame/rail boundary. The wordmark's
+#: box must end exactly where the rail ends so the border between them is one
+#: unbroken vertical line, and nothing else in the header may cross into the
+#: rail's column. Before M3.5-C10 the wordmark was 86px wide against a 72px
+#: and then a 56px rail, so the rail's own border cut through the word.
+COLUMN_JS = """() => {
+  const mark = document.querySelector('.sf-mark');
+  const rail = document.querySelector('#shell-rail');
+  const frame = document.querySelector('#shell-frame');
+  if (!mark || !rail || !frame) return {aligned: false, contained: false,
+                                        mark: null, rail: null, overhang: []};
+  const mr = +mark.getBoundingClientRect().right.toFixed(1);
+  const rr = +rail.getBoundingClientRect().right.toFixed(1);
+  // Anything in the header other than the mark must start at or after the
+  // rail's right edge; the mark IS the rail's column, so it is exempt.
+  const overhang = [];
+  for (const kid of frame.children) {
+    if (kid === mark) continue;
+    const b = kid.getBoundingClientRect();
+    if (b.width > 0 && b.left < rr - 0.5) {
+      overhang.push((kid.className || kid.id || kid.tagName) + ' starts at ' +
+                    b.left.toFixed(1) + ' inside the rail column (' +
+                    rr.toFixed(1) + ')');
+    }
+  }
+  return {aligned: Math.abs(mr - rr) <= 1, contained: overhang.length === 0,
+          mark: mr, rail: rr, overhang: overhang};
+}"""
+
 #: Every rail icon measured against the rail's own clipping box, plus its
 #: horizontal centring when the rail is in icon-only mode. Centring is only
 #: meaningful there — in expanded mode the icon is deliberately left-aligned
@@ -208,6 +237,16 @@ def run_checks(page, base: str, c: Checks) -> None:
                    if rail_el.get_by_role("link", name=n, exact=True).count() != 1]
         c.check(f"every rail item announces its name at {width}px",
                 not missing, f"unnamed: {missing}")
+        # M3.5-C10. The header's left zone and the rail must end on the same
+        # x, or the vertical rule that runs from the top of the window to the
+        # strip is broken and the rail reads as sliding underneath the header
+        # — which is exactly what it did, by 30px at 72 and 46px at 56.
+        col = page.evaluate(COLUMN_JS)
+        c.check(f"the header's left zone ends where the rail does at {width}px",
+                col["aligned"],
+                f"mark ends {col['mark']}, rail ends {col['rail']}")
+        c.check(f"and nothing in the header overhangs the rail at {width}px",
+                col["contained"], str(col["overhang"]))
     page.set_viewport_size({"width": 1600, "height": 1000})
     page.wait_for_timeout(200)
 
