@@ -1655,6 +1655,43 @@ body.shell-v2 .home-legacy { display:none; }
   background:var(--status-caution); border-radius:1px; }
 .hw-conf { font-size:var(--text-caption); color:var(--ink-muted);
   font-variant-numeric:tabular-nums; min-width:3.5em; text-align:right; }
+
+/* ── the four states ──────────────────────────────────────────────────────
+   §2.9's fourth point is the one that governs all of them: **the layout is
+   identical in every state.** Same bands, same regions, same positions.
+   Nothing appears or disappears when the first trade fills — values simply
+   replace prompts. So no state here adds or removes an instrument; they only
+   change what is inside one. */
+
+/* Loading. Region headings and card labels render immediately; only VALUES
+   skeletonise, which is most of the perceived speed — the user reads the
+   shape of the screen while the data arrives. */
+#home[data-state="loading"] .home-val,
+#home[data-state="loading"] .home-ctx { color:transparent; position:relative; }
+#home[data-state="loading"] .home-val::after,
+#home[data-state="loading"] .home-ctx::after {
+  content:""; position:absolute; inset:10% 0; min-width:3em;
+  background:var(--surface-sunken); border-radius:var(--radius-sm); }
+#home[data-state="loading"] .home-ctx::after { inset:15% 40% 15% 0; }
+
+/* A skeleton ROW matches the exact height of the row it replaces, so nothing
+   shifts when data lands. Two of them regardless of the real count: the count
+   is not knowable before the data, and guessing it would cause the shift the
+   skeleton exists to prevent. */
+.hp-skel { height:36px; border-radius:var(--radius-sm);
+  background:var(--surface-sunken); }
+.hp-skel + .hp-skel { margin-top:var(--space-1); }
+.hn-skel { height:22px; border-radius:var(--radius-sm);
+  background:var(--surface-sunken); margin:var(--space-2) 0; }
+.hn-skel.short { width:60%; }
+
+/* Error. Region-scoped: Home never fails as a whole, because its regions have
+   independent sources (§2.10). An error replaces a region's BODY; the
+   instrument, its label and its action all stay exactly where they were. */
+.home-err { font-size:var(--text-body); color:var(--ink-secondary);
+  line-height:1.6; padding:var(--space-2) 0; }
+.home-err b { color:var(--status-caution); font-weight:600; display:block;
+  margin-bottom:var(--space-1); }
 </style>
 </head>
 <body data-palette="#3987e5">
@@ -3726,7 +3763,10 @@ const Home = (() => {
       clearTimeout(skeletonTimer);
       skeletonTimer = setTimeout(() => {
         const root = el("home");
-        if (root && !loadedOnce) root.dataset.state = "loading";
+        if (root && !loadedOnce) {
+          root.dataset.state = "loading";
+          if (window.HomeBands) HomeBands.skeleton();
+        }
       }, SKELETON_DELAY_MS);
     }
     const ctl = new AbortController();
@@ -3767,6 +3807,12 @@ window.Home = Home;
    its own; `Home` owns the fetch and the state, these own the markup. */
 const HomeBands = (() => {
   const el = id => document.getElementById(id);
+  /* `intelligence/`'s own low-confidence floor (`stats.MIN_SAMPLE_LOW`), and
+     the number §2.9's empty state quotes. Distinct from the win-rate metric's
+     floor of 30 — that one gates a NUMBER, this one gates whether the engine
+     will speak at all. The design documents disagree about which belongs on
+     the win-rate card; the M3 report records it. */
+  const MIN_HISTORY_FOR_FINDINGS = 5;
   const money0 = v => (v < 0 ? "-$" : "$") +
     Math.abs(v).toLocaleString(undefined, {maximumFractionDigits:0});
 
@@ -3789,11 +3835,29 @@ const HomeBands = (() => {
     return `Close ${p.underlying} ${p.strike} ${right}`;
   }
 
+  /* A region that could not be read says so, in place, with a way out. Never
+     a blank area and never a zero: "no positions" and "I could not read your
+     positions" are different claims and only one of them is about the user. */
+  function regionError(d, key) {
+    return (d.errors || []).indexOf(key) !== -1;
+  }
+
   function renderPositions(d) {
     const body = el("hp-body"), count = el("hp-count");
     if (!body) return;
     const rows = d.positions || [];
     if (count) count.textContent = rows.length ? `(${rows.length})` : "";
+
+    if (regionError(d, "positions")) {
+      body.innerHTML = `<div class="home-err"><b>Positions are unavailable.</b>
+        The broker could not be read just now. Nothing has changed about what
+        you hold.
+        <div><button class="btn" type="button" data-home-retry="1"
+             >Try again</button></div></div>`;
+      const g = el("hp-working-group");
+      if (g) g.hidden = true;
+      return;
+    }
 
     if (!rows.length) {
       /* P9: every empty region contains a verb, and this one's first action is
@@ -3857,10 +3921,25 @@ const HomeBands = (() => {
       return;
     }
     if (!items.length) {
-      body.innerHTML = `<li class="hn-item"><div class="hn-text"
-        >Nothing else is waiting.</div>
-        <div class="hn-detail">This region fills as the engine finds something
-        it can evidence about your trading.</div></li>`;
+      /* Two different empty states, and conflating them would be the region's
+         worst failure. A trader with no history has not been found blameless
+         — the engine simply cannot say anything yet, and §2.9 wants that
+         threshold STATED so it sets an expectation the user can act on.
+         "Nothing else is waiting" is the established trader's answer and is a
+         real finding; saying it to a beginner would be a claim the data does
+         not support. */
+      const win = d.win_rate || {};
+      const enough = (win.trades || 0) >= MIN_HISTORY_FOR_FINDINGS;
+      body.innerHTML = enough
+        ? `<li class="hn-item"><div class="hn-text">Nothing else is waiting.</div>
+           <div class="hn-detail">The engine looked and found nothing it can
+           evidence right now.</div></li>`
+        : `<li class="hn-item"><div class="hn-text">I need about
+           ${MIN_HISTORY_FOR_FINDINGS} closed trades before I can say anything
+           about your trading.</div>
+           <div class="hn-detail">You have ${win.trades || 0}.</div>
+           <button class="hn-act" type="button" data-home-tour="1"
+             >Show me around ›</button></li>`;
       return;
     }
     body.innerHTML = items.map(it => {
@@ -3894,6 +3973,12 @@ const HomeBands = (() => {
       if (retry) { Home.load(); return; }
       const scan = ev.target.closest("[data-home-scan]");
       if (scan) { const b = $("scan-btn"); if (b) b.click(); return; }
+      const tour = ev.target.closest("[data-home-tour]");
+      /* `welcome` is the id in GUIDE_TUTORIALS. M2 shipped a palette command
+         naming a tutorial that does not exist; `Guide.start` returns silently
+         for an unknown id, so the failure mode is a dead button rather than an
+         error — which is exactly why the id is worth getting right here. */
+      if (tour) { if (window.Guide) Guide.start("welcome"); return; }
       const close = ev.target.closest("[data-home-close]");
       if (close) {
         /* Nothing on Home places, modifies or closes anything without the
@@ -3948,6 +4033,13 @@ const HomeBands = (() => {
     const body = el("hw-body");
     if (!body) return;
     const rows = d.watchlist || [];
+    if (regionError(d, "watchlist")) {
+      body.innerHTML = `<div class="home-err"><b>The last scan could not
+        complete.</b> No provider answered.
+        <div><button class="btn" type="button" data-home-go="settings"
+             >Diagnostics</button></div></div>`;
+      return;
+    }
     if (!rows.length) {
       body.innerHTML = `<div class="home-empty">The AI only sees what you
         point it at.
@@ -3990,7 +4082,24 @@ const HomeBands = (() => {
     });
   }
 
+  /* Loading. Only the region BODIES skeletonise; every label, heading and
+     action is already on screen and stays there. Two position rows regardless
+     of the real count — see the `.hp-skel` rule for why guessing is worse. */
+  function skeleton() {
+    wire(); wireRange();
+    const pos = el("hp-body");
+    if (pos) pos.innerHTML = `<div class="hp-skel"></div><div class="hp-skel"></div>`;
+    const next = el("hn-body");
+    if (next) next.innerHTML = `<li><div class="hn-skel"></div>
+      <div class="hn-skel short"></div></li>`;
+    const wl = el("hw-body");
+    if (wl) wl.innerHTML = `<div class="hp-skel"></div><div class="hp-skel"></div>`;
+    const g = el("hp-working-group");
+    if (g) g.hidden = true;
+  }
+
   return {
+    skeleton,
     render(d) {
       wire(); wireRange();
       renderPositions(d); renderNext(d);
