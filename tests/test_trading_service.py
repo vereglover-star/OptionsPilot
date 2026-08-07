@@ -343,6 +343,63 @@ class TestQuickPicksResolveAgainstTheRealChain:
             symbol="spy", intent="atm_call")["ok"]
 
 
+class TestReviewReadsTheSameWorldTheOrderPathWill:
+    """M4-C2. `review.py` is tested exhaustively over primitives in
+    `test_services_review.py`; these assert the WIRING — that the review is
+    built from the same chain, the same spot, the same account and the same
+    slippage setting the order path itself will use, and that it places
+    nothing."""
+
+    def test_it_prices_against_the_configured_slippage_not_a_default(self, server):
+        exp, contract = _first_contract(server)
+        server.orch.cfg.broker.slippage_pct = 0.05
+        got = server.services.trading.review_order({
+            "side": "buy_to_open", "kind": "market", "quantity": 1,
+            "symbol": "SPY", "expiration": exp.isoformat(),
+            "strike": contract.strike, "right": contract.right.value})
+        assert got["premium"] == round(contract.ask * 1.05, 4)
+
+    def test_the_account_percentage_uses_the_brokers_own_equity(self, server):
+        exp, contract = _first_contract(server)
+        equity = server.orch.broker.get_account().equity
+        got = server.services.trading.review_order({
+            "side": "buy_to_open", "kind": "market", "quantity": 1,
+            "symbol": "SPY", "expiration": exp.isoformat(),
+            "strike": contract.strike, "right": contract.right.value})
+        assert got["position_pct"] == round(got["cost"] / equity * 100, 2)
+
+    def test_days_to_expiry_come_from_the_contract_not_the_payload(self, server):
+        exp, contract = _first_contract(server)
+        got = server.services.trading.review_order({
+            "side": "buy_to_open", "kind": "market", "quantity": 1,
+            "symbol": "SPY", "expiration": exp.isoformat(),
+            "strike": contract.strike, "right": contract.right.value})
+        assert str(contract.dte(NOW.date())) in got["sentence"] or \
+            "expires today" in got["sentence"]
+
+    def test_an_unpriceable_contract_is_described_rather_than_raising(self, server):
+        # A review that cannot price the trade must still produce the sentence
+        # and say why the numbers are missing. Raising here would replace the
+        # one screen that explains a trade with an error toast.
+        got = server.services.trading.review_order({
+            "side": "buy_to_open", "kind": "market", "quantity": 1,
+            "symbol": "SPY", "expiration": "2099-01-15",
+            "strike": 999.0, "right": "call"})
+        assert got["sentence"]
+        assert got["cost"] is None and got["cost_note"]
+
+    def test_reviewing_places_nothing(self, server):
+        exp, contract = _first_contract(server)
+        before = len(server.orch.orders.working())
+        positions = len(server.orch.broker.get_positions())
+        server.services.trading.review_order({
+            "side": "buy_to_open", "kind": "market", "quantity": 1,
+            "symbol": "SPY", "expiration": exp.isoformat(),
+            "strike": contract.strike, "right": contract.right.value})
+        assert len(server.orch.orders.working()) == before
+        assert len(server.orch.broker.get_positions()) == positions
+
+
 class TestTheScanLifecycleIsUnchanged:
     def test_a_cycle_records_state_summary_and_equity(self, server):
         server.run_cycle_now()

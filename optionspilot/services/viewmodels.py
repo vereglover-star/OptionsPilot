@@ -271,6 +271,46 @@ class QuickPickView(ViewModel):
     reason: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ReviewView(ViewModel):
+    """The consequence restatement of §6.5, as data. New in M4.
+
+    **Every numeric field is paired with a note, and the note is not
+    decoration.** §6.5's five elements are written for an opening buy; a
+    `sell_to_close` has proceeds rather than a cost, adds no new maximum loss,
+    and has no breakeven. Those fields are therefore `None` and their note says
+    why. Printing "Most you can lose: $0.00" on a closing order would be the
+    same class of error as scoring a metric that could not be measured — a
+    confidently wrong number, which this codebase treats as worse than an
+    absent one because the user acts on it.
+
+    `premium` is the ENGINE's expected fill price, not the mid: `broker/paper.py`
+    fills a market buy at `ask * (1 + slippage_pct)` and a market sell at
+    `bid * (1 - slippage_pct)`. Quoting a mid here would describe a trade the
+    system is not going to place.
+
+    `fill_note` is the honesty line §6.5 requires beneath the five elements.
+    It is accuracy rather than a disclaimer: it is what prevents the "why
+    didn't I get that price" confusion that follows every paper fill.
+    """
+
+    sentence: str = ""
+    opening: bool = True
+    premium: float | None = None
+    cost: float | None = None
+    cost_note: str = ""
+    proceeds: float | None = None
+    max_loss: float | None = None
+    max_loss_note: str = ""
+    breakeven: float | None = None
+    breakeven_note: str = ""
+    spot: float | None = None
+    position_pct: float | None = None
+    position_note: str = ""
+    if_nothing: str = ""
+    fill_note: str = ""
+
+
 # ── watchlist ────────────────────────────────────────────────────────────────
 
 

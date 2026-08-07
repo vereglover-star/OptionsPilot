@@ -162,6 +162,15 @@ def register_v1_routes(app: FastAPI, server) -> None:
         return _safe(request, lambda: server.services.trading.quick_pick(
             symbol=symbol, intent=intent, expiration=expiration, right=right))
 
+    # Review (M4-C2). A POST because the body is an order draft, not an
+    # address — but it places nothing and mutates nothing, so it does not go
+    # through `_mutation`'s idempotency path.
+    @app.post("/api/v1/review", tags=["trade"])
+    async def review_order(request: Request):
+        body = await request.json()
+        return _safe(request,
+                     lambda: server.services.trading.review_order(body))
+
     @app.get("/api/v1/notifications", tags=["notifications"])
     def notifications(request: Request, limit: int = 15):
         return _safe(request, lambda: {

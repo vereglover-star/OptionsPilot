@@ -12,7 +12,7 @@ C1…C10.
 
 **Start UI V2 · M4 — Trade**, the most valuable milestone in the programme
 (`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next).
-`verify.ps1` is green across **17 gates** at 2746 tests.
+`verify.ps1` is green across **17 gates** at 2787 tests.
 
 **Read `DESIGN_SYSTEM_V2.md` §5.5–5.7 and §6.6 before writing any of M4's
 markup.** M3.5 corrected four things in the shared design language and every

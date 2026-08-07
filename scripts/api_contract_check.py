@@ -23,7 +23,7 @@ REQUIRED_PATHS = {
     "/api/v1/status", "/api/v1/runtime", "/api/v1/workspace",
     "/api/v1/notifications", "/api/v1/capabilities", "/api/v1/sync",
     "/api/v1/home", "/api/v1/openapi.json",
-    "/api/v1/quickpicks", "/api/v1/quickpick",
+    "/api/v1/quickpicks", "/api/v1/quickpick", "/api/v1/review",
 }
 
 # Every region `UI_V2_WIREFRAMES.md` §2.4 puts on Home, as the payload must name
@@ -168,6 +168,49 @@ def check_quickpicks(client) -> None:
     json.dumps(body, allow_nan=False)
 
 
+#: §6.5's five elements plus the honesty line, as the payload must name them.
+#: Each numeric field is paired with its note, because an element that does not
+#: apply must say why rather than print a zero.
+REVIEW_FIELDS = ("sentence", "opening", "premium", "cost", "cost_note",
+                 "proceeds", "max_loss", "max_loss_note", "breakeven",
+                 "breakeven_note", "spot", "position_pct", "position_note",
+                 "if_nothing", "fill_note")
+
+
+def check_review(client) -> None:
+    """One real review payload (M4-C2).
+
+    The five elements of `UI_V2_DESIGN.md` §6.5 are a contract, not a layout
+    suggestion: a renamed field blanks the one screen in the product that
+    explains what a trade actually does, and it blanks it silently.
+    """
+    body = client.post("/api/v1/review", json={
+        "side": "buy_to_open", "kind": "market", "quantity": 1,
+        "symbol": "SPY", "expiration": "2026-09-18", "strike": 470.0,
+        "right": "call"}).json()["data"]
+    missing = [f for f in REVIEW_FIELDS if f not in body]
+    if missing:
+        raise SystemExit(f"review payload is missing elements: {missing}")
+
+    # The sentence is element 1 and is never optional — a review with no
+    # sentence is a confirmation dialog, which §6.5 says this is not.
+    if not body["sentence"].strip():
+        raise SystemExit("review produced no sentence")
+    if not body["if_nothing"].strip():
+        raise SystemExit("review did not state the passive outcome")
+    if not body["fill_note"].strip():
+        raise SystemExit("review did not say how the fill will happen")
+
+    # Every absent number must carry its reason.
+    for value, note in (("cost", "cost_note"), ("max_loss", "max_loss_note"),
+                        ("breakeven", "breakeven_note"),
+                        ("position_pct", "position_note")):
+        if body[value] is None and not body[note].strip():
+            raise SystemExit(f"review omitted {value} without saying why")
+
+    json.dumps(body, allow_nan=False)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="optionspilot-api-") as root:
         app = create_app(AppConfig(), run_loop=False, data_dir=root)
@@ -185,6 +228,7 @@ def main() -> int:
             check_workspace(client)
             check_home(client)
             check_quickpicks(client)
+            check_review(client)
     print("API CONTRACT PASS")
     return 0
 

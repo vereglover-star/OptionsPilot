@@ -567,12 +567,12 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**1 of 11 commits.**
+**2 of 11 commits — the backend tier is complete.**
 
 | Commit | Status | Description | Hash |
 | --- | --- | --- | --- |
 | C1 | ✅ | Quick-pick intent resolution + `/api/v1/quickpick{,s}` | `1191281` |
-| C2 | ⬜ | The review view model in `services/trading.py` | |
+| C2 | ✅ | The review view model (`services/review.py`) + `/api/v1/review` | `TBD` |
 | C3 | ⬜ | The workspace layout: chart, chain, ticket; splitters persisted | |
 | C4 | ⬜ | The ticket, always present, empty and selected states | |
 | C5 | ⬜ | The chain: spot-anchored, roving tabindex, Surface-Level columns | |

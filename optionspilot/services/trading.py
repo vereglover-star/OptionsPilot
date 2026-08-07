@@ -49,7 +49,7 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, utcnow
-from optionspilot.services import quickpick
+from optionspilot.services import quickpick, review
 from optionspilot.services.errors import ValidationError
 from optionspilot.services.viewmodels import QuickPickView
 
@@ -202,6 +202,57 @@ class TradingService:
             spec, payload.get("chain"), payload.get("spot"),
             current_right=right, expiration=choice.expiration,
             dte=choice.dte).to_dict()
+
+    def review_order(self, payload: dict) -> dict:
+        """The consequence restatement for an order about to be placed (M4-C2).
+
+        **It reads the same quote `place_order` will read, and prices it with
+        the same model the broker fills with.** `review.estimate_premium`
+        mirrors `PaperBroker`'s arithmetic — ask x (1 + slippage) for a buy,
+        bid x (1 - slippage) for a sell — because a review that quotes the mid
+        describes a trade the system is not going to place, and this codebase
+        treats a confidently wrong number as worse than an absent one.
+
+        It places nothing and takes no risk decision. `RiskManager` remains the
+        only entry gate and `OrderManager` the only execution path; this is a
+        pure read, and R-3 forbids it becoming anything else.
+        """
+        symbol = str(payload.get("symbol", "")).upper()
+        expiration = str(payload.get("expiration", ""))
+        strike = float(payload.get("strike") or 0.0)
+        right = str(payload.get("right", "call"))
+
+        bid = ask = mid = spot = None
+        dte = None
+        with self._lock:
+            provider = self._orch.provider
+            try:
+                exp_date = date.fromisoformat(expiration)
+                for c in provider.get_option_chain(symbol, exp_date):
+                    if c.strike == strike and c.right.value == right:
+                        bid, ask, mid = c.bid, c.ask, c.mid
+                        dte = c.dte(self._clock().date())
+                        break
+            except Exception:  # noqa: BLE001 — an unpriceable contract is a
+                # state the review must DESCRIBE, not a failure it raises. The
+                # view model has a sentence for "there is no live quote".
+                pass
+            try:
+                spot = provider.get_quote(symbol).last
+            except Exception:  # noqa: BLE001 — spot is advisory here too
+                spot = None
+            equity = self._orch.broker.get_account().equity
+            slippage = float(self._orch.cfg.broker.slippage_pct)
+
+        return review.review(
+            side=str(payload.get("side", "buy_to_open")),
+            kind=str(payload.get("kind", "market")),
+            quantity=int(payload.get("quantity", 1) or 1),
+            symbol=symbol, strike=strike, right=right, expiration=expiration,
+            dte=dte, bid=bid, ask=ask, mid=mid, spot=spot, equity=equity,
+            limit=payload.get("limit"), stop=payload.get("stop"),
+            tif=str(payload.get("tif", "day")), slippage_pct=slippage,
+        ).to_dict()
 
     def place_order(self, payload: dict) -> dict:
         kind = OrderKind(str(payload.get("kind", "market")))
