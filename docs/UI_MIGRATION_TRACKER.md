@@ -8,7 +8,9 @@ Update it in the same commit that changes a row. Plan:
 **Status legend:** ⬜ Not started · 🟡 In progress · ✅ Complete ·
 🗑️ Legacy removed · ➖ N/A
 
-**Last updated:** 2026-08-06, **M2 complete**. The shell is the default.
+**Last updated:** 2026-08-06, **M3 complete**. Home is rebuilt on the
+shell; the legacy dashboard is deleted. The legacy NAVIGATION is still
+present — see the M3-C10 row.
 
 ---
 
@@ -29,17 +31,17 @@ Re-measure at each milestone close.
 
 | Metric | At M0 start | Target | Now |
 | --- | --- | --- | --- |
-| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 10,340 |
+| `index.html` lines | 8,254 | ≤ 8,254 at M9 (ratchet from M6-C8) | 11,105 |
 | Hardcoded `font-size: Npx` | 4 | 0 | **0** ✅ |
-| `font-size: var(--fs-*)` uses | 185 | all on roles | **0** — all renamed to `--text-*`; 51 on `--legacy-fs-md` |
+| `font-size: var(--fs-*)` uses | 185 | all on roles | **0** — all renamed to `--text-*`; 50 on `--legacy-fs-md` |
 | `var(--space-*)` uses | 0 | all rhythm | **173** |
-| Off-scale rhythm occurrences (≤48px) | 321 | 0 | **313** — ratcheted, retired per destination in M3–M6 |
+| Off-scale rhythm occurrences (≤48px) | 321 | 0 | **313** — ratcheted, retired per destination in M4–M6 |
 | `var(--radius-*)` uses | 56 legacy | all radii | **53** on the new names; legacy deleted |
 | `data-tab` refs in browser suites | 38 (53 by M2) | 0 | **0** ✅ |
 | `data-tab` refs in `index.html` | 18 | 0 | 21 — the legacy nav's own markup, deleted at M3-C10; the tour's now resolve through the registry at runtime |
 | `verify.ps1` gates | 13 | 20 | **17** |
 | `workspace_check.py` assertions | 21 | grows with the context | **50** |
-| Test count | 2,493 | grows | **2,623** |
+| Test count | 2,493 | grows | **2,716** |
 
 **Correction to `ROADMAP-V3-UX.md`:** that audit reported ~14 hardcoded
 font sizes. Measured today it is 4 — the type scale was largely adopted
@@ -52,22 +54,22 @@ sits in C6, not C5.
 
 | Surface | Legacy location | New owner | Milestone | Status | Legacy deleted | Checks that migrate |
 | --- | --- | --- | --- | --- | --- | --- |
-| Navigation (9 tabs) | `index.html` `<nav>` L979–1010 | Nav rail, 5 destinations + Pilot + Settings | M2-C2 | ✅ | M3-C10 | all 6 suites (38 refs) |
-| Header bar | `index.html` `<header>` L1013–1050 | Frame (identity, destination, context, status, Pilot) | M2-C2 | ✅ | M3-C10 | `browser_check` |
-| Operating-mode segment | `#op-seg` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `browser_check`, new `shell_check` |
-| Trading-mode segment | `#mode-seg` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `shell_check` (orthogonality) |
-| Market pill / cycle pill | `#market-pill`, `#cycle-pill` | Flight Status popover | M2-C5 | ✅ | M3-C10 | `browser_check` |
-| Scan button | `#scan-btn` | Home primary action + palette + Flight Status | M2-C3 | ✅ | M3-C10 | `browser_check` |
-| Learn button | `#learn-btn` | Contextual help + palette | M2-C3 | ✅ | M3-C10 | `guide_check` |
-| Help menu (6 items) | `#help-menu` | Palette entries | M2-C3 | ✅ all six | M3-C10 | `guide_check` |
-| Paper badge | `nav .paper-wrap` | Flight Status | M2-C5 | ✅ | M3-C10 | `browser_check` |
-| Version indicator | `#ver` | System strip | M2-C2 | ✅ | M3-C10 | `browser_check` |
-| Halt banner | `#halt-banner` | App-scoped banner | M2-C2 | ✅ | M3-C10 | `browser_check` |
+| Navigation (9 tabs) | `index.html` `<nav>` L979–1010 | Nav rail, 5 destinations + Pilot + Settings | M2-C2 | ✅ | M4-C11 (deferred from M3-C10) | all 7 suites |
+| Header bar | `index.html` `<header>` L1013–1050 | Frame (identity, destination, context, status, Pilot) | M2-C2 | ✅ | M4-C11 (deferred) | `browser_check` |
+| Operating-mode segment | `#op-seg` | Flight Status popover | M2-C5 | ✅ | M4-C11 (deferred) | `browser_check`, new `shell_check` |
+| Trading-mode segment | `#mode-seg` | Flight Status popover | M2-C5 | ✅ | M4-C11 (deferred) | `shell_check` (orthogonality) |
+| Market pill / cycle pill | `#market-pill`, `#cycle-pill` | Flight Status popover | M2-C5 | ✅ | M4-C11 (deferred) | `browser_check` |
+| Scan button | `#scan-btn` | Home primary action + palette + Flight Status | M2-C3 | ✅ | M4-C11 (deferred) | `browser_check` |
+| Learn button | `#learn-btn` | Contextual help + palette | M2-C3 | ✅ | M4-C11 (deferred) | `guide_check` |
+| Help menu (6 items) | `#help-menu` | Palette entries | M2-C3 | ✅ all six | M4-C11 (deferred) | `guide_check` |
+| Paper badge | `nav .paper-wrap` | Flight Status | M2-C5 | ✅ | M4-C11 (deferred) | `browser_check` |
+| Version indicator | `#ver` | System strip | M2-C2 | ✅ | M4-C11 (deferred) | `browser_check` |
+| Halt banner | `#halt-banner` | App-scoped banner | M2-C2 | ✅ | M4-C11 (deferred) | `browser_check` |
 | Command palette | ➖ new | `index.html` shell | M2-C3 | ✅ | ➖ | `shell_check` |
 | Symbol jump (`/`) | ➖ new | `index.html` shell | M2-C4 | ✅ | ➖ | `shell_check`, `workspace_check` |
 | System strip | ➖ new | `index.html` shell | M2-C2 | ✅ | ➖ | `shell_check` |
 | Surface Level control | ➖ new | System strip | M1-C6 → M2-C2 | ✅ | ➖ | `shell_check` |
-| Notification inbox | `#notifs` (dashboard panel) | Global inbox | M2-C6 | ✅ | M3-C10 | `shell_check` |
+| Notification inbox | `#notifs` (dashboard panel) | Global inbox | M2-C6 | ✅ | M4-C11 (deferred) | `shell_check` |
 | Toasts | `.notif` / toast helpers | Toast stack, max 3 + `+N more` | M2-C6 | ✅ | ➖ | `shell_check` |
 | Keyboard map + `?` overlay | scattered handlers | One map, one overlay | M2-C7 | ✅ | ➖ | `shell_check` |
 | Pilot panel | ➖ new | `index.html` shell | M2-C2 scaffold / M8-C3 content | 🟡 scaffold | ➖ | `pilot_check` |
@@ -78,13 +80,13 @@ sits in C6, not C5.
 
 | Legacy section | New destination | Milestone | Status | Legacy deleted | Checks that migrate |
 | --- | --- | --- | --- | --- | --- |
-| `#tab-dashboard` | **Home** | M3-C5…C8 | ⬜ | M3-C10 | `browser_check`, `intelligence_check`, new `home_check` |
+| `#tab-dashboard` | **Home** | M3-C5…C8 | ✅ | 🗑️ M3-C10 | `browser_check`, `intelligence_check`, new `home_check` |
 | `#tab-trade` | **Trade** (ticket + chain) | M4-C3…C9 | ⬜ | M4-C11 | `browser_check`, new `trade_check` |
 | `#tab-charts` | **Trade** (chart) + **Research › Explore** | M4-C3 / M6-C2 | ⬜ | M4-C11 | `chart_check` (3 refs) |
 | positions/working/history in `#tab-trade` | **Portfolio** | M5-C2 | ⬜ | M4-C11 | `browser_check` |
 | `#tab-coach` | **Journal › Review** | M5-C4 | ⬜ | M5-C9 | `intelligence_check` (4 refs) |
 | `#tab-journal` | **Journal › Trades** | M5-C4 | ⬜ | M5-C9 | `browser_check` |
-| intel panel (`#intel-panel`) | **Journal › Progress** | M5-C6 | ⬜ | M5-C9 | `intelligence_check` |
+| intel panel (`#intel-panel`) | **Journal › Progress** | M5-C6 | 🟡 moved to the coach tab in M3-C6 (it duplicated Home's H4); rebuilt at M5-C6 | M5-C9 | `intelligence_check` |
 | `#tab-watchlist` | **Research › Watchlist** + context strips | M6-C4 | ⬜ | M6-C8 | `browser_check`, `workspace_check` |
 | `#tab-backtest` | **Research › Backtest** | M6-C3 | ⬜ | M6-C8 | `browser_check` |
 | `#tab-learning` | **Research › Engine** | M6-C5 | ⬜ | M6-C8 | `browser_check` |
@@ -104,7 +106,7 @@ existing CSS class or id it replaces; blank means new.
 | 3 | Input | bare `input`/`textarea` rules | M0-C8 | 🟡 border + focus done; states M4 |
 | 4 | Dropdown / select | bare `select` rules | M0-C4 | 🟡 on semantic tokens |
 | 5 | Segmented control | `.seg`, `.side-seg` | M0-C4 | 🟡 on semantic tokens |
-| 6 | Card / panel → **instrument** | `.panel`, `.cards` | M3-C4 | ⬜ |
+| 6 | Card / panel → **instrument** | `.panel`, `.cards` | M3-C4 | ✅ |
 | 7 | Table | `.wl-*`, `.chain-wrap`, journal table | M4-C5 | ⬜ |
 | 8 | Chart | `#chart-panel`, `CH.*` | M4-C3 | ⬜ |
 | 9 | Navigation rail | `nav` | M2-C2 | ✅ |
@@ -118,8 +120,8 @@ existing CSS class or id it replaces; blank means new.
 | 17 | Popover | `.help-menu` | M2-C5 | ✅ Flight Status |
 | 18 | Modal | confirm dialogs | M4-C7 | ⬜ |
 | 19 | Context menu | ➖ | M5-C2 | ⬜ |
-| 20 | Empty state | `.empty`, `.dash-empty` | M3-C8 | ⬜ |
-| 21 | Skeleton | skeleton loader rules | M3-C8 | ⬜ |
+| 20 | Empty state | `.empty`, `.dash-empty` | M3-C8 | ✅ Home; others M4–M6 |
+| 21 | Skeleton | skeleton loader rules | M3-C8 | ✅ Home; others M4–M6 |
 | 22 | Progress indicator | `#bt-status` | M6-C3 | ⬜ |
 | 23 | Toast | `.notif` | M2-C6 | ✅ |
 | 24 | Banner | `#halt-banner` | M2-C2 | ✅ app-scoped |
@@ -201,7 +203,8 @@ Nothing is deleted before its replacement ships and its checks pass.
 
 | Milestone | Deleted |
 | --- | --- |
-| M3-C10 | Legacy navigation, header, dashboard markup |
+| M3-C10 | ✅ Legacy **dashboard** markup and its render code |
+| ⬜ deferred | Legacy **navigation + header**. Planned for M3-C10; the M3 brief forbade touching navigation, and deleting it removes the shell's rollback path and `shell_check`'s last three assertions. Needs its own commit under its own decision — do it before or with M4-C11. |
 | M4-C11 | Legacy trade + charts markup |
 | M5-C9 | Legacy journal + coach markup |
 | M6-C8 | Legacy watchlist, backtest, learning, settings markup; `index.html` ratchet introduced |
@@ -213,6 +216,7 @@ Nothing is deleted before its replacement ships and its checks pass.
 
 | Date | Milestone | Change |
 | --- | --- | --- |
+| 2026-08-06 | M3-C4…C10 | **M3 complete: Home is rebuilt and the legacy dashboard is deleted.** The `instrument` component landed first (surface, quiet label, recessed interior, concentric radii) with two of its rules enforced by `token_check`, because both read as harmless tidy-ups in review and change what the component IS. Three bands: the status line on the canvas with no housing; ONE metric instrument with five compartments; positions and what-to-do-next; equity at 30 days with the watchlist's required-confidence tick. Bands end at 236/505/757px in a 1080 viewport — the whole page scrolls to 1004, so nothing falls below the fold at 1920×1080 at all. `home_check.py` is the 17th gate and 33 checks, measuring geometry rather than reviewing it. **Six defects found:** H4 rendered two blank rows (the risk records call the field `headline`); Home showed "What to do next" TWICE until the intelligence panel moved to Journal › Review — §5.1's own complaint, re-created by the milestone meant to fix it; `home_ready` waited for *visible* and hung whenever the workspace restored a non-Home tab; the account value overflowed its compartment at 1024px; the guided tour still pointed at five deleted elements; and the notifications empty state's teaching was inside the panel being deleted. **Two of my own gate checks were vacuous and were rewritten** — `instrument_order` returned the expected order whenever the elements existed, so reordering the bands would have passed a check named for DOM order. M0-C4's chart debt retired where it was assigned: the equity curve carried the accent inside a plot area, which DV rule C-6 forbids. **Deviations recorded, not hidden:** the legacy NAVIGATION was not deleted (this milestone's brief forbade touching navigation; it needs its own commit), and the metric cluster wraps at 1280/1024 rather than dropping to four/three with a `[More]`, because an overflow control hides figures on exactly the screens with least room. |
 | 2026-08-06 | M3-C1…C3 | **Home's backend tier, complete; no pixel has moved yet.** `open_risk` — the figure no screen states today — as a MAXIMUM, because every position this broker can hold is long (`open_position` refuses `quantity < 1`) so the premium in it is the most it can lose; loss-to-stop was rejected because the only delta a `Position` persists is its ENTRY snapshot, and a live risk figure from a stale greek states what cannot be evidenced. The status line as a pure module with **the precedence §5.3 leaves open** — halt > rejected > stop > degraded, all four above the first-run welcome, because a greeting that hid a halt would be the sentence lying on the launch where the user has least context to catch it. `HomeService` + `GET /api/v1/home`: six regions from four owners in ONE request (six round trips is six independently shifting regions, the layout jump the milestone exists to remove) but failing **per region**, with `next_actions: None` distinguishing "I could not look" from "no findings". **Spec conflict recorded:** §5.3 says the win-rate floor is 30, §2.9 draws the same card as "0 of 5"; 5 is `MIN_SAMPLE_LOW` and belongs to H4, not to this metric — implemented at 30 (`stats.MIN_SAMPLE_HIGH`, the ladder `intelligence/` already judges itself against). One test deleted for being vacuous: a `FakeBroker` subclass that deletes `current_marks` still inherits it. |
 | 2026-08-06 | M2-C6…C9, C11 | **M2 complete; the shell is the default.** Notification inbox with server-owned read state and a three-deep toast stack; one keyboard map rendered from the registry; the tour retargeted (selectors AND instruction text derived from `DESTINATIONS`); **53** `data-tab` references across six suites replaced by one shared `scripts/shell_nav.py` that clicks real controls. **Three defects found by the suites:** the legacy `nav { width:200px }` element selector was pinning the new rail to 200px inside a 72px track so content painted over it below 1440px (13 rules now scoped to `nav[aria-label="Main"]`); a palette command named a tutorial id that does not exist; three Help-menu items had no palette home. |
 | 2026-08-06 | M2-C1…C5, C10 | **The shell exists, behind a flag that is OFF by default.** Frame, nav rail and system strip as siblings of the legacy chrome, so `body.shell-v2` re-lays-out what is already on the page — no section moves and the flag is a true rollback, asserted as the gate's last three checks. One `DESTINATIONS` registry that the rail, section rails, router, frame title, keyboard map and gate all read. Command palette (Ctrl+K), symbol jump (`/`), Flight Status with the orthogonality sentences. `shell_check.py` landed as the 7th browser suite (33 checks), brought forward from C10's place in the order because it protects everything the rest builds. **Defects found: `Ctrl+K` was already bound to the help centre (V0.6.1) so both dialogs answered it; the shell rendered placeholder text when switched on mid-session because the websocket only pushes on change.** C6–C9 and C11 remain. |

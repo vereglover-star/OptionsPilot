@@ -47,10 +47,67 @@ nobody reads, the app never coming back, and every other test still green.
 16 gates, 2,645 tests. The behaviour itself still needs a real packaged build;
 `docs/AUTO_UPDATER.md` §7 carries the three-case checklist.
 
-## [Uncommitted] — UI V2 M3: Home's backend tier (C1–C3)
+## [Uncommitted] — UI V2 M3: Home (V0.13.0)
 
-*Three commits. No pixel has moved; every figure Home will show now exists,
-is tested, and is served.*
+*Ten commits. The first Flight Deck destination, and the first screen a user
+sees.*
+
+**Three bands, and the count is the design.** The top band is *the state*: one
+sentence saying what is true right now, sitting directly on the canvas with no
+housing around it, and five figures in a single instrument with five
+compartments — not five cards, because five cards read as five objects
+competing for rank whereas one cluster reads as something you scan across. The
+middle band is *what needs you*: open positions with their resting orders, and
+at most three ranked things to do next. The bottom band is *context*: thirty
+days of equity and the watchlist with each symbol's required-confidence tick.
+Nothing else is admitted; every candidate has to displace a resident.
+
+**It fits.** Bands end 236, 505 and 757 pixels into a 1080-pixel viewport — the
+whole screen scrolls to 1004, so at 1920×1080 nothing falls below the fold at
+all. The old Dashboard required scrolling to reach open positions, which are
+the highest-consequence objects on it. That is measured by a new gate rather
+than reviewed.
+
+**The screen says what it can evidence and nothing more.** The win rate stays
+blank and reads "15 of 30" until there are enough closed trades to mean
+anything. Open risk wears a `≥` on the number itself when a position has no
+live mark, because a floor described only in small grey text beside a
+confident figure still reads as exact. What-to-do-next distinguishes "nothing
+is waiting" — a real finding — from "I need about 5 closed trades before I can
+say anything about your trading", and both from "I could not read your
+history", which is never allowed to render as an empty panel.
+
+**Four states, one shape.** Loading, empty, error and populated place the same
+instruments in the same positions; values replace prompts and nothing moves
+when data lands. Skeletons appear only after 200ms, only on a cold load, and
+never carry a shimmer. Errors are region-scoped: a broken broker takes out the
+positions region and leaves the rest of the screen useful.
+
+**Six defects found while building it**, four of them by the gates and two by
+looking at the screen: two blank rows at the top of the ranked list (the risk
+records name that field `headline`); Home rendering "What to do next" *twice*,
+once as its own region and again in the legacy intelligence panel below —
+which is the exact fault this milestone exists to fix, re-created by it; a
+readiness helper that waited for visibility and hung whenever the workspace
+restored a different tab; the account value overflowing its compartment and
+colliding with its neighbour at 1024px; a guided tour still pointing at five
+deleted elements; and the notifications empty state's explanation, which was
+inside the panel being deleted and had to move rather than be lost.
+
+Two of the new gate's own checks were vacuous and were rewritten — one
+returned the expected order whenever the elements existed, so reordering the
+bands would have passed a check named for DOM order.
+
+The legacy dashboard is deleted, markup and render code. **The legacy
+navigation is not**: it was planned for the same commit, but deleting it
+removes the shell's rollback path, and this milestone was told not to touch
+navigation. It needs its own decision.
+
+`scripts/home_check.py` is the 17th gate, 33 checks, geometric rather than
+structural. M0-C4's chart debt is retired where it was assigned: the equity
+curve no longer paints the accent inside a plot area.
+
+### Backend tier (C1–C3)
 
 **Open risk** — the number that answers "how exposed am I", which no current
 screen states and which a user can only reach today by opening Portfolio and
@@ -88,9 +145,6 @@ document puts the win-rate evidence floor at 30 closed trades, the wireframe
 draws the same card as "0 of 5". Five is the *intelligence* region's
 threshold, not this metric's; implemented at 30, which is the ladder
 `intelligence/` already judges its own claims against.
-
-C4–C10 — the instrument component, the three bands, the four states, the
-`home_check.py` gate and the legacy deletions — are not in this entry.
 
 ## [2026-08-06] — About dialog wording cleanup (v0.12.2)
 

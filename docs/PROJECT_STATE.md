@@ -9,42 +9,24 @@ what's next" tracker — keep it current as you work.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0, M1 and M2 are complete; M3 is in
-progress at C4.** `verify.ps1` is green across all **17** gates at **2716
-tests**, with the new shell ON by default.
+**The UI V2 programme is under way. M0–M3 are complete and nothing is in
+progress.** `verify.ps1` is green across all **17** gates at **2716 tests**.
 
-**M3 · Home — C1–C3 done (`895704d`…`4914e19`), C4–C10 remain.** The backend
-tier is complete and serving: `PortfolioService.open_risk`, the status line in
-`services/statusline.py` (eight cases, plus the precedence the design docs do
-not state), and `HomeService` + `GET /api/v1/home` assembling six regions from
-four owners in one request while failing per region. **No pixel has moved** —
-`#tab-dashboard` still holds the legacy markup and nothing consumes the new
-endpoint yet, which is why the milestone is safely resumable here. Remaining:
-C4 the instrument component (reused by every later milestone, so worth
-building carefully), C5–C7 the three bands, C8 the four states, C9
-`scripts/home_check.py`, C10 the legacy dashboard and navigation deletions.
+**M3 · Home — complete (`895704d`…`b6eb00b`).** The first Flight Deck
+destination. Three bands (state / what needs you / context) built on a new
+`instrument` component every later milestone reuses; `GET /api/v1/home`
+assembles six regions from four owners in one request while failing per
+region; four states under one shape invariant; `scripts/home_check.py` as the
+17th gate. The legacy dashboard markup and its render code are deleted.
 
-**The updater took two fixes and the second is not yet released.** v0.12.3
-(unreleased) makes the *installer* the single owner of relaunching after an
-update: it passes our own `/RELAUNCH` switch, `RelaunchRequested` in
-`installer/OptionsPilot.iss` reads it, and a second `[Run]` entry carrying
-`runasoriginaluser` starts the app. Before it, three candidate mechanisms all
-sat inert — `[Run]` skipped by `skipifsilent` under `/VERYSILENT`,
-`RestartApplications=no`, and `relaunch_app()` called by nothing — so an update
-installed correctly and the app never came back. `/RESTARTAPPLICATIONS` is gone;
-Restart Manager can only restart a process it closed, and this app closes
-itself. **Confirmed on a real packaged build only up to the install**; the
-relaunch itself still needs one (`docs/AUTO_UPDATER.md` §7 has the three cases).
-
-The first fix, `76c1059`, shipped in v0.12.1 and is **confirmed working on a
-real packaged build** (v0.12.1 → v0.12.2, 2026-08-06): the updater hung on
-"Installing…" because its shutdown hook destroyed the window directly, and
-`_DesktopController.on_closing` cancels every close it did not sanction — so the
-update silently became a hide-to-tray, the process kept the exe locked, and the
-installer could never replace it. It now routes through `exit()`, the one owner
-of `allow_close`. The measured result: app closed correctly, installer
-completed, new version present, data and settings preserved. Only the relaunch
-was missing, which is what v0.12.3 above fixes.
+**Two deviations from the plan, both deliberate and both recorded in
+`UI_MIGRATION_TRACKER.md`:** the legacy **navigation** was scheduled for
+M3-C10 and was NOT deleted — the milestone's brief forbade touching
+navigation, and removing it takes the shell's rollback path and
+`shell_check`'s last three assertions with it, so it needs its own decision.
+And the metric cluster **wraps** below 1280 rather than dropping to four then
+three metrics with a `[More]` control, because an overflow control hides
+figures on exactly the screens with least room to go looking.
 
 ### The UI V2 redesign (2026-08-05 —)
 

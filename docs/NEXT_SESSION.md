@@ -5,51 +5,40 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-06, on closing **UI V2 · M2 — the shell**, C1…C11.
+**Last updated:** 2026-08-06, on closing **UI V2 · M3 — Home**, C1…C10.
 
 ## What to do next
 
-**Continue UI V2 · M3 — Home at C4.** C1–C3 (the backend tier) are done and
-committed: `open_risk` on `PortfolioService`, the status line in
-`services/statusline.py`, and `HomeService` + `GET /api/v1/home` with the
-contract check extended to a real round trip. **No pixel has moved yet** —
-`#tab-dashboard` still holds the legacy markup and nothing consumes the new
-endpoint. C4 (the instrument component) is next and is the piece every later
-milestone reuses, so it is worth building carefully.
-
-Two things C4+ inherits: the win-rate floor is 30 (`stats.MIN_SAMPLE_HIGH`)
-and the wireframe's "0 of 5" is a different threshold belonging to H4 — see
-the M3 tracker row; and `HomeView.errors` names failing regions, so the four
-states (C8) render per region rather than per screen.
-
-
-`docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
+**Start UI V2 · M4 — Trade**, the most valuable milestone in the programme
+(`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next).
 `verify.ps1` is green across **17 gates** at 2716 tests.
 
-**Owed first, and it needs a human:** the updater's *relaunch* fix (v0.12.3,
-unreleased) has no automated proof and cannot have one — `verify.ps1` does not
-compile the `.iss`, so the Python and Inno halves are only checked against each
-other as text. Release it, then run the three cases in `docs/AUTO_UPDATER.md` §7
-(interactive install, silent update, silent install without `/RELAUNCH`).
+**M3 is complete.** Home is rebuilt on the shell and the legacy dashboard is
+deleted. Two things it deliberately did NOT do, both recorded in
+`UI_MIGRATION_TRACKER.md` §9, and the first needs a decision before M4-C11:
 
-The shutdown fix that preceded it (`76c1059`, v0.12.1) **is** confirmed on a
-real packaged build: v0.12.1 → v0.12.2 closed cleanly, installed, and preserved
-data. Only the relaunch was missing.
+1. **The legacy navigation and header are still in the file.** They were
+   scheduled for M3-C10. Deleting them removes the shell's rollback path and
+   `shell_check`'s last three assertions, and the M3 brief forbade touching
+   navigation. The one-release requirement (`UI_V2_DESIGN.md` §16 Phase 2) is
+   satisfied — v0.12.0 shipped the shell — so it is unblocked, not blocked.
+   Replace those three assertions rather than deleting them, or the flag stops
+   meaning anything.
+2. **The metric cluster wraps below 1280** rather than dropping to four then
+   three metrics with `[More]`, per §2.12. Revisit if M7's Surface Level work
+   gives a better home for an overflow.
 
-Three things M3 inherits and must honour:
+Reusable from M3, and worth reading before writing M4's markup: the
+`instrument` component (`.ins`, `.ins-well`, `.ins-cluster`) with its two
+invariants enforced in `token_check.py`, and `scripts/home_check.py` as the
+model for a destination gate that measures geometry rather than structure.
 
-1. **M3-C10 deletes the legacy navigation and header.** The one release
-   `UI_V2_DESIGN.md` §16 Phase 2 requires has elapsed by then. `shell_check`'s
-   last three assertions are the rollback and they go with it; replace them
-   rather than deleting them, or the flag stops meaning anything.
-2. **Build from the registry.** `DESTINATIONS` in `index.html` is what the
-   rail, section rails, router, frame title, palette, keyboard map, tour
-   retargeting and `shell_nav.py` all read. Rebuilding Home is editing one row
-   plus new markup inside `#tab-dashboard` — nothing in the shell should need
-   to change.
-3. **Portfolio still BORROWS.** It relocates the ticket's
-   positions/working/history block on entry and returns it on exit. M5 gives it
-   real markup; until then, moving those ids breaks two destinations.
+## What M3 delivered
+
+Home, rebuilt: three bands on a new `instrument` component, one
+`/api/v1/home` payload with per-region failure, four states under one shape
+invariant, and `home_check.py` as the 17th gate. The legacy dashboard is
+deleted; the legacy navigation is not (see above).
 
 ## What M2 delivered
 
