@@ -1533,8 +1533,29 @@ html.gd-nomotion #gd-ring::after { display:none; }
    a hard acceptance criterion verified by `scripts/home_check.py`, not an
    aspiration — which is why nothing here uses a fixed height that would let
    the bands overflow silently. */
-#home { display:none; }
-body.shell-v2 #home { display:block; }
+/* ── how a destination is made visible, and why it is expressed this way ──
+   A visibility rule may only ever HIDE. It must never assert a positive
+   display mode, because `display` is the destination's own layout and the
+   two will collide — silently, and in the direction that looks fine.
+
+   This was `#home { display:none }` plus `body.shell-v2 #home {
+   display:block }`, and that second rule (0,1,1,1) outranked `.home`
+   (0,0,1,0). So `.home`'s `display:flex` never applied, its
+   `gap:var(--space-6)` was inert, and all three bands rendered touching at
+   0px — measured, not inferred. The page read as one undifferentiated slab
+   because the 32px that separates its bands had never once been drawn.
+
+   Stated as a negative — hide when the flag is OFF — the rule can no longer
+   compete: when the shell is on it simply does not match, and the layout
+   class is the only thing setting `display`. Every destination M4-M6 builds
+   inherits this shape, which is the point; the previous shape would have
+   handed each of them the same defect.
+
+   Worth recording how it survived: `home_check.py` asserts bands 1 and 2 fit
+   above the fold, and a page missing 64px of gap satisfies that MORE easily.
+   The gate was not merely silent about the defect, it was biased towards it.
+   The rhythm assertion added in this commit is the counterweight. */
+body:not(.shell-v2) #home { display:none; }
 /* A CLASS, not an id, because it brackets the legacy blocks on either side of
    `#intel-panel`. The intelligence panel is not part of the dashboard layout
    Home replaces — M5 relocates it to Journal › Progress — so it stays visible

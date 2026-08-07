@@ -81,6 +81,27 @@ EMPTY = {
 }
 
 
+#: The gap between consecutive bands, measured from the rendered boxes and
+#: compared against the token's own computed value rather than a literal 32.
+#: A hard-coded number here would be a second place holding one fact, and the
+#: one it would disagree with is the design system.
+RHYTHM_JS = """() => {
+  const home = document.getElementById('home');
+  const expected = parseFloat(getComputedStyle(home)
+    .getPropertyValue('--space-6')) || 0;
+  const kids = Array.from(home.children).filter(
+    e => e.getBoundingClientRect().height > 0);
+  const gaps = [];
+  for (let i = 1; i < kids.length; i++) {
+    gaps.push(+(kids[i].getBoundingClientRect().top -
+                kids[i - 1].getBoundingClientRect().bottom).toFixed(1));
+  }
+  return {expected: expected, gaps: gaps, count: kids.length,
+          ok: expected > 0 && gaps.length >= 3 &&
+              gaps.every(g => Math.abs(g - expected) <= 1)};
+}"""
+
+
 def _position(symbol="SPY", strike=470.0, right="call", qty=1, avg=3.0,
               mark=3.5, pnl=50.0):
     return {"contract": f"{symbol}260918C00470000", "underlying": symbol,
@@ -225,6 +246,19 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
         c.check(f"open positions are reachable without scrolling at {width}",
                 pos <= height, f"positions end at {pos:.0f}px")
         page.close()
+
+    # ── the vertical rhythm actually exists (M3.5-C3) ────────────────────────
+    # The counterweight to the fold assertions above. Those reward a page that
+    # gets SHORTER, so when `.home`'s `gap` was silently inert and all three
+    # bands rendered touching at 0px, every one of them passed more easily.
+    # A gate that can only be satisfied by collapsing needs a partner that
+    # fails on collapse, or the suite is biased towards the defect.
+    page = open_home(browser, base, FULL, console=console)
+    rhythm = page.evaluate(RHYTHM_JS)
+    c.check("the bands are separated by exactly one --space-6",
+            rhythm["ok"], f"expected {rhythm['expected']}px, measured "
+                          f"{rhythm['gaps']}")
+    page.close()
 
     # ── 5-6: band 2 never reverses ───────────────────────────────────────────
     for width in (1920, 1024):
