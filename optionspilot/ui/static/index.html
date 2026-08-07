@@ -1650,6 +1650,69 @@ html.gd-nomotion #gd-ring::after { display:none; }
   color:transparent; display:inline-block; min-width:48px; }
 .ins-skel::after { content:"\00a0"; }
 
+/* ══ THE TRADE WORKSPACE (M4-C3) ══════════════════════════════════════════
+   Three regions always present, built from M3.5's parts rather than new ones:
+   `.dest-split` for the columns and the seam, `.ins` for the housing, the
+   tier system for the ranking. Trade's vertical seam is therefore the SAME
+   line as Home's, at the same ratio, which is the whole reason `--split-major`
+   was made a token.
+
+   The fill-the-viewport chain is M3.5-C9's, reused verbatim: the section takes
+   the content height, the workspace takes the section, and the region with
+   content to grow into takes the slack. On Home that was band 3; here it is
+   the chart, because a chart is the one element on this screen that is
+   strictly more useful larger. */
+body:not(.shell-v2) #trade-ws-hidden { display:none; }
+body.shell-v2 #tab-trade { height:100%; }
+/* Home already states the account. A second copy on Trade is the duplicate
+   rendering the architecture rules forbid, so the legacy card strip is hidden
+   under the shell rather than maintained in two places. */
+body.shell-v2 #acct-cards { display:none; }
+
+.trade-ws { height:100%; align-items:stretch; }
+.trade-main { display:flex; flex-direction:column; gap:var(--space-5);
+  min-height:0; }
+
+/* The chart is dominant by AREA and the ticket is focal by ELEVATION. Two
+   channels, no competition: size says "look here to understand", elevation
+   says "act here". */
+/* 68/32, not 58/42. The gate measured the first attempt and found the ticket
+   the largest region on the screen — a full-height column beats a wide-but-
+   short chart on area, so "the chart is dominant" was false while looking
+   plausible. It is also right on the merits: a chain is a list you SCAN and
+   it scrolls its own body, so it needs a usable minimum rather than a
+   proportional share, whereas a chart is the one region here that is strictly
+   more useful larger. */
+#trade-chart { display:flex; flex-direction:column; min-height:0;
+  flex:1 1 68%; }
+#trade-chart .ins-well { flex:1 1 auto; min-height:220px; }
+#trade-chart .ins-well > * { width:100%; height:100%; }
+
+#trade-chain { display:flex; flex-direction:column; min-height:0;
+  flex:1 1 32%; min-height:260px; }
+/* The chain scrolls its own body rather than the page, for the reason M3.5-C9
+   established on Positions: a region that can be arbitrarily long must take
+   the height it is given and scroll inside it, or it pushes everything below
+   it off the screen. A chain is the longest region in the product. */
+#trade-chain .chain-wrap { flex:1 1 auto; min-height:0; overflow-y:auto; }
+
+#trade-ticket { display:flex; flex-direction:column; min-height:0;
+  overflow-y:auto; }
+/* §6.1's last named fault, reversed: "positions, working orders and history
+   are stacked below the ticket, so the ticket column becomes a long scroll
+   containing four unrelated things." They are hidden HERE rather than moved,
+   because Portfolio borrows these exact nodes (M2-C2) and moving them would
+   break the borrow a milestone before M5 replaces it. The selector is
+   positional — `#trade-ticket #pf-blocks` — so the moment Portfolio relocates
+   the block into `#pf-host`, the rule stops matching and it renders normally.
+   Hiding by position rather than by class is what makes one set of nodes able
+   to be absent from one destination and present in another. */
+body.shell-v2 #trade-ticket #pf-blocks { display:none; }
+
+/* Below the split point the three regions stack in workflow order — chart,
+   chain, ticket — which is the order §6.7 walks them in. It never reverses. */
+@media (max-width:1023px) { .trade-ws { height:auto; } }
+
 /* ══ HOME (M3-C5…C8) ══════════════════════════════════════════════════════
    Three bands. Bands 1 and 2 fit above the fold at 1920x1080 AND 1440x900;
    band 3 is the only part permitted to fall below (§2.2). That commitment is
@@ -2512,17 +2575,38 @@ body.shell-v2 .home-legacy { display:none; }
   <!-- TRADE (manual paper trading) -->
   <section id="tab-trade" style="display:none">
     <div class="cards" id="acct-cards"></div>
-    <div class="tk-chart-wrap">
-      <button class="tk-chart-toggle" id="tk-chart-toggle" aria-expanded="false"
-              aria-controls="tk-chart-slot">
-        <span id="tk-chart-caret">▸</span> Chart
-        <span class="hint" style="display:inline">— the same symbol, drawings and indicators as the Charts tab</span>
-      </button>
-      <div id="tk-chart-slot" style="display:none"></div>
-    </div>
-    <div class="grid2">
-      <div class="panel">
-        <h2>Option chain</h2>
+
+    <!-- ══ THE TRADE WORKSPACE (M4-C3) ═══════════════════════════════════
+         One destination, three regions that are ALWAYS present: chart above
+         chain on the left, ticket on the right. §6.2's shape, and the reason
+         it is one screen rather than three is §6.1's first named fault — the
+         flow used to span two destinations with a collapsible chart as a
+         bridge.
+
+         It is built from what M3.5 established rather than from new parts:
+         `.dest-split` supplies the column ratio and the seam, so Trade's
+         vertical seam is the SAME line as Home's; `.ins` supplies the region
+         housing; and the tier system supplies the ranking. Nothing here is a
+         Trade-only layout primitive.
+
+         **The chart is dominant by AREA; the ticket is focal by ELEVATION.**
+         Those are different channels and they do not compete: size says
+         "look here to understand", elevation says "act here". At most one
+         `.ins--focal` per destination (DESIGN_SYSTEM_V2.md §6.6) and on Trade
+         it is the ticket, because the ticket is where money is committed. -->
+    <div class="trade-ws dest-split">
+      <div class="trade-main">
+        <div class="ins" id="trade-chart">
+          <div class="ins-head">
+            <span class="ins-label">Chart</span>
+            <button class="ins-act" id="tk-chart-toggle" aria-expanded="true"
+                    aria-controls="tk-chart-slot">Hide</button>
+          </div>
+          <div class="ins-well flush" id="tk-chart-slot"></div>
+        </div>
+
+        <div class="ins" id="trade-chain">
+          <h2 class="sr-only">Option chain</h2>
         <div class="wl-tools" style="margin-top:0">
           <input id="tk-symbol" placeholder="Symbol (e.g. SPY)" value="SPY" style="width:130px">
           <span class="seg" id="tk-right">
@@ -2536,11 +2620,19 @@ body.shell-v2 .home-legacy { display:none; }
         <div id="tk-chain" class="chain-wrap">
           <div class="empty">Load a chain to pick a contract.</div>
         </div>
+        </div>
       </div>
-      <div class="panel">
-        <h2>Order ticket <button class="panel-help" data-tutorial="trade"
-              aria-label="Learn how the order ticket works">?</button>
-          <span class="hint" style="display:inline">— paper only, fills vs delayed quotes each scan cycle</span></h2>
+
+      <!-- The ticket. Always present, which is §6.1's second named fault
+           reversed: it used not to exist until a contract was chosen, so a
+           user could not see what an order involved until after committing
+           to one. The shape of the decision is visible before the decision. -->
+      <div class="ins ins--focal" id="trade-ticket">
+        <div class="ins-head">
+          <span class="ins-label">Order ticket</span>
+          <button class="ins-act panel-help" data-tutorial="trade"
+                  aria-label="Learn how the order ticket works">?</button>
+        </div>
         <div id="tk-selected" class="empty">Click a chain row to select a contract.</div>
         <form id="tk-form" style="display:none; margin-top:var(--space-1)">
           <div class="side-seg" id="tk-side-seg">
@@ -8293,7 +8385,9 @@ function openChart(symbol) { switchTab("charts"); loadChart(symbol); }
 /* Trade-tab chart: the ONE chart instance is relocated between the Charts
    workspace and the Trade page's collapsible slot. Because it is the same
    instance, symbol / timeframe / drawings / indicators are shared for free. */
-let tkChartOpen = localStorage.getItem("tkChartOpen") === "1";
+// Default OPEN (M4-C3). `!== "0"` rather than `=== "1"`, so an
+// installation that never touched the control gets the chart.
+let tkChartOpen = localStorage.getItem("tkChartOpen") !== "0";
 const chHome = () => $("tab-charts");
 const chOnScreen = () => $("tab-charts").style.display !== "none" ||
   ($("tab-trade").style.display !== "none" && tkChartOpen);
@@ -8302,10 +8396,22 @@ function chReparent(target) {
   if (panel.parentElement !== target) target.appendChild(panel);
   requestAnimationFrame(() => { if (CH.main) chDrawRender(); });   // autoSize + redraw
 }
+/* M4-C3: the chart is OPEN by default on Trade and the control says what it
+   will do rather than which way a caret points. §6.1's first named fault is
+   that charting and trading lived in two places with a collapsible chart as
+   the bridge — a bridge that defaults to closed is the same fault with an
+   extra click. The toggle stays, because a user working a chain on a small
+   screen has a real reason to reclaim the height; it just no longer decides
+   what the destination is FOR. */
 function tkChartApply() {
   const onTrade = $("tab-trade").style.display !== "none";
-  $("tk-chart-toggle").setAttribute("aria-expanded", String(tkChartOpen));
+  const btn = $("tk-chart-toggle"), host = $("trade-chart");
+  btn.setAttribute("aria-expanded", String(tkChartOpen));
+  btn.textContent = tkChartOpen ? "Hide" : "Show";
   $("tk-chart-slot").style.display = tkChartOpen ? "" : "none";
+  // The region stops claiming its share of the column when its body is gone,
+  // so the chain grows into the space instead of leaving a labelled gap.
+  if (host) host.style.flex = tkChartOpen ? "" : "0 0 auto";
   if (onTrade && tkChartOpen) {
     chReparent($("tk-chart-slot"));
     loadChart();          // one context: nothing to sync, just render it

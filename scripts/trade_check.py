@@ -145,6 +145,103 @@ def open_trade(browser, base, *, width=1920, height=1080, console=None,
     return page
 
 
+# ── 1-2. What symbol am I looking at, and what is happening? ─────────────────
+
+WORKSPACE_JS = """() => {
+  const box = id => {
+    const e = document.getElementById(id);
+    if (!e) return null;
+    const b = e.getBoundingClientRect();
+    const cs = getComputedStyle(e);
+    return {x: +b.left.toFixed(1), r: +b.right.toFixed(1),
+            y: +b.top.toFixed(1), b: +b.bottom.toFixed(1),
+            w: +b.width.toFixed(1), h: +b.height.toFixed(1),
+            area: +(b.width * b.height).toFixed(0),
+            visible: cs.display !== 'none' && cs.visibility !== 'hidden'
+                     && b.width > 0 && b.height > 0,
+            focal: e.classList.contains('ins--focal')};
+  };
+  return {chart: box('trade-chart'), chain: box('trade-chain'),
+          ticket: box('trade-ticket'),
+          focals: document.querySelectorAll('#tab-trade .ins--focal').length,
+          pfInTicket: !!document.querySelector('#trade-ticket #pf-blocks')
+                      && getComputedStyle(
+                           document.querySelector('#trade-ticket #pf-blocks')
+                         ).display !== 'none'};
+}"""
+
+
+def check_workspace(browser, base, c: Checks, console: list) -> None:
+    """The three regions of §6.2, all present at once (M4-C3).
+
+    Fails against the previous build on every assertion: the chart lived
+    behind a collapsed toggle that defaulted to CLOSED, so a user arriving at
+    Trade saw a chain and a ticket and had to know to expand a chart — §6.1's
+    first named fault, that the flow spans two destinations with a
+    collapsible chart as the bridge.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()))
+    w = page.evaluate(WORKSPACE_JS)
+
+    for name in ("chart", "chain", "ticket"):
+        c.check(f"the {name} is present without being expanded first",
+                w[name] is not None and w[name]["visible"],
+                str(w[name]))
+    if not all(w[k] and w[k]["visible"] for k in ("chart", "chain", "ticket")):
+        page.close()
+        return
+
+    # The chart is dominant by AREA and the ticket is focal by ELEVATION.
+    # Two channels; asserting both is what stops one being traded for the
+    # other in a later "tidy-up".
+    c.check("the chart is the largest region on the screen",
+            w["chart"]["area"] > w["chain"]["area"]
+            and w["chart"]["area"] > w["ticket"]["area"],
+            f"chart={w['chart']['area']} chain={w['chain']['area']} "
+            f"ticket={w['ticket']['area']}")
+    c.check("exactly one region is focal, and it is the ticket",
+            w["focals"] == 1 and w["ticket"]["focal"],
+            f"{w['focals']} focal regions; ticket focal={w['ticket']['focal']}")
+
+    # Workflow order: chart above chain, ticket to the right of both.
+    c.check("the chain sits below the chart, not beside it",
+            w["chain"]["y"] >= w["chart"]["b"] - 1,
+            f"chart ends {w['chart']['b']}, chain starts {w['chain']['y']}")
+    c.check("the ticket is the last step, to the right of the workspace",
+            w["ticket"]["x"] >= w["chart"]["r"] - 1,
+            f"chart ends {w['chart']['r']}, ticket starts {w['ticket']['x']}")
+
+    # §6.1's last named fault: the ticket column became a long scroll holding
+    # four unrelated things.
+    c.check("positions, orders and history are not stacked in the ticket",
+            not w["pfInTicket"])
+
+    page.close()
+
+
+def check_seam_matches_home(browser, base, c: Checks, console: list) -> None:
+    """Trade's column seam is Home's column seam (M4-C3).
+
+    The point of making `--split-major` a token in M3.5-C4 was that the next
+    destination would inherit the line rather than pick its own. This is the
+    assertion that the inheritance actually happened — and it is the one most
+    likely to be broken by a future destination written in a hurry.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()))
+    trade_seam = page.eval_on_selector(
+        "#trade-ticket", "e => +e.getBoundingClientRect().left.toFixed(1)")
+    goto(page, "dashboard")
+    page.wait_for_timeout(900)
+    home_seam = page.eval_on_selector(
+        "#home-next", "e => +e.getBoundingClientRect().left.toFixed(1)")
+    c.check("Trade's column seam is the same line as Home's",
+            abs(trade_seam - home_seam) <= 1,
+            f"Trade {trade_seam}, Home {home_seam}")
+    page.close()
+
+
 # ── 3. What contracts are available? ─────────────────────────────────────────
 
 def check_expiry_labels(browser, base, c: Checks, console: list) -> None:
@@ -213,8 +310,6 @@ def check_expiry_labels(browser, base, c: Checks, console: list) -> None:
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
-        "1. What symbol am I looking at? (M4-C3)",
-        "2. What is happening right now? (M4-C3)",
         "4. Which contract matches my intent? (M4-C6)",
         "5. What will this trade cost? (M4-C4/C7)",
         "6. What is my actual risk? (M4-C7)",
@@ -224,6 +319,8 @@ def check_workflow_sections(c: Checks) -> None:
 
 
 def run_checks(browser, base: str, c: Checks, console: list) -> None:
+    check_workspace(browser, base, c, console)
+    check_seam_matches_home(browser, base, c, console)
     check_expiry_labels(browser, base, c, console)
     check_workflow_sections(c)
 
