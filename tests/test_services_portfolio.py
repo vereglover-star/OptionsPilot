@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from optionspilot.services.portfolio import (
-    ET, PortfolioService, max_drawdown_pct, pnl_windows, setup_history,
+    ET, PortfolioService, max_drawdown_pct, open_risk, pnl_windows, setup_history,
 )
 
 
@@ -179,3 +179,114 @@ class TestSetupHistory:
                   FakeTrade(-10.0, NOW, quality="B", win=False),
                   FakeTrade(-10.0, NOW, quality="B", win=False)]
         assert setup_history(trades)["B"] == {"trades": 3, "win_rate": 0.333}
+
+
+class FakeContract:
+    def __init__(self, symbol="SPY260918C00450000"):
+        self.symbol = symbol
+
+
+class FakePosition:
+    """Only what `open_risk` reads. Long-only, because the broker is:
+    `PaperBroker.open_position` refuses `quantity < 1`."""
+
+    def __init__(self, symbol="SPY260918C00450000", quantity=1, avg_price=3.00):
+        self.contract = FakeContract(symbol)
+        self.quantity = quantity
+        self.avg_price = avg_price
+
+
+class TestOpenRisk:
+    """M3-C1. The figure no current screen states, and the one Home puts third.
+
+    It is a MAXIMUM, and that is the whole design: every position this broker
+    can hold is long, so the premium in it is the most it can lose, and the
+    mark is that premium. See `OpenRiskView` for why loss-to-stop was rejected
+    (it needs a delta, and the only delta a Position persists is its entry
+    snapshot — a live claim from a stale greek).
+    """
+
+    def test_it_is_the_premium_at_stake(self):
+        risk = open_risk([FakePosition(quantity=2, avg_price=3.00)],
+                         {"SPY260918C00450000": 4.20}, 10_000.0)
+        assert risk.dollars == pytest.approx(840.0)     # 4.20 * 2 * 100
+        assert risk.pct_of_account == pytest.approx(8.4)
+        assert risk.positions == 1 and risk.marked == 1
+
+    def test_no_positions_is_zero_and_not_a_percentage_of_nothing(self):
+        risk = open_risk([], {}, 10_000.0)
+        assert risk.dollars == 0.0
+        assert risk.pct_of_account == 0.0
+        assert risk.positions == 0 and risk.marked == 0
+
+    def test_a_missing_mark_falls_back_to_the_entry_price(self):
+        risk = open_risk([FakePosition(quantity=1, avg_price=2.50)], {}, 10_000.0)
+        assert risk.dollars == pytest.approx(250.0)
+        assert risk.marked == 0, "an un-marked position must be reported as such"
+
+    def test_a_partially_marked_book_says_how_many_were_marked(self):
+        positions = [FakePosition("AAA", 1, 1.00), FakePosition("BBB", 1, 2.00)]
+        risk = open_risk(positions, {"AAA": 1.50}, 10_000.0)
+        assert risk.dollars == pytest.approx(350.0)     # 1.50*100 + 2.00*100
+        assert risk.positions == 2 and risk.marked == 1
+
+    def test_zero_equity_has_no_percentage_rather_than_zero_percent(self):
+        """"0% of your account is at risk" is false for an account holding
+        positions with no equity. Same rule as `profit_factor`: insufficient
+        evidence is `None`, never a comfortable number."""
+        risk = open_risk([FakePosition(quantity=1, avg_price=5.00)], {}, 0.0)
+        assert risk.dollars == pytest.approx(500.0)
+        assert risk.pct_of_account is None
+
+    def test_negative_equity_also_has_no_percentage(self):
+        risk = open_risk([FakePosition()], {}, -250.0)
+        assert risk.pct_of_account is None
+
+    def test_a_negative_mark_cannot_offset_a_real_exposure(self):
+        """An option does not trade below zero, but a provider is allowed to be
+        wrong, and a negative contribution would quietly cancel out risk that
+        genuinely exists somewhere else in the sum."""
+        positions = [FakePosition("AAA", 1, 1.00), FakePosition("BBB", 1, 1.00)]
+        risk = open_risk(positions, {"AAA": -5.00, "BBB": 2.00}, 10_000.0)
+        assert risk.dollars == pytest.approx(200.0)
+
+    def test_it_serialises_without_infinities(self):
+        """`json.dumps` emits `Infinity`/`NaN`, neither of which is valid JSON
+        and both of which kill a browser parse."""
+        risk = open_risk([FakePosition()], {}, 0.0)
+        assert json.loads(json.dumps(risk.to_dict()))["pct_of_account"] is None
+
+    def test_the_service_reads_the_broker_under_its_lock(self):
+        broker = FakeBroker(account=FakeAccount(equity=20_000.0),
+                            positions=[FakePosition(quantity=1, avg_price=4.00)],
+                            marks={"SPY260918C00450000": 6.00})
+        risk = build(broker).open_risk()
+        assert risk.dollars == pytest.approx(600.0)
+        assert risk.pct_of_account == pytest.approx(3.0)
+
+    def test_a_broker_without_marks_still_answers(self):
+        """`current_marks` is optional on the duck-typed broker — a replay or a
+        backtest host may not implement it, and `open_risk` guards with
+        `hasattr` exactly like `positions()` and `performance()` do.
+
+        Written as a standalone class rather than a `FakeBroker` subclass: a
+        subclass that deletes the attribute still INHERITS it, so `hasattr`
+        stays True and the guard is never reached. The first version of this
+        test did that and passed while testing nothing.
+        """
+        class Markless:
+            def __init__(self, account, positions):
+                self._account, self._positions = account, positions
+
+            def get_account(self):
+                return self._account
+
+            def get_positions(self):
+                return list(self._positions)
+
+        broker = Markless(FakeAccount(equity=10_000.0),
+                          [FakePosition(quantity=1, avg_price=3.00)])
+        assert not hasattr(broker, "current_marks"), "the guard is not exercised"
+        risk = build(broker).open_risk()
+        assert risk.dollars == pytest.approx(300.0)
+        assert risk.marked == 0

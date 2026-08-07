@@ -128,6 +128,44 @@ class PnLWindowsView(ViewModel):
     month: float
 
 
+@dataclass(frozen=True, slots=True)
+class OpenRiskView(ViewModel):
+    """How much of the account is currently exposed. New in M3.
+
+    **`dollars` is the MAXIMUM loss, and that is a deliberate choice.** Every
+    position this broker can hold is long — `PaperBroker.open_position` refuses
+    `quantity < 1` and `close_position` caps at the quantity held — so the most
+    a position can lose is the premium currently in it, and the mark is that
+    premium. The number is therefore a measurement, not a model.
+
+    The alternative was loss-to-stop, which `RiskManager._position_size`
+    estimates from delta when it sizes a trade. It was rejected for Home for two
+    reasons. The stop is on the UNDERLYING, so converting it to an option loss
+    needs a delta — and the only delta a `Position` persists is the one from its
+    entry snapshot, which is stale by exactly as long as the position has been
+    open. Reporting a live risk figure from a stale greek is stating what cannot
+    be evidenced (`UI_V2_DESIGN.md` P3). The second reason is direction: a
+    maximum overstates exposure, and if this number must be wrong, P6 says be
+    wrong in the direction that does not surprise someone about money.
+
+    `pct_of_account` is `None`, never `0.0`, when equity is zero or negative.
+    "0% of your account is at risk" is false for an account with positions and
+    no equity; there is simply no percentage to state. Same rule as
+    `PerformanceView.profit_factor`.
+
+    `marked` counts how many positions had a live mark. When it is below
+    `positions`, the rest fell back to their entry price — the same fallback
+    `PortfolioService.positions()` uses, so the two never disagree — and the
+    figure is a floor rather than a current valuation. A client that wants to
+    say "as of" has what it needs to know it must.
+    """
+
+    dollars: float
+    pct_of_account: float | None
+    positions: int
+    marked: int
+
+
 # ── watchlist ────────────────────────────────────────────────────────────────
 
 

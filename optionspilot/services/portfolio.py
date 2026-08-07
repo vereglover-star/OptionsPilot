@@ -30,7 +30,7 @@ from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from optionspilot.services.viewmodels import (
-    AccountView, PerformanceView, PnLWindowsView, PositionView,
+    AccountView, OpenRiskView, PerformanceView, PnLWindowsView, PositionView,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -99,6 +99,42 @@ def pnl_windows(trades, now_et: datetime) -> PnLWindowsView:
                           month=since(month_start))
 
 
+def open_risk(positions, marks, equity: float) -> OpenRiskView:
+    """Capital currently exposed, in dollars and as a share of the account.
+
+    Pure, like every other helper in this module: positions and marks in, a view
+    model out. The service method below is the only part that touches a lock.
+
+    `marks.get(symbol, avg_price)` is not a convenience — it is the SAME
+    fallback `position_view` uses. Two fallbacks for one missing mark would give
+    a position's row and the risk total two different opinions of what it is
+    worth, and the user would have no way to tell which one lied. `marked`
+    reports how often the fallback was taken so a client can say so.
+
+    See `OpenRiskView` for why this is a maximum and why the percentage is
+    `None` rather than zero on a zero-equity account.
+    """
+    total = 0.0
+    marked = 0
+    count = 0
+    for position in positions:
+        count += 1
+        symbol = position.contract.symbol
+        mark = marks.get(symbol)
+        if mark is None:
+            mark = position.avg_price
+        else:
+            marked += 1
+        # Long-only: the premium in the position IS the maximum loss. A
+        # negative mark is not a thing an option trades at, but a provider is
+        # allowed to be wrong, and negative risk would silently offset a real
+        # exposure elsewhere in the sum.
+        total += max(0.0, mark * position.quantity * 100)
+    pct = round(total / equity * 100, 2) if equity > 0 else None
+    return OpenRiskView(dollars=round(total, 2), pct_of_account=pct,
+                        positions=count, marked=marked)
+
+
 def setup_history(trades) -> dict:
     """Measured win rate per setup quality — the honest 'estimated probability
     of success'. Absent, not zero, for a quality with no closed trades."""
@@ -146,6 +182,20 @@ class PortfolioService:
         with self._lock:
             trades = self._trades()
         return pnl_windows(trades, now_et)
+
+    def open_risk(self) -> OpenRiskView:
+        """Exposure right now. Takes the lock; the arithmetic runs outside it.
+
+        Same split as `performance()` and for the same reason: the broker reads
+        are orchestrator-owned mutable state, the sum is not, and widening the
+        lock to cover arithmetic lets a slow read block a scan.
+        """
+        with self._lock:
+            positions = list(self._broker.get_positions())
+            marks = (self._broker.current_marks()
+                     if hasattr(self._broker, "current_marks") else {})
+            equity = self._broker.get_account().equity
+        return open_risk(positions, marks, equity)
 
     def setup_history(self) -> dict:
         return setup_history(self._trades())
