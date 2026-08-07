@@ -4,6 +4,87 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
+## [2026-08-07] — UI V2 M3.5: Home polish, and six defects underneath it
+
+*A refinement milestone, run before M4 so that Trade, Portfolio, Research,
+Journal and Settings inherit a corrected design language rather than a
+plausible one. No backend changed: `/api/v1/home`, every service and every
+contract are byte-identical to M3. Ten commits, all CSS, markup and gates.*
+
+**The review that started it reported three things that turned out to be
+bugs with an exact cause**, not matters of taste — which is why the milestone
+is split into a defect phase and a design phase.
+
+**P0 — the defects.**
+
+*The navigation rail's icons were being sliced in half.* `list-style:none`
+removes a list's markers but not the user agent's 40px inline-start padding,
+and `.shell-rail ul` never reset it. At 200px that is invisible slack; at 72
+and 56 it pushed the icon column past the rail's right edge, where
+`overflow:hidden` cut every 16px icon in two. Writing the gate first
+immediately found a second fault: the label was hidden at one breakpoint and
+the keyboard number hint at another, so between them the rail drew an icon
+beside a bare "1", 15px off centre.
+
+*Seven nameless links in the primary navigation.* Measured from the browser's
+own ARIA tree: at ≤1279px every rail item computed to `link ""`, and between
+1280 and 1439 to `link "1"`…`link "5"` — the hint had become the name, because
+a `display:none` label contributes nothing to the accessible-name computation.
+Unusable with a screen reader at two of three supported widths, since M2.
+`DESIGN_SYSTEM_V2.md` had specified the fix and it was never built.
+
+*Home's three bands were touching at 0px.* `.home` declared
+`gap:var(--space-6)` and none of it applied: `body.shell-v2 #home {
+display:block }` outranked `.home`'s `display:flex`, and `gap` is inert on a
+block box. The 32px separating Home's bands had never once been drawn, which
+is most of why five regions sharing one background read as a single
+undifferentiated slab. The fix is the mechanism, not the number — **a
+visibility rule may only ever hide, never assert a positive `display`** — so
+every destination M4–M6 builds inherits the corrected shape.
+
+*And the column seam stepped sideways 124px* halfway down the page, because
+band 2 split 1.45fr:1fr and band 3 split 2fr:1fr. One `.dest-split` class over
+`--split-major` / `--split-minor` now owns it for the whole product.
+
+**P1 — the hierarchy.** Account equity led the metric cluster at display size
+and is the one number on Home nobody acts on; the cluster now runs today's
+P&L, open risk, buying power, account, win rate, and the 28px tier that was
+defined and unused fills the hole between 36 and 22. The instrument component
+gained **three tiers** — focal, standard, quiet — because one component reused
+five times guarantees consistency and thereby guarantees uniformity, which is
+the absence of hierarchy. What-to-do-next is the one focal region, elevated a
+surface step with the same 2px edge the rail uses for "you are here", and it
+is finally *numbered*: an `<ol>` whose markers `list-style:none` had suppressed
+for two milestones while the component's own comment called the ranking "the
+information". The status line went 16px → 22px, because position alone does not
+make something first.
+
+**Three further defects found while doing it, none of them reported.**
+Positions grew without limit — with 14 open positions band 3 ended at 1256px
+inside a 1080px viewport, breaking the milestone's headline promise, and every
+payload the suite had ever driven held two. The equity chart's `viewBox` was
+180 tall against a drawing height of 200, so with `preserveAspectRatio="none"`
+the bottom of the curve was **clipped**: the worst day on the chart was the one
+you could not see. And the legacy navigation's responsive block used bare `nav`
+selectors — `#shell-rail` is also a `<nav>` — so below 1180px the legacy rules
+were silently overriding the V2 shell. M2-C9 had fixed exactly that bug for the
+same block's base rules and had not come down to the media query.
+
+**The rail has two states now, not three** (216px / 64px, collapsing at 1280),
+and the frame's wordmark occupies a box exactly rail-width whose right border
+continues the rail's — one unbroken vertical line from the top of the window to
+the system strip. Nothing in this interface ran the full height before.
+Superseded values are updated in `DESIGN_SYSTEM_V2.md` §5.2 rather than left to
+disagree.
+
+**Gates: 60 shell checks (was 34), 50 Home checks (was 33)**, and
+`token_check` gained two static rules — one that fails on an unbalanced CSS
+comment, after editing prose inside one left a stray `*/` that silently
+deleted `.hp-row`'s grid while every browser suite stayed green; and one that
+compares the equity chart's `viewBox` against the function that draws into it.
+The comment rule caught the identical mistake being made again, in the next
+commit, within the hour.
+
 ## [2026-08-06] — Fix: the app did not relaunch after an update (v0.12.3)
 
 *The last step of the updater. Reported from a real packaged install: v0.12.1

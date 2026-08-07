@@ -9,8 +9,41 @@ what's next" tracker — keep it current as you work.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0–M3 are complete and nothing is in
+**The UI V2 programme is under way. M0–M3.5 are complete and nothing is in
 progress.** `verify.ps1` is green across all **17** gates at **2716 tests**.
+
+**M3.5 · Home polish — complete (`f87debe`…`ec79c7c`).** A refinement
+milestone run before M4 so the remaining five destinations inherit a corrected
+design language rather than a plausible one. **No backend changed** —
+`/api/v1/home`, every service and every contract are byte-identical to M3.
+
+Three problems reported from using the app were defects with an exact cause,
+not matters of taste: the nav rail's icons were sliced in half by a user-agent
+`<ul>` padding that `list-style:none` does not remove; the primary navigation
+exposed **seven nameless links** below 1440px, because a `display:none` label
+contributes nothing to the accessible-name computation; and Home's three bands
+rendered **touching at 0px**, because `body.shell-v2 #home { display:block }`
+outranked `.home`'s `display:flex` and `gap` is inert on a block box. That last
+fix is a mechanism rather than a number — **a visibility rule may only ever
+hide** — so M4–M6 cannot inherit it.
+
+Three more were found while measuring, none of them reported: positions grew
+without any limit (14 open positions put band 3 at 1256px inside a 1080px
+viewport, breaking the milestone's own headline promise, and every payload the
+suite had ever driven held two); the equity chart's `viewBox` was 180 tall
+against a drawing height of 200, so with `preserveAspectRatio="none"` the
+bottom of the curve was **clipped**; and the legacy navigation's responsive
+block used bare `nav` selectors, so below 1180px it was silently overriding the
+V2 shell — M2-C9 fixed that same bug for the same block's base rules and did
+not come down to the media query.
+
+Hierarchy: the metric cluster reordered by decision value (account equity had
+led at display size and is the one figure nobody acts on), three instrument
+tiers, what-to-do-next elevated to the single focal region and finally
+numbered, the status line sized like the first thing it is, and the rail
+reduced to two states with the frame's left zone aligned to it so one
+unbroken vertical rule runs the height of the window. Gates 34→60 shell,
+33→50 Home, plus two new static rules in `token_check`.
 
 **M3 · Home — complete (`895704d`…`b6eb00b`).** The first Flight Deck
 destination. Three bands (state / what needs you / context) built on a new

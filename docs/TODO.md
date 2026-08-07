@@ -5,9 +5,14 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — M0, M1 and M2 complete; start M3 (V0.13.0, Home).** The
+- [ ] **UI V2 — M0–M3.5 complete; start M4 (V0.14.0, Trade).** The
       design is **frozen** across four documents; the implementation plan is
-      written and **two of ten milestones are built**.
+      written and **four of ten milestones are built**, plus the M3.5
+      refinement pass. Before writing M4's markup read `DESIGN_SYSTEM_V2.md`
+      §5.5–5.7 and §6.6 — M3.5 corrected four things in the shared design
+      language (visibility rules may only HIDE; `.dest-split` owns the seam;
+      three instrument tiers, at most one focal per destination; the rail is
+      two states at 216/64).
       **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
       milestones, ~85 commits, with §12's commit map as the authority for
       which commit comes next. **M0 landed in 9 commits**

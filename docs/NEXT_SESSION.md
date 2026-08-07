@@ -5,7 +5,8 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-06, on closing **UI V2 · M3 — Home**, C1…C10.
+**Last updated:** 2026-08-07, on closing **UI V2 · M3.5 — Home polish**,
+C1…C10.
 
 ## What to do next
 
@@ -13,8 +14,21 @@ any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 (`ROADMAP-UI-V2.md` §12 is the authority for which commit comes next).
 `verify.ps1` is green across **17 gates** at 2716 tests.
 
-**M3 is complete.** Home is rebuilt on the shell and the legacy dashboard is
-deleted. Two things it deliberately did NOT do, both recorded in
+**Read `DESIGN_SYSTEM_V2.md` §5.5–5.7 and §6.6 before writing any of M4's
+markup.** M3.5 corrected four things in the shared design language and every
+remaining destination inherits them:
+
+* **A visibility rule may only ever HIDE** (§5.7). Writing
+  `body.shell-v2 #trade { display:block }` will silently kill Trade's own
+  `display` and any `gap` on it, exactly as it did to Home for a whole
+  milestone. Write the negative form.
+* **`.dest-split`** (§5.6) is the two-column body. Do not restate a ratio.
+* **Three instrument tiers** (§6.6): at most ONE `.ins--focal` per
+  destination, `.ins--quiet` for context.
+* **The rail is two states, 216/64 at 1280** (§5.2), and the frame's left
+  zone is rail-width so the vertical rule is continuous (§5.5).
+
+**M3.5 is complete.** Two things it deliberately did NOT do, both recorded in
 `UI_MIGRATION_TRACKER.md` §9, and the first needs a decision before M4-C11:
 
 1. **The legacy navigation and header are still in the file.** They were
@@ -32,6 +46,26 @@ Reusable from M3, and worth reading before writing M4's markup: the
 `instrument` component (`.ins`, `.ins-well`, `.ins-cluster`) with its two
 invariants enforced in `token_check.py`, and `scripts/home_check.py` as the
 model for a destination gate that measures geometry rather than structure.
+
+## What M3.5 delivered
+
+Home polish, and six defects underneath it. No backend changed —
+`/api/v1/home`, every service and every contract are byte-identical to M3.
+
+Three reported problems were bugs with an exact cause: the rail's icons were
+sliced in half by a UA `<ul>` padding never reset; the primary navigation
+exposed **seven nameless links** below 1440px; and Home's three bands were
+touching at **0px** because a shell visibility rule outranked the layout
+class. Three more were found while measuring, none of them reported:
+positions grew without limit (14 open positions put band 3 at 1256px in a
+1080px viewport), the equity chart's `viewBox` clipped the bottom of its own
+curve, and the LEGACY nav's responsive block used bare `nav` selectors so it
+was overriding the V2 shell below 1180px.
+
+Hierarchy: metrics reordered by decision value, three instrument tiers,
+what-to-do-next elevated and finally numbered, the status line sized like the
+first thing it is. Gates 34→60 shell, 33→50 Home, plus two static rules in
+`token_check`.
 
 ## What M3 delivered
 

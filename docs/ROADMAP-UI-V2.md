@@ -116,6 +116,7 @@ It is the next navigation-scoped commit whenever one is authorised.
 | M1 | 0.11.0 | Workspace context and Surface Level | M | One symbol context across the whole app |
 | M2 | 0.12.0 | The shell — frame, rail, strip, palette | L | New navigation over old content |
 | M3 | 0.13.0 | Home | M | The first Flight Deck destination |
+| M3.5 | 0.13.0 | Home polish — defects and design language | M | Added after using M3; corrects what M4–M6 would inherit |
 | M4 | 0.14.0 | Trade | L | The unified workspace and the commit gesture |
 | M5 | 0.15.0 | Portfolio and Journal | L | Two destinations, coach absorbed |
 | M6 | 0.16.0 | Research and Settings | M | The last legacy markup deleted |
@@ -315,6 +316,35 @@ and not in `settings.py`.
 
 **Exit:** Home fits without scrolling at 1920×1080 for bands 1–2; a
 five-trade history shows coverage reasons rather than numbers.
+
+### M3.5 — Home polish and design-language refinement (unplanned)
+
+Not in the original ten. Added after using the built product: the review found
+a mixture of genuine defects and hierarchy problems, and every remaining
+destination would have inherited both. Run **before** M4 for that reason.
+Frontend only — no backend, no contract, no endpoint change.
+
+| # | Commit | Size |
+| --- | --- | --- |
+| C1 | Rail `<ul>` UA padding reset — icons were clipped at two breakpoints; `RAIL_WIDTHS` geometry gate | M |
+| C2 | Accessible names on every rail item at every width — seven nameless links | M |
+| C3 | Destination visibility as a negative rule; the inert band `gap`; rhythm gate | M |
+| C4 | `--split-major`/`--split-minor` + `.dest-split`; unbalanced-CSS-comment gate | M |
+| C5 | Metric cluster reordered by decision value; the 28px tier adopted | M |
+| C6 | Three instrument tiers (focal / standard / quiet) | M |
+| C7 | What-to-do-next elevated to focal; the ranking finally drawn | M |
+| C8 | Status line sized as a headline; `needs_you` marked by weight as well as hue | S |
+| C9 | Positions grow then scroll; band 3 takes the slack; chart `viewBox` clipping | L |
+| C10 | Two rail states (216/64); the frame's left zone aligned to the rail | L |
+
+**Exit:** the rail renders whole and named at every supported width; Home's
+bands are separated by exactly one `--space-6` and share one column seam; a
+14-position account still fits at 1920×1080 and 1440×900.
+
+**What M4–M6 inherit, and must read first:** `DESIGN_SYSTEM_V2.md` §5.5–5.7
+(the continuous left column, `.dest-split`, and **a visibility rule may only
+ever hide**) and §6.6's three tiers, **at most one focal region per
+destination**.
 
 ### M4 — V0.14.0 · Trade
 

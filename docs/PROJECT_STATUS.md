@@ -547,8 +547,8 @@ called the risk preflight that existed but wasn't wired up.
 
 ## Current milestone (in progress)
 
-**None.** UI V2 · M2 closed on 2026-08-06; **M3 — Home** is next and has not
-started. The ten-milestone plan, its commit map and the six open design
+**None.** UI V2 · M3.5 (Home polish) closed on 2026-08-07; **M4 — Trade** is
+next and has not started. The ten-milestone plan, its commit map and the six open design
 decisions are in `docs/ROADMAP-UI-V2.md`; `docs/UI_MIGRATION_TRACKER.md` §10
 carries the per-commit record. The sections below are the historical milestone
 narrative, newest first.

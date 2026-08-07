@@ -584,7 +584,7 @@ onto it:
 
 | Element | Behaviour |
 | --- | --- |
-| Nav rail | Fixed: 200 / 72 / 56px by breakpoint |
+| Nav rail | Fixed: 216px expanded (>=1280) / 64px icon-only (<1280) |
 | Frame | Fixed 48px tall |
 | System strip | Fixed 28px tall |
 | Section rail (D) | Fixed 168px |
@@ -592,6 +592,19 @@ onto it:
 | Ticket column (B) | Resizable 300–480px, default 340px, persisted |
 | Chart / chain split (B) | Resizable, default 55/45, persisted |
 | Everything else | Fluid |
+
+**The rail has two states, not three (M3.5).** It was 200 / 72 / 56 across two
+breakpoints, so dragging a window produced two collapse events — and §6.9
+forbids animating the collapse, which makes each one a jump. The fix for a
+jarring transition is *fewer* transitions. The 72px state drew no label, which
+is the whole definition of icon-only, so it was a second icon-only mode
+differing from the first by 16px of padding.
+
+64 rather than 56 because, once the rail's own padding is off, 64 leaves a
+44px hit target with clearance where 56 left exactly 40px and nothing spare
+for the active indicator (WCAG 2.5.8's floor is 24px; 44 is the comfortable
+standard). And **216 = 64 + 152**, which is what lets the frame's left zone be
+exactly `--rail-w` in *both* states — see §5.5.
 
 ### 5.3 Minimum and maximum widths
 
@@ -621,6 +634,39 @@ empty. Prose is capped; the workspace is not.
 | Pop-out | Chart, ticket and Portfolio can become OS windows; the vacated slot shows a placeholder with `[ Bring back ]`, never a silent reflow |
 
 ---
+
+### 5.5 The left column, and the continuous rule
+
+**The frame's wordmark box is exactly `--rail-w` wide and its right border
+continues the rail's**, so one unbroken vertical line runs from the top of the
+window to the system strip. Below 1280 the wordmark becomes `OP`, because
+"OptionsPilot" is 86px wide and clipping it to fit 64px is what made the rail
+look like it was sliding *underneath* the header. Two visible marks, one
+accessible name carried by `.sr-only` text, so what a screen reader announces
+does not change with the viewport.
+
+Cockpits read as engineered because their lines continue. Before M3.5 nothing
+in this interface ran the full height of the window.
+
+### 5.6 The destination split
+
+**One ratio, one class, one seam.** A two-column destination body is
+`.dest-split`, whose columns come from `--split-major` / `--split-minor`. Home
+carried 1.45fr:1fr in band 2 and 2fr:1fr in band 3, so the vertical seam
+stepped sideways 124px halfway down the page. The eye tracks vertical edges;
+one that moves for no reason reads as misalignment even when a viewer cannot
+name what is wrong.
+
+### 5.7 How a destination is shown
+
+**A visibility rule may only ever HIDE. It must never assert a positive
+`display` mode.** `display` belongs to the destination's own layout class, and
+a rule that sets it will collide — silently, and in the direction that looks
+fine. Home shipped M3 with `body.shell-v2 #home { display:block }` (0,1,1,1)
+outranking `.home`'s `display:flex` (0,0,1,0), so its `gap:var(--space-6)` was
+inert and all three bands rendered touching at 0px. Write the rule as a
+negative — `body:not(.shell-v2) #home { display:none }` — and it cannot
+compete.
 
 ## 6. Component library
 
@@ -847,6 +893,33 @@ animates its size.
 **Rules.** One heading, optional metadata, a body, at most one action. **A
 panel with two competing actions is two panels.** A panel never scrolls
 internally unless its content is a list or a table.
+
+**Tiers (added M3.5).** One instrument component reused N times guarantees
+consistency and thereby guarantees *uniformity*, and uniformity is the
+absence of hierarchy. Measured on Home before M3.5: five regions, every one
+`surface.base` at `radius.med` with `space.4` padding, on a canvas they
+separate from by about 1.15:1 — five things of different importance rendered
+as five things of identical importance, which is the fault §5.1 of
+`UI_V2_DESIGN.md` names in the *old* dashboard.
+
+| Tier | Class | Treatment | Budget |
+| --- | --- | --- | --- |
+| 1 — focal | `.ins--focal` | Elevated one surface step, plus the 2px inset edge the nav rail uses for "you are here" | **At most one per destination** |
+| 2 — standard | `.ins` | The default. Unchanged. | Any |
+| 3 — quiet | `.ins--quiet` | No housing: transparent, square, grouped by a single top rule | Any |
+
+The levers are **elevation, space and rule** — never a bright fill, never a
+glow, never a border all round. Two rules that are decisions:
+
+- **The focal tier gets no extra padding.** It would push its label out of
+  line with the instrument below it in the same column, and alignment
+  outranks emphasis.
+- **The quiet tier keeps its horizontal padding.** Its interiors must stay
+  aligned with the tier-2 instruments above them; a quiet region is quieter,
+  not offset.
+
+Removing the container is a legitimate hierarchy move and the only one that
+costs no ink. ThinkOrSwim groups almost everything this way.
 
 ### 6.7 Table
 
@@ -1443,7 +1516,7 @@ for an interface to read as assembled rather than designed.
 
 | Situation | Icon alone? |
 | --- | --- |
-| Nav rail at ≥1440px | **No** — label required |
+| Nav rail at ≥1280px | **No** — label required |
 | Nav rail at ≤1279px | Yes, with a tooltip and an accessible name |
 | Row actions in a table (close, edit, remove) | Yes, with an accessible name naming the subject |
 | Toolbar tools on the chart | Yes, with a tooltip |
