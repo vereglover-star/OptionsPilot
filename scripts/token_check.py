@@ -152,6 +152,60 @@ def block_span(text: str, selector: str) -> tuple[int, int] | None:
     return None
 
 
+#: Radius tokens, smallest first. Concentricity is judged on this order rather
+#: than on the pixel values, so retuning a radius cannot silently invert the
+#: relationship the rule is about.
+RADIUS_ORDER = ("--radius-sm", "--radius-med", "--radius-lg")
+
+
+def check_instrument(text: str) -> list[str]:
+    """The two rules that make an instrument an instrument (M3-C4).
+
+    Both are the kind of thing that reads as a harmless tidy-up in review and
+    changes what the component *is*:
+
+    * **No border.** Separation between instruments is space and surface. A
+      border re-creates the "nine panels of identical visual weight" fault
+      `UI_V2_DESIGN.md` §5.1 names as the current Dashboard's second problem —
+      the layout stops expressing priority and the user has to supply it.
+    * **Concentric radii.** The recessed interior's corner must be *smaller*
+      than its housing's. Equal or larger nested corners make the interior look
+      pasted on rather than recessed, which is the whole visual claim.
+    """
+    problems: list[str] = []
+
+    span = block_span(text, ".ins")
+    if span is None:
+        return [".ins is not defined — the instrument component is missing."]
+    body = text[span[0]:span[1]]
+    if re.search(r"(?<!-)\bborder\s*:(?!\s*0)", body):
+        problems.append(
+            ".ins declares a border. An instrument is separated by surface and "
+            "space, not by an outline (UI_V2_VISUAL_EXPLORATION.md, "
+            "'Panel treatment'). A bordered instrument is the legacy .panel.")
+
+    def radius_of(selector: str) -> str | None:
+        found = block_span(text, selector)
+        if found is None:
+            return None
+        m = re.search(r"border-radius:\s*var\(\s*(--radius-[a-z]+)\s*\)",
+                      text[found[0]:found[1]])
+        return m.group(1) if m else None
+
+    outer, inner = radius_of(".ins"), radius_of(".ins-well")
+    if outer is None:
+        problems.append(".ins has no tokenised border-radius.")
+    elif inner is None:
+        problems.append(".ins-well has no tokenised border-radius.")
+    elif outer in RADIUS_ORDER and inner in RADIUS_ORDER:
+        if RADIUS_ORDER.index(inner) >= RADIUS_ORDER.index(outer):
+            problems.append(
+                f".ins-well ({inner}) is not smaller than .ins ({outer}). "
+                f"Nested corners that match make the interior look pasted on "
+                f"rather than recessed.")
+    return problems
+
+
 def check() -> list[str]:
     text = INDEX.read_text(encoding="utf-8")
     problems: list[str] = []
@@ -204,6 +258,13 @@ def check() -> list[str]:
         problems.append(
             f"off-scale rhythm values: {off_scale}, ratchet is "
             f"{MAX_OFF_SCALE_RHYTHM}. Use a --space-* step.")
+
+    # 5b. the instrument's own invariants (M3-C4)
+    #
+    # The Flight Deck's one region primitive, and every later milestone reuses
+    # it — so the two rules that make it read as an instrument rather than as
+    # another panel are asserted here rather than left to review.
+    problems += check_instrument(text)
 
     # 6. contrast, recomputed from the tokens in the file
     root = block_span(text, ":root")

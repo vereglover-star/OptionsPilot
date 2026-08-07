@@ -1423,6 +1423,85 @@ html.gd-nomotion #gd-ring::after { display:none; }
   border-radius:var(--radius-sm); padding:7px 10px; margin-top:var(--space-2); line-height:1.5;
   display:none; }
 .tk-why.show { display:block; animation:gdcard var(--dur-fast) ease; }
+
+/* ══ THE INSTRUMENT (M3-C4) ═══════════════════════════════════════════════
+   The Flight Deck's one region primitive. Home is its first consumer and
+   every later milestone reuses it, so it is defined once, here, rather than
+   grown per destination.
+
+   `UI_V2_VISUAL_EXPLORATION.md` §"Panel treatment": an instrument is
+   `surface.base` at `radius.med`, NO BORDER, with its label top-left in
+   `text.micro` and at most one action top-right. Where the data is tabular,
+   scrolling, or a canvas, its interior recesses to `surface.sunken` at
+   `radius.sm` — so a chain, a chart plot and a ticket's field group all read
+   as *inside* something.
+
+   Three rules that are decisions, not styling:
+
+   1. NO BORDER. The existing `.panel` uses one; an instrument uses surface
+      and space instead. Separation between instruments is `space.5`, and
+      space and surface each do their own job rather than substituting for
+      one another. A border here would re-create the "nine panels of
+      identical weight" fault UI_V2_DESIGN.md §5.1 names.
+   2. THE LABEL IS QUIETER THAN ITS CONTENT. `text.micro`, uppercase,
+      `ink.muted` — an instrument's housing does not compete with its needle.
+      This inverts the legacy `.panel h2`, which is `text.heading` and reads
+      louder than the numbers underneath it.
+   3. CONCENTRIC RADII. `radius.sm` inside `radius.med`, never equal and
+      never larger. Nested corners that match make the interior look pasted
+      on rather than recessed. */
+.ins { background:var(--surface-base); border-radius:var(--radius-med);
+  padding:var(--space-4); min-width:0; }
+/* An instrument that is a flex/grid child must be allowed to shrink; without
+   `min-width:0` a wide table inside one pushes the whole band wider instead
+   of scrolling its own interior. */
+
+.ins-head { display:flex; align-items:baseline; gap:var(--space-3);
+  margin-bottom:var(--space-3); min-height:16px; }
+.ins-label { font-size:var(--text-micro); text-transform:uppercase;
+  letter-spacing:.08em; color:var(--ink-muted); font-weight:600;
+  white-space:nowrap; }
+/* The count rides WITH the label, not as a second element: "POSITIONS (2)"
+   is one fact about one region. */
+.ins-count { font-variant-numeric:tabular-nums; }
+/* At most one action, and it sits at the far end. A second action here means
+   the region is two regions (DESIGN_SYSTEM_V2.md §6.6). */
+.ins-act { margin-left:auto; font-size:var(--text-caption);
+  color:var(--action-primary-text); background:none; border:0; cursor:pointer;
+  padding:var(--space-1) var(--space-2); border-radius:var(--radius-sm);
+  white-space:nowrap; }
+.ins-act:hover { background:var(--surface-sunken); }
+
+/* The recessed interior. Only where data is tabular, scrolling or a canvas —
+   an instrument holding a sentence does not get one, because there is nothing
+   for the eye to be "inside" of. */
+.ins-well { background:var(--surface-sunken); border-radius:var(--radius-sm);
+  padding:var(--space-3); min-width:0; }
+.ins-well.flush { padding:0; overflow:hidden; }
+
+/* Groups within one instrument. `space.3` between groups, `space.2` between
+   rows — the rhythm the direction specifies, expressed once. */
+.ins-group + .ins-group { margin-top:var(--space-3);
+  padding-top:var(--space-3); border-top:1px solid var(--border-subtle); }
+.ins-sub { font-size:var(--text-micro); text-transform:uppercase;
+  letter-spacing:.08em; color:var(--ink-muted); font-weight:600;
+  margin-bottom:var(--space-2); }
+
+/* A cluster: ONE instrument containing N compartments, divided by hairlines.
+   Deliberately not N cards — five cards read as five objects competing for
+   rank, whereas one cluster reads as a single instrument you scan across,
+   which is what a metric strip is. */
+.ins-cluster { display:grid; gap:0; }
+.ins-cell { padding:var(--space-3) var(--space-4); min-width:0; }
+.ins-cell + .ins-cell { border-left:1px solid var(--border-subtle); }
+
+/* Skeletons. `UI_V2_WIREFRAMES.md` §2.8: region headings and labels render
+   IMMEDIATELY and only values skeletonise, which is most of the perceived
+   speed. No shimmer — the direction omits M-16 deliberately, because a
+   shimmering instrument is a broken instrument. */
+.ins-skel { background:var(--surface-sunken); border-radius:var(--radius-sm);
+  color:transparent; display:inline-block; min-width:48px; }
+.ins-skel::after { content:"\00a0"; }
 </style>
 </head>
 <body data-palette="#3987e5">
