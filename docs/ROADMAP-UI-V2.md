@@ -722,6 +722,22 @@ precedent, one file per milestone, written as the milestone closes.
 
 ---
 
+## 12.1 Work deliberately scheduled AFTER this programme
+
+`docs/PRODUCT_STANDARDS.md` §10 places the chart-facing work that keeps being
+proposed early. Restated here so a session planning M5–M9 does not absorb it:
+
+| Work | Home | Why not sooner |
+| --- | --- | --- |
+| Chart engine polish | M9 | Polishing a surface M5–M6 still reposition means polishing it twice |
+| Drawing tools | M10 (new, post-1.0) | Independent of every destination; large enough to own a milestone |
+| Appearance customisation | M10 | Shares drawing's persistence and template model |
+| Custom indicators | M11 | Depends on the declarative-spec decision and M10's persistence |
+| Replay mode | M12 | Depends on the clock seam and on the journal marking replayed fills |
+
+**The ordering principle:** finish the shape (M4–M7), make it trustworthy
+(M8–M9), then make it powerful (M10–M12).
+
 ## 13. Related documents
 
 | Document | Relationship |

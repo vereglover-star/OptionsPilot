@@ -12,6 +12,13 @@ see `docs/AI_CONTEXT.md` for the project's vision/philosophy/standards,
    the curated list of things never to change without careful review.
 2. Read `docs/AI_HANDOFF.md` in full — complete technical orientation
    (endpoints, storage layout, exact behavioral contracts).
+2b. Read `docs/PRODUCT_STANDARDS.md` if your task touches the **chart**,
+   **option-chain presentation**, **live motion**, **countdowns**, or
+   **third-party attribution**. It is normative, not advisory: it records
+   what the product promises about correctness and feel, so that six
+   milestones do not produce six answers to one question. If you are about
+   to do something it forbids, either amend it in the same commit with the
+   reasoning, or you are about to reintroduce a defect it already names.
 3. Read `docs/NEXT_SESSION.md` to find out exactly where the last session
    stopped and what's recommended next. `docs/PROJECT_STATE.md` has the
    full narrative if more detail is needed; `docs/PROJECT_STATUS.md` has a
@@ -46,6 +53,20 @@ named stubs that raise `BrokerError`. Do not:
 
 If a task seems to require live trading, stop and ask the user to confirm
 that's really what they want before writing any code.
+
+## Chart accuracy is not negotiable
+
+A chart is a measurement instrument and its only job is to be true. The
+renderer may never fabricate a price, no animation may show a value the data
+does not contain, and no candle may be "corrected" at draw time to look
+plausible — the engine would still be trading on the uncorrected values, and
+the two would disagree. Full standard, including the guarantees that are
+enforced today and the one that is not: `docs/PRODUCT_STANDARDS.md` §1.
+
+Related and equally permanent: **days to expiry is a calendar-day difference
+with exactly one owner** (`optionspilot/services/expiry.py`, §3.1), and **the
+price a screen states as a cost is the price the broker will fill at, never
+the mid** (`optionspilot/services/review.py`, §3.2).
 
 ## Coding standards & conventions
 
