@@ -37,7 +37,7 @@ Re-measure at each milestone close.
 | `var(--radius-*)` uses | 56 legacy | all radii | **53** on the new names; legacy deleted |
 | `data-tab` refs in browser suites | 38 (53 by M2) | 0 | **0** ✅ |
 | `data-tab` refs in `index.html` | 18 | 0 | 21 — the legacy nav's own markup, deleted at M3-C10; the tour's now resolve through the registry at runtime |
-| `verify.ps1` gates | 13 | 20 | **16** |
+| `verify.ps1` gates | 13 | 20 | **17** |
 | `workspace_check.py` assertions | 21 | grows with the context | **50** |
 | Test count | 2,493 | grows | **2,623** |
 

@@ -24,7 +24,7 @@ states (C8) render per region rather than per screen.
 
 
 `docs/ROADMAP-UI-V2.md` §12 is the authority for which commit comes next.
-`verify.ps1` is green across **16 gates** at 2716 tests.
+`verify.ps1` is green across **17 gates** at 2716 tests.
 
 **Owed first, and it needs a human:** the updater's *relaunch* fix (v0.12.3,
 unreleased) has no automated proof and cannot have one — `verify.ps1` does not

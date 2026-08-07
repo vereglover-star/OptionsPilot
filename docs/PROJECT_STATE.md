@@ -10,7 +10,7 @@ what's next" tracker — keep it current as you work.
 ## Exact stopping point
 
 **The UI V2 programme is under way. M0, M1 and M2 are complete; M3 is in
-progress at C4.** `verify.ps1` is green across all **16** gates at **2716
+progress at C4.** `verify.ps1` is green across all **17** gates at **2716
 tests**, with the new shell ON by default.
 
 **M3 · Home — C1–C3 done (`895704d`…`4914e19`), C4–C10 remain.** The backend

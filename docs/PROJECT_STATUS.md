@@ -6,7 +6,7 @@ are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
 **Last verified:** 2026-08-06, **UI V2 · M2 — the shell, CLOSED**.
-`verify.ps1` green across **all 16 gates**: full `pytest` suite
+`verify.ps1` green across **all 17 gates**: full `pytest` suite
 (**2716 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
 checks, API contract check, pip check, `scripts/marketdata_stress.py` **88/88**
 offline, and the six browser suites (`browser_check`, `chart_check`,

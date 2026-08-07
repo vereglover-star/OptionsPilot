@@ -112,6 +112,14 @@ if (-not $SkipBrowser) {
     Write-Step "Bonus: UI V2 shell check"
     & $python "$PSScriptRoot\shell_check.py" @browserArgs
     $results["UI V2 shell check"] = ($LASTEXITCODE -eq 0)
+
+    # Home (M3-C9). The first destination rebuilt on the shell, and the first
+    # suite whose assertions are geometric rather than structural: the
+    # no-scroll commitment is a hard acceptance criterion, so it is measured
+    # from getBoundingClientRect at both required sizes rather than reviewed.
+    Write-Step "Bonus: Home destination check"
+    & $python "$PSScriptRoot\home_check.py" @browserArgs
+    $results["Home destination check"] = ($LASTEXITCODE -eq 0)
 }
 
 Write-Host "`n===== VERIFY SUMMARY =====" -ForegroundColor Cyan
