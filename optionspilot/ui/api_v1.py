@@ -139,6 +139,14 @@ def register_v1_routes(app: FastAPI, server) -> None:
     def workspace_reset(request: Request):
         return _mutation(request, server, "workspace.reset", server.reset_workspace)
 
+    # Home, in one request (M3-C3). Six regions from four owners: six round
+    # trips would mean six chances to arrive late and six independently
+    # shifting regions, which is the layout jump the milestone exists to
+    # remove. Regions still fail independently — see `HomeView.errors`.
+    @app.get("/api/v1/home", tags=["home"])
+    def home(request: Request):
+        return _safe(request, lambda: server.services.home.view().to_dict())
+
     @app.get("/api/v1/notifications", tags=["notifications"])
     def notifications(request: Request, limit: int = 15):
         return _safe(request, lambda: {

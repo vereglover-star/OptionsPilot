@@ -129,6 +129,53 @@ class PnLWindowsView(ViewModel):
 
 
 @dataclass(frozen=True, slots=True)
+class WinRateView(ViewModel):
+    """A win rate, or an honest statement that there is not one yet.
+
+    `rate` is `None` below the evidence floor and `trades`/`needed` are always
+    populated, so a card can render "3 of 30" instead of "0%". A zero win rate
+    on three trades is a false statement about a person, and this is the third
+    place in the codebase to refuse to make one — after `profit_factor` and
+    `intelligence/`'s unassessable behaviours.
+    """
+
+    rate: float | None
+    trades: int
+    needed: int
+    sufficient: bool
+
+
+@dataclass(frozen=True, slots=True)
+class HomeView(ViewModel):
+    """The whole Home destination in one payload.
+
+    `errors` names the regions that could not be read. Home never fails as a
+    whole (`UI_V2_WIREFRAMES.md` §2.10) because its regions have independent
+    sources, so a failure is a named region rather than an exception — and a
+    client can render that region's error state while the rest of the screen
+    stays useful.
+
+    `next_actions` is `None`, not `[]`, when the intelligence engine could not
+    be read. "No findings" and "I could not look" are different answers, and
+    §2.10 requires the second to be visible: a silent empty panel is
+    indistinguishable from "nothing is wrong".
+    """
+
+    status: dict
+    account: dict | None
+    open_risk: dict | None
+    today_pnl: float | None
+    buying_power: float | None
+    win_rate: dict
+    positions: list
+    working_orders: list
+    next_actions: list | None
+    equity: list
+    watchlist: list
+    errors: list
+
+
+@dataclass(frozen=True, slots=True)
 class StatusLineView(ViewModel):
     """Home's first line, and the system's single self-report.
 

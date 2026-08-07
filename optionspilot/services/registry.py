@@ -20,13 +20,16 @@ client's backend have to provide" — everything else is derived.
 from __future__ import annotations
 
 from optionspilot.config.runtime import MAX_WATCHLIST
+from optionspilot.core.models import utcnow
 from optionspilot.host import current_host
 from optionspilot.services.backtest import BacktestService
 from optionspilot.services.charts import ChartService
+from optionspilot.services.home import HomeService
 from optionspilot.services.intelligence import IntelligenceService
 from optionspilot.services.marketdata import MarketDataAdminService
 from optionspilot.services.notifications import NotificationService
-from optionspilot.services.portfolio import PortfolioService
+from optionspilot.services.portfolio import ET, PortfolioService
+from optionspilot.services.statusline import StatusInputs
 from optionspilot.services.trading import TradingService
 from optionspilot.services.viewmodels import HostView
 from optionspilot.services.watchlist import WatchlistService
@@ -46,6 +49,11 @@ class ServiceRegistry:
         self._cfg = config
         self._lock = lock
         self._host = host
+        # Kept for `_status_facts`, which needs the same clock and timezone the
+        # rest of the app reads "now" from, and the same journal the metrics do.
+        self._clock = clock
+        self._tz = tz
+        self._trades = trades
 
         self.portfolio = PortfolioService(
             broker=orchestrator.broker,
@@ -118,6 +126,68 @@ class ServiceRegistry:
         self.workspace = WorkspaceService(runtime)
         self.intelligence = IntelligenceService(orchestrator)
         self.notifications = NotificationService(orchestrator.notifier, runtime)
+        self.home = HomeService(
+            portfolio=self.portfolio,
+            # Bound with the clock here so `HomeService` never holds one: a
+            # service answering from its own "now" disagrees with the app
+            # around it, which is why `ChartService` takes one injected too.
+            performance=lambda: self.portfolio.performance(self._now_et()),
+            facts=self._status_facts,
+        )
+
+    # ── the facts only a host can answer ─────────────────────────────────────
+
+    def _now_et(self):
+        clock = self._clock or utcnow
+        return clock().astimezone(self._tz or ET)
+
+    def _status_facts(self) -> StatusInputs:
+        """Assemble the status line's inputs from this host's orchestrator.
+
+        Lives here rather than in `HomeService` because half of it is not
+        reachable from `services/` at all: the halt lives on `RiskManager`, and
+        `tests/test_architecture.py` forbids `services/` from importing `risk/`.
+        A backtest or replay host has entirely different answers, which is the
+        second reason this is the registry's job and not the service's.
+
+        Every read is guarded. A fact this host cannot answer stays at its
+        `StatusInputs` default, which is the quiet reading — and the quiet
+        readings are all reachable only after the alarming ones are ruled out,
+        so a missing fact can never manufacture a false "nothing needs you".
+        """
+        orch = self._orch
+        now = self._now_et()
+        hour = now.hour
+        part = ("morning" if hour < 12 else
+                "afternoon" if hour < 18 else "evening")
+
+        positions, account_value, today = [], 0.0, 0.0
+        try:
+            positions = self.portfolio.positions()
+            account_value = self.portfolio.account().equity
+            today = self.portfolio.pnl_windows(now).today
+        except Exception:  # noqa: BLE001 - a broker read must not break the line
+            pass
+
+        halt = ""
+        risk = getattr(orch, "risk", None)
+        if risk is not None:
+            halt = str(getattr(risk, "halt_reason", "") or "")
+
+        try:
+            has_traded = bool(self._trades())
+        except Exception:  # noqa: BLE001
+            has_traded = bool(positions)
+
+        return StatusInputs(
+            part_of_day=part,
+            market_open=bool(orch.market_open(utcnow())),
+            positions=len(positions),
+            today_pnl=today,
+            account_value=account_value,
+            has_traded=has_traded,
+            halt_reason=halt,
+        )
 
     @property
     def host(self):

@@ -22,8 +22,16 @@ from optionspilot.ui.server import create_app
 REQUIRED_PATHS = {
     "/api/v1/status", "/api/v1/runtime", "/api/v1/workspace",
     "/api/v1/notifications", "/api/v1/capabilities", "/api/v1/sync",
-    "/api/v1/openapi.json",
+    "/api/v1/home", "/api/v1/openapi.json",
 }
+
+# Every region `UI_V2_WIREFRAMES.md` §2.4 puts on Home, as the payload must name
+# them. Home renders from one request, so a rename here blanks a region rather
+# than degrading it — and `errors` is how a region reports failure without Home
+# failing as a whole (§2.10).
+HOME_FIELDS = ("status", "account", "open_risk", "today_pnl", "buying_power",
+               "win_rate", "positions", "working_orders", "next_actions",
+               "equity", "watchlist", "errors")
 
 
 def validate_openapi(document: dict) -> None:
@@ -92,6 +100,37 @@ def check_workspace(client) -> None:
     json.dumps(reset, allow_nan=False)
 
 
+def check_home(client) -> None:
+    """One real payload, for the same reason `check_workspace` exists.
+
+    Path presence is not a contract. Home is assembled from four owners in one
+    request, so the failure this catches is a region that silently stopped
+    being named — which renders as a blank area rather than as an error.
+    """
+    body = client.get("/api/v1/home").json()["data"]
+    missing = [f for f in HOME_FIELDS if f not in body]
+    if missing:
+        raise SystemExit(f"home payload is missing regions: {missing}")
+
+    # The sentence is the product's single self-report; a Home that cannot say
+    # anything is a Home with no first line.
+    status = body["status"]
+    if not status.get("text", "").strip() or not status.get("case"):
+        raise SystemExit("home status line came back empty")
+    if not isinstance(status.get("needs_you"), bool):
+        raise SystemExit("home status line did not state whether it needs the user")
+
+    # A fresh account has no evidence for a win rate, and must say so rather
+    # than reporting 0%.
+    win = body["win_rate"]
+    if win["rate"] is not None or win["sufficient"]:
+        raise SystemExit("a fresh account claimed a win rate it cannot evidence")
+
+    # `Infinity`/`NaN` are not valid JSON and kill a browser parse — the whole
+    # screen, not one region, because this payload is one request.
+    json.dumps(body, allow_nan=False)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="optionspilot-api-") as root:
         app = create_app(AppConfig(), run_loop=False, data_dir=root)
@@ -107,6 +146,7 @@ def main() -> int:
             json.dumps(openapi, allow_nan=False)
             validate_openapi(openapi)
             check_workspace(client)
+            check_home(client)
     print("API CONTRACT PASS")
     return 0
 
