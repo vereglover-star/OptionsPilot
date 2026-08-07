@@ -111,10 +111,34 @@ def _chain_payload(today: date) -> dict:
     def iso(days: int) -> str:
         return (today + timedelta(days=days)).isoformat()
 
-    rows = [{"strike": s, "right": r, "bid": 3.85, "ask": 3.95, "mid": 3.90,
-             "delta": 0.5, "iv": 0.18, "volume": 1200, "open_interest": 4000,
-             "liquidity": 80, "dte": 0}
-            for s in (465.0, 470.0, 475.0) for r in ("call", "put")]
+    # A chain LONGER than the region that shows it — 37 strikes against a
+    # body that fits about fourteen. That is deliberate: with a seven-row
+    # fixture every row is in view, so "the chain anchors on the strike
+    # nearest spot" passes without the anchoring existing. It also makes the
+    # spot row genuinely off-screen at the top of the range, which is the
+    # condition §6.4's complaint describes ("a chain that opens at the top of
+    # the strike range makes every user scroll to the middle before they can
+    # think").
+    #
+    # The strikes bracket 471.20 UNEVENLY: 470 is 1.20 away and 475 is 3.80,
+    # so "nearest spot" has exactly one answer and cannot be satisfied by
+    # landing on the middle row by luck.
+    strikes = [380.0 + 5.0 * i for i in range(37)]      # 380 … 560
+    rows = []
+    for s in strikes:
+        for r in ("call", "put"):
+            rows.append({
+                "strike": s, "right": r, "bid": 3.85, "ask": 3.95, "mid": 3.90,
+                "delta": 0.5, "iv": 0.18, "gamma": 0.021, "theta": -0.134,
+                "vega": 0.312, "volume": 1200, "open_interest": 4000,
+                "liquidity": 80, "dte": 0,
+                "entry": 3.99, "breakeven": (s + 3.99) if r == "call"
+                                            else (s - 3.99),
+                "chance_itm": 50.0,
+                # One row in the chain carries COMPUTED greeks, so the
+                # provenance mark (§3.3's D3) has something to mark.
+                "greeks_derived": s == 460.0,
+            })
     return {
         "symbol": "SPY", "spot": 471.20, "expiration": iso(0),
         "expirations": [iso(0), iso(1), iso(3), iso(30)],
@@ -550,6 +574,215 @@ def check_ticket_does_not_refetch(browser, base, c: Checks,
     page.close()
 
 
+# ── 3 (continued). What contracts are available? ─────────────────────────────
+
+CHAIN_JS = """() => {
+  const wrap = document.getElementById('tk-chain');
+  const rows = Array.from(wrap.querySelectorAll('tr[data-strike]'));
+  const heads = Array.from(wrap.querySelectorAll('th'));
+  const w = wrap.getBoundingClientRect();
+  const focused = document.activeElement;
+  const tabbable = rows.filter(r => r.tabIndex === 0);
+  const inView = el => {
+    const b = el.getBoundingClientRect();
+    return b.top >= w.top - 1 && b.bottom <= w.bottom + 1;
+  };
+  return {
+    role: wrap.querySelector('table')?.getAttribute('role') || '',
+    labelled: !!wrap.querySelector('table')?.getAttribute('aria-label'),
+    columns: heads.map(h => h.textContent.trim()),
+    notes: Object.fromEntries(
+      heads.map(h => [h.textContent.trim(), h.getAttribute('title') || ''])),
+    strikes: rows.map(r => +r.dataset.strike),
+    // Exactly one tab stop is the whole roving-tabindex contract.
+    tabStops: tabbable.length,
+    tabStopStrike: tabbable.length ? +tabbable[0].dataset.strike : null,
+    focusedStrike: rows.includes(focused) ? +focused.dataset.strike : null,
+    selected: rows.filter(r => r.classList.contains('selrow'))
+                  .map(r => +r.dataset.strike),
+    ariaSelected: rows.filter(r => r.getAttribute('aria-selected') === 'true')
+                      .map(r => +r.dataset.strike),
+    anchorInView: (() => {
+      const r = rows.find(x => +x.dataset.strike === 470);
+      return r ? inView(r) : null;
+    })(),
+    derivedMarks: rows.filter(r => r.querySelector('.ch-derived'))
+                      .map(r => +r.dataset.strike),
+    // A control that has been vertically squashed is still "present", still
+    // click-targetable and still reports its text — so this is measured as a
+    // RATIO of rendered height to natural height, which is the only form of
+    // the question a DOM query can answer honestly.
+    pillFill: (() => {
+      const b = document.querySelector('#tk-exps button');
+      if (!b) return null;
+      const r = b.getBoundingClientRect();
+      return r.height <= 0 ? 0 : +(r.height / b.scrollHeight).toFixed(2);
+    })(),
+  };
+}"""
+
+
+def check_chain_is_a_grid(browser, base, c: Checks, console: list) -> None:
+    """The chain is reachable, and usable, without a mouse (M4-C5).
+
+    Fails against the previous build on every assertion: rows carried a plain
+    `onclick` and no `tabindex`, so the chain could not be entered from the
+    keyboard at all. §6.4 names this as the point where P8 fails hardest,
+    "at the exact point where speed matters most".
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[])
+    ch = page.evaluate(CHAIN_JS)
+
+    c.check("the chain exposes itself as a grid", ch["role"] == "grid",
+            ch["role"] or "no role")
+    c.check("and the grid says which chain it is", ch["labelled"])
+    c.check("exactly one row is in the tab order", ch["tabStops"] == 1,
+            f"{ch['tabStops']} tab stops")
+    # §6.4: "on load, the chain scrolls to and marks the strike nearest spot."
+    # Spot is 471.20 and the fixture's strikes straddle it unevenly, so 470 is
+    # the only right answer.
+    c.check("the tab stop starts on the strike nearest spot",
+            ch["tabStopStrike"] == 470, str(ch["tabStopStrike"]))
+    # `[preserved]`: the previous build also brought the spot area into view,
+    # by calling `scrollIntoView({block:"center"})` on the ATM marker. The
+    # OUTCOME was already right; what changed is that the scroll now happens
+    # only when the row is out of view (motion catalogue M-14) and targets a
+    # real strike rather than the gap between two. Pinned so the rewrite
+    # cannot have quietly lost it.
+    c.check("[preserved] that strike is on screen without the user scrolling",
+            ch["anchorInView"] is True, str(ch["anchorInView"]))
+    c.check("nothing is selected until the user selects it",
+            ch["selected"] == [], str(ch["selected"]))
+    # A defect this fixture found by being long enough to be realistic.
+    # `#trade-chain` is a column flex container, so `flex-shrink` acts
+    # vertically and defaults to 1: with 37 strikes below it the expiry strip
+    # was compressed into a row of half-height slivers under the table's
+    # sticky header. Every pill was still present, still readable by
+    # `textContent` and still clickable, so the expiry-label checks above went
+    # on passing over a control the user could not actually read.
+    c.check("a long chain does not squash the expiry strip above it",
+            ch["pillFill"] is not None and ch["pillFill"] >= 0.98,
+            f"pills rendered at {ch['pillFill']} of their natural height")
+
+    # Everything below needs a keyboard entry point. Without one the section
+    # cannot run — and it must report that as a FAILURE rather than raise, or
+    # the gate stops being a gate at exactly the moment it has found
+    # something. (`page.focus` on a selector that never resolves throws after
+    # a 30s timeout, which is how this was discovered.)
+    if ch["tabStops"] != 1:
+        c.check("the chain can be entered from the keyboard at all", False,
+                "no row carries tabindex=0; skipping the keyboard path")
+        page.close()
+        return
+
+    # §6.7's experienced path, walked exactly: focus the chain, `↓ ↓`, `⏎`.
+    # The anchor is 470 and the strikes step by 5, so two downs land on 480.
+    page.focus("#tk-chain tr[data-strike][tabindex='0']")
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("ArrowDown")
+    ch = page.evaluate(CHAIN_JS)
+    c.check("arrow keys move the keyboard's position down the chain",
+            ch["focusedStrike"] == 480, str(ch["focusedStrike"]))
+    c.check("and the tab stop travels with it, staying single",
+            ch["tabStops"] == 1 and ch["tabStopStrike"] == 480,
+            f"{ch['tabStops']} stops at {ch['tabStopStrike']}")
+    c.check("moving the keyboard does not arm the ticket",
+            ch["selected"] == [], str(ch["selected"]))
+
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(500)
+    ch = page.evaluate(CHAIN_JS)
+    c.check("Enter commits the focused row to the ticket",
+            ch["selected"] == [480], str(ch["selected"]))
+    c.check("and the selection is announced, not only coloured",
+            ch["ariaSelected"] == [480], str(ch["ariaSelected"]))
+    # The assertion that caught a real collision: the document-level order
+    # shortcuts also bind Enter, and `selectContract` sets the `tkSel` their
+    # guard tests — so one press armed the ticket AND opened the review
+    # modal, which focused its own button and left the chain's keyboard
+    # position nowhere. The chain now owns the keys it handles.
+    c.check("selecting does not destroy the keyboard's position",
+            ch["focusedStrike"] == 480, str(ch["focusedStrike"]))
+    c.check("and one Enter does not also open the review modal",
+            not page.is_visible("#confirm-overlay.show"))
+    sel = page.text_content("#tk-selected") or ""
+    c.check("the ticket followed the keyboard", "$480" in sel, sel[:80])
+
+    page.keyboard.press("Home")
+    ch = page.evaluate(CHAIN_JS)
+    c.check("Home jumps to the first strike", ch["focusedStrike"] == 380,
+            str(ch["focusedStrike"]))
+    c.check("and the armed contract stays armed while the keyboard moves",
+            ch["selected"] == [480], str(ch["selected"]))
+
+    # Tab leaves the grid for the ticket (§6.4's last keyboard clause).
+    page.keyboard.press("Tab")
+    landed = page.evaluate(
+        "() => !!document.activeElement.closest('#trade-ticket')")
+    c.check("Tab leaves the chain for the ticket", landed)
+    page.close()
+
+
+def check_chain_columns_by_level(browser, base, c: Checks,
+                                 console: list) -> None:
+    """§8.2's column sets, and the two figures they needed (M4-C5).
+
+    The previous build's own comment said it: "§8.2's full progression names
+    columns this chain does not carry yet — breakeven and 'chance ITM' at
+    Level 1, volume at Level 2, the remaining Greeks at Level 3." A Guided
+    user saw Strike/Bid/Ask/Mid and nothing that told them what the contract
+    had to do to be worth anything.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[])
+
+    def cols_at(level):
+        page.evaluate(f"() => Ctx.setSurfaceLevel({level})")
+        page.wait_for_timeout(350)
+        return page.evaluate(CHAIN_JS)
+
+    guided = cols_at(1)
+    joined = " ".join(guided["columns"]).lower()
+    for want in ("strike", "bid", "ask", "mid", "break-even", "chance itm"):
+        c.check(f"Guided shows {want!r}", want in joined, joined)
+    # §8.1-1: the level changes what is DRAWN, never what exists.
+    for hide in ("delta", "iv", "gamma", "theta", "vega"):
+        c.check(f"Guided does not show {hide!r}", hide not in joined, joined)
+    c.check("Guided still lists every strike the chain holds",
+            len(guided["strikes"]) == 37, str(len(guided["strikes"])))
+
+    # P3, and §3.3: chance-ITM is delta read as a percentage, and the screen
+    # must not let it be mistaken for a forecast.
+    note = guided["notes"].get("Chance ITM", "")
+    c.check("chance-ITM states that it is an approximation, not a forecast",
+            "not a forecast" in note.lower(), note[:100])
+    beven = guided["notes"].get("Break-even", "")
+    c.check("break-even says it is priced at the fill, not the mid",
+            "not the mid" in beven.lower(), beven[:100])
+
+    focused = " ".join(cols_at(2)["columns"]).lower()
+    c.check("Focused adds delta", "delta" in focused, focused)
+    c.check("Focused adds volume", "vol" in focused, focused)
+    c.check("Focused still does not show the full greek set",
+            "gamma" not in focused and "vega" not in focused, focused)
+
+    full = cols_at(3)
+    fjoined = " ".join(full["columns"]).lower()
+    for want in ("iv", "oi", "gamma", "theta", "vega", "liq"):
+        c.check(f"Full shows {want!r}", want in fjoined, fjoined)
+
+    # PRODUCT_STANDARDS.md §3.3's D3, closed. One fixture row carries computed
+    # greeks; it is the only one marked.
+    c.check("a row whose greeks were computed says so",
+            full["derivedMarks"] == [460], str(full["derivedMarks"]))
+
+    pro = " ".join(cols_at(4)["columns"]).lower()
+    c.check("Pro is not shown LESS than Full", pro == fjoined, pro)
+    page.evaluate("() => Ctx.setSurfaceLevel(3)")
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
@@ -563,6 +796,8 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_workspace(browser, base, c, console)
     check_seam_matches_home(browser, base, c, console)
     check_expiry_labels(browser, base, c, console)
+    check_chain_is_a_grid(browser, base, c, console)
+    check_chain_columns_by_level(browser, base, c, console)
     check_ticket_empty_state(browser, base, c, console)
     check_ticket_states_the_engines_numbers(browser, base, c, console)
     check_ticket_does_not_refetch(browser, base, c, console)

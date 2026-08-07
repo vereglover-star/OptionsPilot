@@ -284,8 +284,46 @@ class TestTheChainPayloadIsUnchanged:
         assert payload["expiration"] == payload["expirations"][0]
         assert payload["spot"] > 0
         row = payload["chain"][0]
+        # M4-C5 widened this deliberately: §8.2's Guided column set needs
+        # break-even and a chance-ITM reading, Level 3 needs the remaining
+        # greeks, and `greeks_derived` closes PRODUCT_STANDARDS.md §3.3's D3.
+        # Asserted as an exact set rather than a subset so a field added
+        # without a decision fails here.
         assert set(row) == {"strike", "right", "bid", "ask", "mid", "delta",
-                            "iv", "volume", "open_interest", "liquidity", "dte"}
+                            "iv", "gamma", "theta", "vega",
+                            "volume", "open_interest", "liquidity", "dte",
+                            "entry", "breakeven", "chance_itm",
+                            "greeks_derived"}
+
+    def test_breakeven_is_priced_at_the_fill_not_the_mid(self, server):
+        """The chain's break-even and the review modal's are one function.
+
+        Both go through `services/chain.breakeven` over
+        `review.estimate_premium`, so a row that broke even at
+        `strike + mid` would be describing a trade nobody can get.
+        """
+        from optionspilot.services import chain as chain_rules, review
+
+        payload = server.chain_payload("SPY")
+        slippage = float(server.orch.cfg.broker.slippage_pct)
+        row = next(r for r in payload["chain"] if r["ask"] > 0)
+        expected_entry = review.estimate_premium(
+            side="buy_to_open", kind="market", bid=row["bid"], ask=row["ask"],
+            mid=row["mid"], slippage_pct=slippage)
+        assert row["entry"] == expected_entry
+        assert row["breakeven"] == chain_rules.breakeven(
+            strike=row["strike"], premium=expected_entry, right=row["right"])
+
+    def test_every_row_says_whether_its_greeks_were_supplied_or_computed(self, server):
+        payload = server.chain_payload("SPY")
+        assert all(isinstance(r["greeks_derived"], bool)
+                   for r in payload["chain"])
+        # A row with no greek at all claims no provenance — there is nothing
+        # to have derived.
+        for r in payload["chain"]:
+            if r["delta"] == 0.0:
+                assert r["greeks_derived"] is False
+                assert r["chance_itm"] is None
 
     def test_a_symbol_with_no_expirations_returns_an_empty_chain(self, server):
         server.orch.provider.get_expirations = lambda symbol: []

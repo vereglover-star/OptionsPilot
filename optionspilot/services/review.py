@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from optionspilot.services import chain
 from optionspilot.services.viewmodels import ReviewView
 
 #: One option contract covers this many shares. Not a setting: it is the
@@ -221,8 +222,10 @@ def review(*, side: str, kind: str, quantity: int, symbol: str, strike: float,
                          "no new risk.")
 
     if opening and premium is not None:
-        breakeven = round(strike + premium, 2) if right == "call" \
-            else round(strike - premium, 2)
+        # `services/chain.py` owns the rule, so the break-even in the chain
+        # row and the break-even in this modal are produced by ONE function
+        # rather than by two that happen to agree (M4-C5).
+        breakeven = chain.breakeven(strike=strike, premium=premium, right=right)
         breakeven_note = ""
     else:
         breakeven = None

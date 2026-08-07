@@ -49,7 +49,7 @@ from optionspilot.broker.base import BrokerError
 from optionspilot.broker.orders import OrderKind, TIF
 from optionspilot.core.logging_setup import get_logger
 from optionspilot.core.models import OptionRight, utcnow
-from optionspilot.services import expiry, quickpick, review
+from optionspilot.services import chain, expiry, quickpick, review
 from optionspilot.services.errors import ValidationError
 from optionspilot.services.viewmodels import QuickPickView
 
@@ -148,18 +148,43 @@ class TradingService:
             exp = expiration or expirations[0]
             spot = provider.get_quote(symbol).last
             today = self._clock().date()
-            chain = provider.get_option_chain(symbol, date.fromisoformat(exp))
+            contracts = provider.get_option_chain(symbol, date.fromisoformat(exp))
+            slippage = float(self._orch.cfg.broker.slippage_pct)
             rows = []
-            for c in chain:
-                if c.delta == 0.0:
+            for c in contracts:
+                # Whether the greeks were SUPPLIED or COMPUTED is a fact this
+                # loop already knew and used to throw away, which is exactly
+                # PRODUCT_STANDARDS.md §3.3's debt D3: a computed delta shown
+                # beside a provider delta with no distinction states a model
+                # output as a market observation (M4-C5).
+                derived = c.delta == 0.0
+                if derived:
                     c = enrich_greeks(c, spot, today)
+                    # `enrich_greeks` returns the contract UNCHANGED when it
+                    # cannot solve an implied volatility, so a still-zero delta
+                    # means nothing was derived — there is no provenance to
+                    # mark because there is no greek.
+                    derived = c.delta != 0.0
+                # The chain's break-even is what an opening buy would cost to
+                # break even on, priced at the fill this order would actually
+                # get. One owner, shared with the review modal.
+                entry = review.estimate_premium(
+                    side="buy_to_open", kind="market", bid=c.bid, ask=c.ask,
+                    mid=c.mid, slippage_pct=slippage)
                 rows.append({
                     "strike": c.strike, "right": c.right.value,
                     "bid": c.bid, "ask": c.ask, "mid": round(c.mid, 2),
                     "delta": round(c.delta, 3), "iv": round(c.implied_volatility, 4),
+                    "gamma": round(c.gamma, 4), "theta": round(c.theta, 4),
+                    "vega": round(c.vega, 4),
                     "volume": c.volume, "open_interest": c.open_interest,
                     "liquidity": liquidity_score(c),
                     "dte": c.dte(today),
+                    "entry": entry,
+                    "breakeven": chain.breakeven(
+                        strike=c.strike, premium=entry, right=c.right.value),
+                    "chance_itm": chain.chance_itm(c.delta),
+                    "greeks_derived": derived,
                 })
             # `expiries` is ADDITIVE (M4). `expirations` stays a list of ISO
             # strings so every existing consumer is untouched; the labelled
@@ -282,9 +307,9 @@ class TradingService:
 
         with self._lock:
             provider = self._orch.provider
-            chain = provider.get_option_chain(symbol, expiration)
+            listed = provider.get_option_chain(symbol, expiration)
             contract = next(
-                (c for c in chain
+                (c for c in listed
                  if c.strike == strike and c.right is right), None)
             if contract is None:
                 # `ValidationError`, not `NotFound`: the endpoint exists and the

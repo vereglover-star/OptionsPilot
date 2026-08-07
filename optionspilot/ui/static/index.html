@@ -851,6 +851,23 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 .chain-wrap tr[data-strike]:hover td { background:var(--surface-sunken); }
 .chain-wrap tr.selrow td { background:var(--action-primary-tint); }
 .chain-wrap tr.selrow td:first-child { box-shadow:inset 3px 0 0 var(--action-primary-text); }
+/* ── the chain as a grid (M4-C5) ──────────────────────────────────────────
+   The keyboard's position is a DIFFERENT thing from the selection, and the
+   two are visible at once: a user arrowing down past their armed contract
+   must be able to see both where they are and what is still selected. Focus
+   is a ring, selection is a fill — the same separation the rail already uses
+   for hover versus "you are here". */
+.chain-wrap tr[data-strike]:focus { outline:none; }
+.chain-wrap tr[data-strike]:focus td { background:var(--surface-sunken);
+  box-shadow:inset 0 1px 0 var(--action-primary-text),
+             inset 0 -1px 0 var(--action-primary-text); }
+.chain-wrap tr[data-strike]:focus td:first-child {
+  box-shadow:inset 0 1px 0 var(--action-primary-text),
+             inset 0 -1px 0 var(--action-primary-text),
+             inset 3px 0 0 var(--action-primary-text); }
+.chain-wrap tr.selrow:focus td { background:var(--action-primary-tint); }
+/* §3.3's provenance mark: this row's greeks were computed, not supplied. */
+.ch-derived { color:var(--ink-muted); cursor:help; }
 .chain-wrap td.bid { color:var(--market-pos-text); } .chain-wrap td.ask { color:var(--market-neg-text); }
 tr.atm-marker td { padding:3px var(--space-2); border:none; background:var(--surface-base);
   color:var(--ink-muted); font-size:var(--text-micro); text-align:center; letter-spacing:.5px; }
@@ -1728,6 +1745,15 @@ body.shell-v2 #acct-cards { display:none; }
    the height it is given and scroll inside it, or it pushes everything below
    it off the screen. A chain is the longest region in the product. */
 #trade-chain .chain-wrap { flex:1 1 auto; min-height:0; overflow-y:auto; }
+/* The chain's two headers do not shrink (M4-C5). `#trade-chain` is a COLUMN
+   flex container, so `flex-shrink` acts vertically and defaults to 1 — with a
+   long chain below them the symbol row and the expiry strip were compressed
+   and their contents clipped. Measured with a 37-strike fixture at
+   1920x1080: the expiry pills rendered as a row of half-height slivers under
+   the table's sticky header, and every pill was still "present" and still
+   click-targetable, so nothing in the DOM said anything was wrong.
+   The scrolling body is the only thing here that may absorb the slack. */
+#trade-chain > .wl-tools, #trade-chain > .exp-pills { flex:0 0 auto; }
 
 #trade-ticket { display:flex; flex-direction:column; min-height:0;
   overflow-y:auto; }
@@ -8651,68 +8677,257 @@ function renderExpPills() {
    behaviour** (§8.1-1): this list decides which columns are DRAWN, and the
    same row selects the same contract at every level.
 
-   §8.2's full progression names columns this chain does not carry yet —
-   breakeven and "chance ITM" at Level 1, volume at Level 2, the remaining
-   Greeks at Level 3. Those are computed and added in M4-C5, where the chain
-   is rebuilt; adding them here would be building the Trade destination one
-   milestone early. Level 4 is deliberately identical to Level 3 until the
-   custom column set exists — a Pro user is not shown LESS, they are simply
-   not yet offered the extra choice. */
+   §8.2's progression, completed in M4-C5:
+
+     Level 1 Guided    Strike, Bid, Ask, Mid, Break-even, Chance ITM
+     Level 2 Focused   + Delta, Volume
+     Level 3 Full      + IV, OI, Gamma, Theta, Vega, Liq
+     Level 4 Pro       identical to Full until the custom column set exists —
+                       a Pro user is not shown LESS, they are simply not yet
+                       offered the extra choice.
+
+   Break-even and chance-ITM are SERVER fields (`services/chain.py`), not
+   arithmetic done here. Break-even in particular is priced at the expected
+   fill rather than the mid and is the same function the review modal calls,
+   because a chain and a modal disagreeing about where one contract breaks
+   even is the one-fact-two-owners defect this codebase has paid for four
+   times. Chance-ITM is |delta| read as a percentage and is labelled as an
+   approximation wherever it appears — delta is N(d1), the probability of
+   finishing in the money is N(d2), and the column must not claim to be a
+   forecast. */
 const CHAIN_COLUMNS = [
   {key: "strike", label: "Strike", min: 1},
   {key: "bid",    label: "Bid",    min: 1, learn: "spread"},
   {key: "ask",    label: "Ask",    min: 1, learn: "spread"},
   {key: "mid",    label: "Mid",    min: 1},
+  {key: "beven",  label: "Break-even", min: 1, learn: "breakeven"},
+  {key: "citm",   label: "Chance ITM", min: 1, learn: "delta"},
   {key: "delta",  label: "Delta",  min: 2, learn: "delta"},
+  {key: "vol",    label: "Vol",    min: 2},
   {key: "iv",     label: "IV",     min: 3, learn: "iv"},
   {key: "oi",     label: "OI",     min: 3, learn: "oi"},
+  {key: "gamma",  label: "Gamma",  min: 3},
+  {key: "theta",  label: "Theta",  min: 3},
+  {key: "vega",   label: "Vega",   min: 3},
   {key: "liq",    label: "Liq",    min: 3, learn: "liquidity"},
 ];
 
+/* A figure that is not known renders as `—`, never as `0.000`. §3.3: zero is
+   a legitimate greek, so printing it for an absent one is a false statement
+   about the contract rather than a blank. Greeks are three decimals and IV is
+   a percentage to one, which is §3.3's first line. */
+const CH_ABSENT = "—";
+const chNum = (v, dp) => (v === null || v === undefined || !isFinite(v))
+  ? CH_ABSENT : v.toFixed(dp);
+
 const CHAIN_CELL = {
   strike: r => `<b>${r.strike}</b>`,
-  bid:    r => r.bid.toFixed(2),
-  ask:    r => r.ask.toFixed(2),
-  mid:    r => r.mid.toFixed(2),
-  delta:  r => r.delta.toFixed(2),
-  iv:     r => `${(r.iv * 100).toFixed(1)}%`,
+  bid:    r => chNum(r.bid, 2),
+  ask:    r => chNum(r.ask, 2),
+  mid:    r => chNum(r.mid, 2),
+  beven:  r => chNum(r.breakeven, 2),
+  citm:   r => r.chance_itm == null ? CH_ABSENT : `${r.chance_itm.toFixed(0)}%`,
+  delta:  r => chNum(r.delta, 3),
+  vol:    r => `${r.volume ?? 0}`,
+  iv:     r => r.iv ? `${(r.iv * 100).toFixed(1)}%` : CH_ABSENT,
   oi:     r => `${r.open_interest}`,
-  liq:    r => r.liquidity.toFixed(0),
+  gamma:  r => chNum(r.gamma, 3),
+  theta:  r => chNum(r.theta, 3),
+  vega:   r => chNum(r.vega, 3),
+  liq:    r => chNum(r.liquidity, 0),
 };
 
 const CHAIN_CELL_CLASS = {bid: "bid", ask: "ask"};
 
-function renderChain(scrollToATM = false) {
+/* Column-level honesty lines, attached as the header's `title` so the
+   qualification travels with the column rather than living in a tutorial
+   nobody opens. `CHANCE_ITM_NOTE` is `services/chain.py`'s wording; it is
+   repeated here rather than fetched because it is one static sentence and a
+   round trip to render a tooltip would be absurd — but the Python constant is
+   the one that gets edited, and `trade_check` asserts the screen says it. */
+const CHAIN_COL_NOTE = {
+  citm: "Approximated from delta. It is what the market's own pricing " +
+        "implies, not a forecast, and not a promise.",
+  beven: "Where this contract stops losing money at expiry, priced at the " +
+         "fill this order would actually get — the ask plus slippage, not " +
+         "the mid.",
+};
+
+/* PRODUCT_STANDARDS.md §3.3's D3, closed here. `enrich_greeks` computes the
+   greeks when a provider sends none, and until now the chain showed a
+   computed delta beside a provider delta with nothing to tell them apart —
+   which is a screen stating a model output as a market observation. The
+   server marks the row; this is what the mark says. */
+const CHAIN_DERIVED_NOTE =
+  "Calculated from this contract's price, because the data provider sent " +
+  "no greeks for it.";
+
+/* ── the chain (M4-C5) ────────────────────────────────────────────────────
+   Three things this render owes §6.4, and one it owes the keyboard.
+
+   **It is a GRID, not a list of clickable rows.** `role="grid"` with a roving
+   tabindex is the pattern a screen reader and a keyboard both already know:
+   exactly one row is in the tab order at a time, arrows move within the grid,
+   and Tab leaves it for the ticket. Before this, the chain was unreachable
+   without a mouse — §6.4 names that as the point where P8 fails hardest,
+   because it is where speed matters most.
+
+   **Selection does not re-render the table.** It used to: `selectContract`
+   called `renderChain`, which rebuilt `innerHTML` for every row. On a real
+   SPY chain that is ~300 rows re-parsed per arrow key, and — fatally for
+   keyboard navigation — it destroys the focused element, so focus fell back
+   to `<body>` and the next arrow key scrolled the page instead of moving the
+   selection. `chMarkSelection` toggles a class on at most two rows.
+
+   **Spot-anchored, and scrolled only when out of view.** M-14 in the motion
+   catalogue is explicit that the chain scrolls to its selection *only when
+   out of view*, and `CLAUDE.md` records what `scrollIntoView({block:
+   "center"})` cost the guided tour when it was used as "make this visible". */
+let chRows = [];        // the rendered rows, in display order
+let chFocus = -1;       // index into chRows holding tabindex=0
+
+function chRowEls() {
+  return Array.from(document.querySelectorAll("#tk-chain tr[data-strike]"));
+}
+
+/* Move the roving tabindex. `focus` is optional because the initial anchor
+   must set the tab stop WITHOUT stealing focus — a chain that grabs focus on
+   load would throw a screen reader out of whatever the user was reading. */
+function chSetFocus(i, {focus = false, scroll = false} = {}) {
+  const els = chRowEls();
+  if (!els.length) return;
+  i = Math.max(0, Math.min(els.length - 1, i));
+  chFocus = i;
+  els.forEach((el, n) => el.tabIndex = n === i ? 0 : -1);
+  if (focus) els[i].focus({preventScroll: true});
+  if (scroll) chRevealRow(els[i]);
+}
+
+/* M-14: only when out of view. A tall target running past the fold is normal;
+   scrolling for it is the behaviour that threw the guided tour to the bottom
+   of the page before the user had read a word. */
+function chRevealRow(el) {
+  const wrap = $("tk-chain");
+  if (!el || !wrap) return;
+  const r = el.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+  if (r.top >= w.top && r.bottom <= w.bottom) return;
+  wrap.scrollTop += (r.top < w.top)
+    ? r.top - w.top - 8
+    : r.bottom - w.bottom + 8;
+}
+
+/* Selection, without touching the other 298 rows. */
+function chMarkSelection() {
+  chRowEls().forEach(el => {
+    const on = !!tkSel && +el.dataset.strike === tkSel.strike;
+    el.classList.toggle("selrow", on);
+    el.setAttribute("aria-selected", on ? "true" : "false");
+  });
+}
+
+function renderChain(anchor = false) {
   if (!tkChain) return;
   const cols = CHAIN_COLUMNS.filter(c => Ctx.surfaceLevel() >= c.min);
   const rows = tkChain.chain.filter(r => r.right === tkRight)
       .sort((a, b) => a.strike - b.strike);
-  // insert the "spot" marker between the strikes bracketing the underlying
+  chRows = rows;
+  // The strike NEAREST spot, which is what §6.4 says the chain marks and
+  // anchors on. The old code marked the gap BETWEEN the two bracketing
+  // strikes, which is a fine rule for a divider and no use at all as a
+  // starting position for the keyboard.
+  let nearest = -1, best = Infinity;
+  rows.forEach((r, i) => {
+    const d = Math.abs(r.strike - tkChain.spot);
+    if (d < best) { best = d; nearest = i; }
+  });
   let markerAfter = -1;
   for (let i = 0; i < rows.length - 1; i++)
     if (rows[i].strike <= tkChain.spot && tkChain.spot < rows[i + 1].strike)
       { markerAfter = i; break; }
-  $("tk-chain").innerHTML = `<table>
-    <tr>${cols.map(c =>
-      `<th scope="col" class="num${c.learn ? " lrn" : ""}"` +
-      `${c.learn ? ` data-learn="${c.learn}"` : ""}>${c.label}</th>`).join("")}</tr>` +
+
+  $("tk-chain").innerHTML = `<table role="grid"
+      aria-label="${esc(tkChain.symbol)} option chain, ${tkRight}s">
+    <tr role="row">${cols.map(c =>
+      `<th scope="col" role="columnheader" class="num${c.learn ? " lrn" : ""}"` +
+      `${c.learn ? ` data-learn="${c.learn}"` : ""}` +
+      `${CHAIN_COL_NOTE[c.key] ? ` title="${esc(CHAIN_COL_NOTE[c.key])}"` : ""}` +
+      `>${c.label}</th>`).join("")}</tr>` +
     rows.map((r, i) => {
       const sel = tkSel && tkSel.strike === r.strike && tkSel.right === r.right;
       const marker = i === markerAfter
         ? `<tr class="atm-marker" id="atm-row"><td colspan="${cols.length}">${tkChain.symbol} $${tkChain.spot.toFixed(2)}</td></tr>`
         : "";
-      return `<tr class="${sel ? "selrow" : ""}" data-strike="${r.strike}">` +
-        cols.map(c => `<td class="num${CHAIN_CELL_CLASS[c.key]
-          ? " " + CHAIN_CELL_CLASS[c.key] : ""}">${CHAIN_CELL[c.key](r)}</td>`).join("") +
+      // §3.3's provenance mark. One character, and its meaning is in the
+      // row's accessible name rather than only in a legend.
+      // Kept on ONE source line. A template literal broken across lines
+      // carries those breaks into the rendered text, and this one lands
+      // inside a table cell whose row height is what a user reads as
+      // "the rows are uneven".
+      const der = r.greeks_derived
+        ? ` <span class="ch-derived" title="${esc(CHAIN_DERIVED_NOTE)}" aria-label="greeks calculated">*</span>`
+        : "";
+      return `<tr role="row" class="${sel ? "selrow" : ""}" tabindex="-1"` +
+        ` aria-selected="${sel ? "true" : "false"}" data-strike="${r.strike}">` +
+        cols.map((c, n) => `<td role="gridcell" class="num${CHAIN_CELL_CLASS[c.key]
+          ? " " + CHAIN_CELL_CLASS[c.key] : ""}">${CHAIN_CELL[c.key](r)}` +
+          `${n === cols.length - 1 ? der : ""}</td>`).join("") +
         `</tr>` + marker;
     }).join("") + "</table>";
-  document.querySelectorAll("#tk-chain tr[data-strike]").forEach(tr =>
-    tr.onclick = () => selectContract(+tr.dataset.strike));
-  if (scrollToATM) {
-    const atm = $("atm-row");
-    if (atm) atm.scrollIntoView({block: "center"});
+
+  chRowEls().forEach((tr, i) => {
+    tr.onclick = () => { chSetFocus(i); selectContract(+tr.dataset.strike); };
+  });
+  // The tab stop starts on the selection if there is one, otherwise on the
+  // strike nearest spot — so `Tab` into the chain lands somewhere useful and
+  // `↓ ↓ ⏎` from there is §6.7's experienced path.
+  const selIdx = tkSel
+    ? rows.findIndex(r => r.strike === tkSel.strike) : -1;
+  chSetFocus(selIdx >= 0 ? selIdx : Math.max(0, nearest));
+  if (anchor) {
+    const els = chRowEls();
+    if (els[chFocus]) chRevealRow(els[chFocus]);
   }
 }
+
+/* Arrows move the highlight, Enter commits it to the ticket, Tab leaves for
+   the ticket (§6.4). Bound once on the container rather than per row, so the
+   handler survives a re-render — the previous per-row `onclick` assignment
+   did not, which is why a re-render used to silently drop interactivity. */
+$("tk-chain").addEventListener("keydown", e => {
+  const els = chRowEls();
+  if (!els.length) return;
+  const at = els.indexOf(document.activeElement);
+  if (at < 0) return;
+  // The keys the chain OWNS are stopped here. Without that they reach the
+  // document-level order-entry shortcuts, and the collision is not
+  // theoretical: `selectContract` sets `tkSel`, the document handler's Enter
+  // branch tests `tkSel` and clicks Review, so ONE press both armed the
+  // ticket and opened the review modal — which then stole focus out of the
+  // chain and left the keyboard nowhere. Caught by `trade_check` asserting
+  // that focus survives a selection.
+  const own = i => {
+    e.preventDefault(); e.stopPropagation();
+    chSetFocus(i, {focus: true, scroll: true});
+  };
+  if (e.key === "ArrowDown") return own(at + 1);
+  if (e.key === "ArrowUp") return own(at - 1);
+  if (e.key === "Home") return own(0);
+  if (e.key === "End") return own(els.length - 1);
+  if (e.key === "PageDown") return own(at + 10);
+  if (e.key === "PageUp") return own(at - 10);
+  if (e.key === "Enter" || e.key === " ") {
+    const strike = +els[at].dataset.strike;
+    // Enter on a row that is ALREADY armed is not a second selection — it is
+    // §6.7's next step. Letting it bubble is what makes the documented
+    // experienced path `↓ ↓ ⏎ ⏎` work: the first Enter arms the contract,
+    // the second reaches the review shortcut. Space never bubbles, because
+    // Space is not a commit gesture anywhere in this product.
+    if (e.key === " " || !tkSel || tkSel.strike !== strike) {
+      e.preventDefault(); e.stopPropagation();
+      selectContract(strike);
+    }
+  }
+});
 
 /* The ticket's EMPTY state (M4-C4). Named for what it does now: the form is
    no longer hidden, so this is a state change rather than a disappearance.
@@ -8773,7 +8988,11 @@ function selectContract(strike) {
        · OI ${row.open_interest} · liq ${row.liquidity.toFixed(0)}/100</div>`;
   tkSyncTicket();          // a new contract can invalidate the armed side/type
   updateEstimate();
-  renderChain();
+  // NOT `renderChain()` (M4-C5). Re-rendering the table on selection rebuilt
+  // ~300 rows of `innerHTML` per arrow key and destroyed the focused element
+  // doing it, so keyboard navigation could never have worked: focus fell to
+  // `<body>` and the next arrow scrolled the page. Two class toggles instead.
+  chMarkSelection();
   // §4.5-3: one contract selection, and §4.5-8: it survives a restart. The
   // server already validates and stores this shape, and drops it by itself
   // when the symbol moves — see `services/workspace.py::_contract`.
@@ -10592,6 +10811,9 @@ const GUIDE_TERMS = {
   iv: {title:"IV — implied volatility", kind:"Option pricing",
     def:"How much movement the market is pricing in for this stock, expressed as an annual percentage. High IV means options are expensive because a big move is expected. It is the market's opinion about the future, not a measurement of the past.",
     eg:"Buying at 90% IV and watching it fall to 50% after an announcement loses money even if the stock goes your way."},
+  breakeven: {title:"Break-even", kind:"Option contract",
+    def:"The underlying price at which this contract stops losing money at expiry — the strike plus what you paid for a call, or the strike minus it for a put. It is priced at the fill you would actually get, which is the ask plus slippage, not the mid. Being right about direction is not enough: the stock has to get past here before expiry for the trade to be worth anything.",
+    eg:"A $470 call bought at $3.99 breaks even at $473.99. If the stock finishes at $472 you were right and still lost."},
   dte: {title:"DTE — days to expiration", kind:"Option contract",
     def:"How many days until the contract expires and becomes worthless or gets exercised. Fewer days means cheaper contracts that move faster and decay faster. Longer-dated contracts cost more but give the trade room to be right slowly.",
     eg:"Under about 7 DTE, time decay dominates everything else — that is why the coach checks it."},

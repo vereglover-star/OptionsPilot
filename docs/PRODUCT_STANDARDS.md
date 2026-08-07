@@ -212,7 +212,9 @@ is worse than an absent one**, because the user acts on it.
   supplied.** `analysis/options_metrics.enrich_greeks` computes them when a
   provider returns zeros; a screen showing a computed delta beside a provider
   delta with no distinction is stating a model output as a market observation.
-  *This is not currently surfaced in the UI and is recorded as debt in §11.*
+  **Closed in M4-C5.** `TradingService.chain_payload` carries
+  `greeks_derived` per row — a fact the loop already knew and was throwing
+  away — and the chain marks those rows and says why.
 * A greek that cannot be computed is blank with a reason. Never `0.000`, which
   is a legitimate value.
 
@@ -441,7 +443,7 @@ under-claims is a compliance defect.
 | --- | --- | --- |
 | **Validator gap (G2)** | Its own commit, before M5 | It is a correctness bug in the engine's input, not a UI task. Small, isolated, and `MARKET_DATA.md` must be read first. |
 | **Countdown monotonicity** | With the validator fix | Same area, same reviewer, both need `chart_check` assertions. |
-| **Greek provenance (§3.3)** | M4-C5, if the chain is being rebuilt anyway | It is a chain-presentation decision and the chain is being rebuilt. |
+| ~~Greek provenance (§3.3)~~ | **Done — M4-C5** | Taken exactly where this table recommended: the chain was being rebuilt anyway. |
 | **Chart engine polish** | **M9** (Polish) | It is quality work on a surface that is not changing shape. Doing it before M5–M6 would polish a chart that later milestones still reposition. |
 | **Drawing tools** | **A new M10**, after 1.0 | Large enough to be its own milestone and independent of every destination. |
 | **Appearance customisation** | **M10**, with drawing tools | Shares the persistence and template model; splitting them means building it twice. |
@@ -461,7 +463,7 @@ they get rebuilt.
 | --- | --- | --- |
 | D1 | `validate_candles` does not enforce OHLC internal consistency | §1.3 |
 | D2 | Countdown can move backward when provider bar timestamps shift | §4.2 |
-| D3 | Derived greeks are not distinguished from provider greeks in the UI | §3.3 |
+| ~~D3~~ | ~~Derived greeks are not distinguished from provider greeks in the UI~~ — **closed in M4-C5** | §3.3 |
 | D4 | `THIRD_PARTY_NOTICES.md` is not shipped in the packaged application | §9.3 |
 | D5 | Chart candle colours are not user-customisable, and the token-layer constraint that must govern it is unimplemented | §5.3 |
 

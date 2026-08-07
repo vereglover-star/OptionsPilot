@@ -53,7 +53,56 @@ superseded one aborted and stale responses dropped, and changes are debounced
 so three quick quantity steps are one request. `trade_check.py` asserts all
 three as counts.
 
-**Gate: 18 → 46 checks.** Assertions carry a `[preserved]` or `[guard]` label
+**C5 — the chain, rebuilt.** Three things §6.4 asks for and one the keyboard
+does.
+
+*§8.2's column sets are complete.* Guided now shows Strike, Bid, Ask, Mid,
+**Break-even** and **Chance ITM**; Focused adds Delta and Volume; Full adds
+IV, OI, Gamma, Theta, Vega and Liq. The previous build's own comment recorded
+the gap — a Guided user saw four price columns and nothing telling them what
+the contract had to do to be worth anything.
+
+Both new figures are server-side, in a new pure module `services/chain.py`.
+Break-even is priced at the **expected fill**, not the mid, and `review.py`
+calls the same function — so the chain row and the review modal cannot
+disagree about where one contract breaks even. Chance-ITM is |delta| read as
+a percentage and says so: delta is N(d1), the probability of finishing in the
+money is N(d2), and the column header carries the sentence rather than
+implying a forecast. Computing N(d2) instead was rejected — §6.4 asks for a
+reading of *delta*, and a second probability disagreeing with the delta beside
+it is two owners of one idea.
+
+*The chain is a grid.* `role="grid"` with a roving tabindex: exactly one row
+in the tab order, arrows to move, `Enter` to arm the ticket, `Home`/`End`/
+`PageUp`/`PageDown`, `Tab` to leave for the ticket. Before this the chain
+could not be entered from the keyboard at all — §6.4 names that as where P8
+fails hardest. It anchors on the strike **nearest spot** rather than on the
+gap between the two bracketing it, and scrolls to it only when it is out of
+view (motion catalogue M-14).
+
+*Selection no longer re-renders the table.* It used to rebuild `innerHTML`
+for every row — ~300 rows re-parsed per keypress on a real SPY chain, and,
+fatally, it destroyed the focused element, so keyboard navigation could never
+have worked. Two class toggles now.
+
+**PRODUCT_STANDARDS.md §3.3's D3 is closed.** `enrich_greeks` computes the
+greeks when a provider sends none, and the chain showed a computed delta
+beside a provider delta with nothing to tell them apart — a screen stating a
+model output as a market observation. Rows now carry `greeks_derived` and
+marked rows say why.
+
+**Two defects found while building it.** The document-level order shortcuts
+also bind `Enter`, and their guard tests `tkSel` — which `selectContract` had
+just set — so a single press both armed the ticket *and* opened the review
+modal, which stole focus out of the chain. The chain now owns the keys it
+handles, and `Enter` on an already-armed row deliberately bubbles, which is
+what makes §6.7's documented `↓ ↓ ⏎ ⏎` path work. Separately, `#trade-chain`
+is a column flex container, so `flex-shrink` acts vertically: with a
+realistic-length chain below it the expiry strip was compressed to **57% of
+its natural height** — every pill still present, still readable by
+`textContent`, still clickable, and unreadable on screen.
+
+**Gate: 46 → 89 checks.** Assertions carry a `[preserved]` or `[guard]` label
 where they cannot fail against the previous build, so the file's own rule —
 every assertion fails against the build it replaces — stays checkable rather
 than aspirational.
