@@ -53,6 +53,55 @@ DESTINATIONS = ["home", "trade", "portfolio", "research", "journal", "settings"]
 MOVED = {"Coach": "Journal", "Backtest": "Research", "Learning": "Research",
          "Charts": "Research", "Dashboard": "Home", "Watchlist": "Research"}
 
+#: Widths the rail's geometry is asserted at. Chosen to straddle every
+#: breakpoint the rail has ever had rather than the ones it has today, so a
+#: future change to WHERE it collapses cannot quietly stop exercising the
+#: collapsed mode. The assertions are about geometry, not about which mode is
+#: active, so they hold whatever the breakpoints become.
+RAIL_WIDTHS = (1600, 1439, 1300, 1279, 1100, 1024)
+
+#: Every rail icon measured against the rail's own clipping box, plus its
+#: horizontal centring when the rail is in icon-only mode. Centring is only
+#: meaningful there — in expanded mode the icon is deliberately left-aligned
+#: against its label — so the mode is derived from whether the label renders
+#: rather than from a hard-coded width.
+RAIL_GEOMETRY_JS = """() => {
+  const rail = document.querySelector('#shell-rail');
+  const rb = rail.getBoundingClientRect();
+  // The clipping box is the PADDING box: `overflow:hidden` clips there, not
+  // at the border box, and the difference is exactly the border that made the
+  // original defect a 1px-off judgement call.
+  const left = rb.left, right = rb.left + rail.clientWidth;
+  const detail = [], offcentre = [];
+  let iconOnly = false;
+  rail.querySelectorAll('a').forEach(a => {
+    const ic = a.querySelector('.ic');
+    if (!ic) return;
+    const lbl = a.querySelector('.lbl');
+    const labelShown = lbl && getComputedStyle(lbl).display !== 'none';
+    if (!labelShown) iconOnly = true;
+    const b = ic.getBoundingClientRect();
+    const name = (a.dataset.dest || 'pilot');
+    if (b.width < 1 || b.height < 1) {
+      detail.push(name + ' icon has collapsed to ' +
+                  b.width.toFixed(1) + 'x' + b.height.toFixed(1));
+    } else if (b.left < left - 0.5 || b.right > right + 0.5) {
+      detail.push(name + ' icon spans ' + b.left.toFixed(1) + '->' +
+                  b.right.toFixed(1) + ' but the rail clips ' +
+                  left.toFixed(1) + '->' + right.toFixed(1));
+    }
+    if (!labelShown) {
+      const slack = ((b.left - left) - (right - b.right));
+      if (Math.abs(slack) > 1.5) {
+        offcentre.push(name + ' is ' + slack.toFixed(1) + 'px off centre');
+      }
+    }
+  });
+  return {clipped: detail.length > 0, detail: detail,
+          centred: offcentre.length === 0, offcentre: offcentre,
+          iconOnly: iconOnly};
+}"""
+
 
 class Checks:
     def __init__(self) -> None:
@@ -122,6 +171,28 @@ def run_checks(page, base: str, c: Checks) -> None:
                 '#shell-rail a[data-dest="settings"] .kbd', "e => e.length") == 0)
     c.check("Pilot sits with Settings at the foot of the rail",
             page.eval_on_selector_all("#shell-rail-util a", "e => e.length") == 2)
+
+    # ── the rail renders WHOLE at every supported width (M3.5-C1) ────────────
+    # The defect this replaces was invisible to every existing assertion: the
+    # items were present, ordered, named and clickable, and their icons were
+    # sliced vertically in half by `overflow:hidden` because a UA list padding
+    # pushed them past the rail's right edge. "The element exists" is not the
+    # claim a navigation makes. This measures the icon against the rail's own
+    # clipping box, which is the thing the user actually sees.
+    for width in RAIL_WIDTHS:
+        page.set_viewport_size({"width": width, "height": 1000})
+        page.wait_for_timeout(200)
+        geo = page.evaluate(RAIL_GEOMETRY_JS)
+        c.check(f"no rail icon is clipped at {width}px",
+                not geo["clipped"], "; ".join(geo["detail"][:3]))
+        # Emitted ONLY in icon-only mode. Running it at expanded widths would
+        # measure nothing and pass, which is a check that reports success for
+        # testing zero elements — the failure mode M3-C9 had to correct twice.
+        if geo["iconOnly"]:
+            c.check(f"every rail icon is centred in the rail at {width}px",
+                    geo["centred"], "; ".join(geo["offcentre"][:3]))
+    page.set_viewport_size({"width": 1600, "height": 1000})
+    page.wait_for_timeout(200)
 
     # ── 9: the active item is never colour alone ─────────────────────────────
     page.evaluate("Shell.goTo('trade')")

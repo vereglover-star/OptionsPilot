@@ -270,8 +270,19 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
   padding:var(--space-3) var(--space-2);
   background:var(--surface-base); border-right:1px solid var(--border-subtle);
   overflow:hidden; }
+/* `margin:0; padding:0` is the fix for a defect that shipped through M2 and
+   M3 unseen. `list-style:none` removes the markers but NOT the user agent's
+   `padding-inline-start:40px`, so every rail item began 40px right of the
+   rail's padding edge. At 200px that is invisible slack. At 72px and 56px it
+   pushed the icon column past the rail's right edge, where `overflow:hidden`
+   sliced every icon vertically in half — measured, the 16px icon spanned
+   60→76px inside a rail that clipped at 71px. Combined with the wordmark
+   overhanging the rail's border (fixed in C10) it read as the rail sliding
+   underneath the header. One missing declaration; two breakpoints broken.
+   `.home-next-list` sets both explicitly for the same reason, which is why
+   the omission here was invisible in review: the codebase looked consistent. */
 .shell-rail ul { list-style:none; display:flex; flex-direction:column;
-  min-width:0; }
+  min-width:0; margin:0; padding:0; }
 .sr-grow { flex:1; }
 .shell-rail a { display:flex; align-items:center; gap:var(--space-2); text-decoration:none;
   padding:var(--space-2) var(--space-3); border-radius:var(--radius-sm);
@@ -320,11 +331,18 @@ body.shell-v2 #halt-banner { position:sticky; top:0; z-index:4; }
 .dest-sections button[aria-selected="true"] { background:var(--action-primary-tint);
   color:var(--ink-primary); font-weight:600; }
 
+/* The label and the number hint go together. They were split across two
+   breakpoints, so between 1280 and 1439 the rail showed an icon and a bare
+   "1" — which pushed the icon 15px off centre AND, because a hidden label
+   contributes nothing to the accessible name, made "1" the name the item
+   announced. Hiding a label is what makes an item icon-only; everything that
+   only makes sense beside a label goes at the same moment. */
 @media (max-width:1439px) { body.shell-v2 { --rail-w:72px; }
-  body.shell-v2 .shell-rail .lbl { display:none; } }
-@media (max-width:1279px) { body.shell-v2 { --rail-w:56px; }
+  body.shell-v2 .shell-rail .lbl,
   body.shell-v2 .shell-rail .kbd { display:none; }
-  body.shell-v2 .shell-rail a { justify-content:center; padding:var(--space-2) var(--space-1); } }
+  body.shell-v2 .shell-rail a { justify-content:center;
+    padding:var(--space-2) var(--space-1); } }
+@media (max-width:1279px) { body.shell-v2 { --rail-w:56px; } }
 /* Below the supported minimum, a message rather than a degraded layout
    (DESIGN_SYSTEM_V2.md §5.3). */
 #shell-toosmall { display:none; position:fixed; inset:0; z-index:90;
