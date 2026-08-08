@@ -237,6 +237,34 @@ from the review's first line.
 
 **Gate: 156 → 172 checks.**
 
+**C11 — the legacy Trade markup, deleted.** It deleted less than its title
+says, and the difference is not a shortfall. §6 wrote C11 assuming the new
+Trade destination would be built *beside* the old one and the old one then
+removed. M4 did not do that: following M3.5's rule that a destination is
+built from the parts that already exist, C3 rebuilt `#tab-trade`'s interior
+**in place**, so the parallel legacy markup C11 was written to remove was
+never created.
+
+What it did remove is what M4 *orphaned*. `#acct-cards` — the ten-card
+account strip Home replaced and C3 hid — is gone, and it was not merely
+invisible: it cost a `/api/account/metrics` request on every Trade visit and
+every placed order (measured: two per visit), rendered ten cards into a
+`display:none` container, and stored a value whose last reader disappeared in
+C4. The collapsible chart's `.tk-chart-wrap`, `.tk-chart-toggle` and
+`#tk-chart-caret` rules went too; their markup left in C3 and the CSS
+outlived it.
+
+**Two deferrals, both asserted in the gate so they are visible rather than
+merely written down.** `#tab-charts` is the home of the one chart instance
+that `chReparent` moves into Trade's slot — deleting it would leave the chart
+nowhere to live, and M6 already owns Research. The legacy navigation is still
+the shell's rollback path; §2.1 records M3 declining the same deletion for
+the same reason, nothing in M4 needs it gone, and its cleanest form is
+M9-C7's existing scope.
+
+**Gate: 172 → 177 checks**, and the token ratchets fall to 49 legacy type
+uses and 309 off-scale rhythm values.
+
 **Gate: 131 → 156 checks**, including that a click, a double-click and an
 un-held Enter each place nothing.
 

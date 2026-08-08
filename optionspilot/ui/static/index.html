@@ -1487,13 +1487,14 @@ button#ch-follow.active { background:var(--action-primary-tint); border-color:va
   border:2px solid transparent; box-sizing:border-box; }
 .ch-swatches i.sel { border-color:var(--ink-primary); }
 .subpane { height:130px; margin-top:6px; border-top:1px solid var(--border-subtle); }
-/* Trade-tab collapsible chart: hosts the one relocated chart workspace */
-.tk-chart-wrap { margin-bottom:14px; }
-.tk-chart-toggle { all:unset; cursor:pointer; display:flex; align-items:center; gap:var(--space-2);
-  font-size:var(--legacy-fs-md); font-weight:600; color:var(--ink-primary); padding:var(--space-2) 2px; }
-.tk-chart-toggle #tk-chart-caret { display:inline-block; transition:transform var(--dur-fast);
-  color:var(--ink-muted); }
-.tk-chart-toggle[aria-expanded="true"] #tk-chart-caret { transform:rotate(90deg); }
+/* `.tk-chart-wrap`, `.tk-chart-toggle` and `#tk-chart-caret` are GONE
+   (M4-C11). They styled the collapsible chart §6.1 names as the first fault
+   of the old Trade page — a chart behind a toggle that defaulted to closed,
+   with a caret that rotated to say which way it pointed. M4-C3 replaced the
+   whole arrangement: the chart is a region of the workspace, always present,
+   and its control says "Hide"/"Show" rather than pointing. The rules
+   survived the markup that used them and had matched nothing since, which is
+   how a stylesheet accumulates a second design language nobody chose. */
 #tk-chart-slot { margin-top:6px; }
 .chart-panel.fullscreen { position:fixed; inset:0; z-index:70; margin:0; border-radius:0;
   display:flex; flex-direction:column; }
@@ -1825,12 +1826,7 @@ html.gd-nomotion #gd-ring::after { display:none; }
    content to grow into takes the slack. On Home that was band 3; here it is
    the chart, because a chart is the one element on this screen that is
    strictly more useful larger. */
-body:not(.shell-v2) #trade-ws-hidden { display:none; }
 body.shell-v2 #tab-trade { height:100%; }
-/* Home already states the account. A second copy on Trade is the duplicate
-   rendering the architecture rules forbid, so the legacy card strip is hidden
-   under the shell rather than maintained in two places. */
-body.shell-v2 #acct-cards { display:none; }
 
 .trade-ws { height:100%; align-items:stretch; }
 .trade-main { display:flex; flex-direction:column; gap:var(--space-5);
@@ -2746,7 +2742,6 @@ body.shell-v2 .home-legacy { display:none; }
 
   <!-- TRADE (manual paper trading) -->
   <section id="tab-trade" style="display:none">
-    <div class="cards" id="acct-cards"></div>
 
     <!-- ══ THE TRADE WORKSPACE (M4-C3) ═══════════════════════════════════
          One destination, three regions that are ALWAYS present: chart above
@@ -8768,37 +8763,27 @@ const post = (url, body) => fetch(url, {method: "POST",
   headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
 
 async function loadTrade() {
-  await Promise.all([loadMetrics(), loadOrders(), qpLoad()]);
+  await Promise.all([loadOrders(), qpLoad()]);
   renderTkPositions();
   qpRender();
   if (!tkChain) loadChain();
   tkChartApply();
 }
 
-let lastMetrics = null;
-async function loadMetrics() {
-  if (!$("acct-cards").__h) $("acct-cards").innerHTML =
-    `<div class="card"><div class="skel" style="height:38px"></div></div>`.repeat(5);
-  const m = await (await fetch("/api/account/metrics")).json();
-  lastMetrics = m;
-  // The 4th element is a glossary key: the label explains itself on hover and
-  // opens the full explanation on click, so a number a beginner cannot read is
-  // never just left sitting there.
-  setHTML("acct-cards", [
-    ["Buying power", fmt$(m.buying_power), "", "buying_power"],
-    ["Portfolio value", fmt$(m.portfolio_value), "", ""],
-    ["Unrealized P/L", fmt$(m.unrealized_pnl), cls(m.unrealized_pnl), ""],
-    ["Realized P/L", fmt$(m.realized_pnl), cls(m.realized_pnl), ""],
-    ["Daily P/L", fmt$(m.daily_pnl), cls(m.daily_pnl), ""],
-    ["Total return", m.total_return_pct.toFixed(2) + "%", cls(m.total_return_pct), ""],
-    ["Win rate", m.trades ? (m.win_rate * 100).toFixed(0) + "%" : "—", "", "win_rate"],
-    ["Profit factor", m.profit_factor ?? "—", "", "profit_factor"],
-    ["Avg win / loss", m.trades ? `${m.avg_win} / ${m.avg_loss}` : "—", "", ""],
-    ["Max drawdown", m.max_drawdown_pct.toFixed(2) + "%", "", "drawdown"],
-  ].map(([k, v, c, term]) =>
-    `<div class="card"><div class="k${term ? " lrn" : ""}"${term ? ` data-learn="${term}"` : ""}>${k}</div>` +
-    `<div class="v small ${c}">${v}</div></div>`).join(""));
-}
+/* `loadMetrics` and `#acct-cards` are GONE (M4-C11).
+   Trade carried a ten-card account strip — buying power, portfolio value,
+   both P&Ls, win rate, profit factor, drawdown — which M3 replaced with
+   Home's metric cluster. M4-C3 hid it with `body.shell-v2 #acct-cards
+   {display:none}` and recorded the reason: "Home already states the account.
+   A second copy on Trade is the duplicate rendering the architecture rules
+   forbid." Hiding was the stopgap; deleting is this commit.
+
+   It was not merely invisible, it was expensive. Every visit to Trade and
+   every placed order fetched `/api/account/metrics`, formatted ten cards,
+   and wrote them into a `display:none` container. `lastMetrics` — the value
+   that fetch existed to store — lost its final reader in M4-C4, when the
+   ticket's buying-power figure moved to `/api/v1/review`. So the request
+   answered no question on screen and fed no calculation. */
 
 let tkExp = "";   // selected expiration (ISO date), "" = provider default
 
@@ -10149,7 +10134,7 @@ $("tk-form").onsubmit = async e => {
     setTimeout(() => { $("tk-stop").focus();
       toast("Ticket pre-armed as a stop-loss — set the underlying level and place it"); }, 1200);
   }
-  await Promise.all([loadMetrics(), loadOrders()]);
+  await loadOrders();
 };
 
 /* ── operating mode (AI vs Human) + coach ─────────────────────────────── */

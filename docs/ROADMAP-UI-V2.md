@@ -567,7 +567,7 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**10 of 11 commits.** The backend tier (C1–C2) is complete and the
+**11 of 11 commits — complete.** The backend tier (C1–C2) is complete and the
 gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
 commit that protects the seven frontend commits, and seven commits of new
 surface with no behavioural coverage is how a destination ships broken.
@@ -582,9 +582,48 @@ surface with no behavioural coverage is how a destination ships broken.
 | C6 | ✅ | Quick picks wired to the ticket and marked in the chain; the catalogue is fetched, and every pick explains both axes it resolved | `59cb872` |
 | C7 | ✅ | The review modal, five elements in order, for every order type; the Guided explanation line | `1959c33` |
 | C8 | ✅ | Hold-to-confirm: pointer and keyboard, early-release cancel, reduced-motion stepping, three announcements, Submitting and Failed states | `6bd4925` |
-| C9 | ✅ | The ticket's blocked state — three refusals that were submit-only now have a second gate; all twelve `OrderManager` refusals re-asserted | `TBD-C9` |
+| C9 | ✅ | The ticket's blocked state — three refusals that were submit-only now have a second gate; all twelve `OrderManager` refusals re-asserted | `2b164d7` |
 | C10 | 🟡 | `scripts/trade_check.py` + wired into `verify.ps1` — structure + the expiry-label section; grows per commit | `73e81cd` |
-| C11 | ⬜ | Legacy trade and charts markup deleted | |
+| C11 | ✅ | Legacy **trade** markup deleted. **Charts re-scoped to M6** and the legacy navigation left standing — see below | `TBD-C11` |
+
+**C11 deleted less than its title says, and the difference is not a
+shortfall.** §6 wrote it as "legacy trade and charts markup deleted" on the
+assumption of a Stage 3 → Stage 4 migration: build the new Trade destination
+*beside* the old one, then delete the old one. M4 did not do that. Following
+M3.5's rule that a destination is built from the parts that already exist,
+C3 rebuilt `#tab-trade`'s **interior in place** — so the parallel legacy
+Trade markup C11 was written to remove was never created. What C11 actually
+found and removed is the markup M4 *orphaned*:
+
+* `#acct-cards`, the ten-card account strip Home replaced, hidden by C3 and
+  deleted here. It was not merely invisible: it cost a
+  `/api/account/metrics` request on every Trade visit and every placed order
+  (measured: two per visit), and `lastMetrics` — the value that request
+  existed to store — lost its last reader in C4.
+* `.tk-chart-wrap`, `.tk-chart-toggle` and `#tk-chart-caret`, which styled
+  the collapsible chart §6.1 names as Trade's first fault. The markup went in
+  C3; the rules outlived it.
+
+**Two things C11 deliberately did not touch.**
+
+*`#tab-charts` belongs to M6.* It is the home of the ONE chart instance,
+which `chReparent` moves between it and Trade's slot — deleting it would
+leave the chart nowhere to live, and §6-M6 already owns Research and is
+listed as "the last legacy markup deleted".
+
+*The legacy navigation is still the shell's rollback path.* §2.1 records that
+M3 declined the same deletion for the same reason and that it belongs to a
+navigation-scoped commit. Nothing in M4 needs it gone: Trade is reached
+through the rail, and the flag still switches both. The cleanest form when
+it is authorised is its own commit — delete `nav[aria-label="Main"]` and
+`header`, delete the `body.shell-v2 > nav … {display:none}` rule that hides
+them, drop `switchTab`'s optional-button branch (already optional since
+M3-C10), and remove the flag's off-branch in the same change rather than
+leaving a rollback that no longer rolls back to anything usable. That is
+**M9-C7's** existing scope, and merging it forward buys nothing.
+
+`scripts/trade_check.py` asserts both deferrals explicitly, so the gate's own
+output says what was left standing and why.
 
 **C1 did not land in `services/contracts.py` as §6 says.** That file already
 exists and holds the *transport* contract vocabulary — `Principal`,

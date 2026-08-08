@@ -1625,6 +1625,68 @@ def check_blocked_states(browser, base, c: Checks, console: list) -> None:
     page.close()
 
 
+def check_legacy_is_gone(browser, base, c: Checks, console: list) -> None:
+    """The Trade markup M4 replaced is deleted, not hidden (M4-C11).
+
+    `#acct-cards` was a ten-card account strip that M3's Home replaced and
+    M4-C3 hid behind `body.shell-v2 #acct-cards {display:none}`. Hidden is not
+    deleted, and this one was not merely invisible: every visit to Trade and
+    every placed order fetched `/api/account/metrics` to fill it, and
+    `lastMetrics` — the value that request existed to store — lost its last
+    reader in M4-C4.
+
+    Asserted as a REQUEST COUNT rather than as an absent element, because the
+    cost was the fetch. An element check would pass against a build that had
+    deleted the markup and kept the call.
+    """
+    calls: list = []
+    page = browser.new_page(viewport={"width": 1920, "height": 1080})
+    page.on("console",
+            lambda m: console.append(m.text) if m.type == "error" else None)
+    page.on("pageerror", lambda e: console.append(str(e)))
+    page.on("request", lambda r: calls.append(r.url)
+            if "/api/account/metrics" in r.url else None)
+    page.route("**/api/chain*", lambda route: route.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps(_chain_payload(date.today()))))
+    page.goto(base, wait_until="domcontentloaded")
+    home_ready(page, 25000)
+    goto(page, "trade")
+    page.wait_for_timeout(1200)
+
+    c.check("Trade no longer fetches the account metrics it cannot show",
+            not calls, f"{len(calls)} request(s) to /api/account/metrics")
+    gone = page.evaluate("""() => ({
+      cards: !!document.getElementById('acct-cards'),
+      // A hidden survivor would satisfy an "is it visible" check while
+      // still being maintained, so this asks whether it EXISTS.
+      caret: !!document.getElementById('tk-chart-caret'),
+    })""")
+    c.check("the duplicate account strip is deleted, not hidden",
+            not gone["cards"])
+    # `[guard]`: the caret's MARKUP went in M4-C3 and only its CSS survived
+    # until now, so this cannot fail against the previous build — a
+    # stylesheet rule is invisible to the DOM. It is here to stop the
+    # collapsible chart coming back, and the dead CSS itself is what the
+    # token ratchet's fall records.
+    c.check("[guard] the collapsible chart's caret stays gone",
+            not gone["caret"])
+
+    # What C11 did NOT delete, asserted so the deferral is visible in the
+    # gate's own output rather than only in a document: the chart panel is
+    # the ONE instance, `#tab-charts` is its home, and Research (M6) owns it.
+    still = page.evaluate("""() => ({
+      panel: !!document.getElementById('chart-panel'),
+      home: !!document.getElementById('tab-charts'),
+      nav: !!document.querySelector('nav[aria-label="Main"]'),
+    })""")
+    c.check("[deferred] the charts section survives — it is the chart's home "
+            "and M6 owns it", still["panel"] and still["home"])
+    c.check("[deferred] the legacy navigation survives — it is the shell's "
+            "rollback path", still["nav"])
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Every section of this file now has assertions.
 
@@ -1654,6 +1716,7 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_hold_by_keyboard(browser, base, c, console)
     check_hold_under_reduced_motion(browser, base, c, console)
     check_blocked_states(browser, base, c, console)
+    check_legacy_is_gone(browser, base, c, console)
     check_workflow_sections(c)
 
 
