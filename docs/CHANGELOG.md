@@ -4,7 +4,98 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [2026-08-07] — UI V2 M4: the Trade destination, complete
+## [2026-08-07] — UI V2 M4: Trade (V0.14.0)
+
+*Placing a trade becomes one screen, one workflow and one deliberate gesture.
+Eleven commits.*
+
+> **This release also contains Home.** V0.13.0 was built but never published,
+> so upgrading from **v0.12.3** brings the rebuilt Home destination and its
+> polish pass along with Trade. Both are described below the fold: *UI V2 M3:
+> Home* and *UI V2 M3.5: Home polish*.
+
+**Charting and trading stop being two places.** Trade is now one destination
+with three regions that are always on screen: the chart above the option
+chain on the left, the order ticket down the right. The chart used to sit
+behind a collapsed toggle, so arriving at Trade showed a chain and a ticket
+and nothing to read them against.
+
+**The ticket exists before you pick a contract.** Order type, quantity, time
+in force and the side control are all visible from the moment the screen
+opens, with the submit disabled and the reason next to it. You can see the
+shape of the decision before making it, and four figures are always labelled
+even when they are empty: **entry per contract, estimated cost, buying-power
+impact, and the most you can lose**.
+
+**Two numbers were wrong and are now right.** Read this if you have been
+using the ticket:
+
+* **Estimated cost was computed from the mid price.** Nothing fills at the
+  mid — a buy crosses to the ask and pays slippage. Measured against a live
+  SPY chain, a mid of 40.40 against a real expected fill of 40.804: one
+  contract read about $40 light and ten read about $404 light, on the screen
+  where you decide whether you can afford it. Every figure the ticket and the
+  review show now comes from the same pricing the broker actually uses.
+* **The position-size warning compared the wrong things.** It measured your
+  order against *buying power* and compared that to a risk budget the engine
+  measures against *account value*. On any account holding a position those
+  are different numbers, so the warning appeared at the wrong point. Both
+  sides now use the same denominator.
+
+**The chain is usable from the keyboard, and says more.** Arrow keys move
+through strikes, `Enter` arms the ticket, `Tab` moves on to the order form,
+and the chain opens anchored on the strike nearest the current price instead
+of at the top of the range. New columns arrive by Surface Level: **Guided**
+now shows break-even and a plain-language "chance in the money"; **Full**
+adds gamma, theta, vega and volume. A row whose greeks the app had to
+calculate — because the data provider sent none — is marked, so a model
+estimate is never shown as if it were a market observation.
+
+**Quick picks explain themselves.** Four shortcuts — ATM call, ATM put, 30
+day, Weekly. Each says what it will do before you press it and what it chose
+afterwards, naming the strike, the price it measured against, and what it did
+with your expiry. A shortcut that cannot find a contract says why instead of
+appearing to do nothing.
+
+**Review describes the trade, not the paperwork.** It was a table of
+mechanics — contract, action, quantity, time in force — and is now a
+restatement of consequences, in this order every time: a plain sentence, the
+cost and **the most you can lose** (stated even when they are the same
+number, especially then), the break-even with the current price beside it,
+the position size, and what happens **if you do nothing**. Beneath them, one
+honest line about how the fill will actually happen. At the Guided level it
+adds a single explanation of the most consequential term in that particular
+order.
+
+**Placing an order is now a hold.** Press and hold for about 0.6 seconds —
+mouse or `Enter` — and a progress bar fills; let go early and nothing
+happens, with no dialog and no scolding. Halfway through, the button stops
+saying what you are doing and starts saying what you can lose. An order can
+no longer be placed by a single click, a double-click, or a stray `Enter` on
+a focused button. Under reduced-motion settings the gesture takes exactly as
+long and simply steps rather than sweeps. Screen readers get the progress as
+a real progress bar and are told when the hold starts, completes and places.
+
+**Orders that cannot work are stopped earlier.** A limit order with no price,
+a stop with no trigger level, and a trailing stop with neither or both of its
+two settings are now caught before you submit, with the offending field
+marked and a message that names a number to use rather than restating a rule.
+If the broker still refuses an order, the reason now appears beneath the
+button that tried it and the control re-arms, instead of the window closing
+on a message that disappears.
+
+**Nothing about paper trading changed.** No order path, fill rule, risk check
+or broker refusal behaves differently — all twelve of the order manager's
+refusals are unchanged and are now enumerated in the test suite so a
+front-end guardrail can never quietly become the only check. OptionsPilot
+remains paper-trading only, with no live-broker code.
+
+Under the hood: **2849 tests**, and the Trade destination's browser gate grew
+from 18 to **177** assertions. Six defects were found while building this,
+five of them by writing the checks rather than by using the screen; the
+engineering record is in the three sections that follow.
+
+## [2026-08-07] — UI V2 M4: the Trade destination, commit by commit
 
 *The frontend tier. C3 put three regions on one screen; these commits make
 them work.*
