@@ -223,8 +223,18 @@ def _quickpick_over(chain: dict, url: str) -> dict:
         symbol=chain.get("symbol", "")).to_dict()
 
 
+#: The browser logs a console error for any 4xx response, and the commit
+#: checks REFUSE every `/api/orders` POST on purpose — a gate that runs
+#: against a real server with a real journal must not place paper orders, and
+#: refusing is also the only way to reach §6.2's Failed state. Those specific
+#: messages are excluded, by exact shape, on the pages that cause them. This
+#: is narrow on purpose: a blanket filter would hide the next real one.
+_REFUSED_ORDER_NOISE = "Failed to load resource"
+
+
 def open_trade(browser, base, *, width=1920, height=1080, console=None,
-               chain=None, review=None, review_log=None):
+               chain=None, review=None, review_log=None,
+               allow_refused_orders=False):
     """A page showing the Trade destination with a known chain.
 
     `review_log` collects the body of every `/api/v1/review` request, which is
@@ -233,8 +243,13 @@ def open_trade(browser, base, *, width=1920, height=1080, console=None,
     """
     page = browser.new_page(viewport={"width": width, "height": height})
     if console is not None:
-        page.on("console",
-                lambda m: console.append(m.text) if m.type == "error" else None)
+        def _console(m):
+            if m.type != "error":
+                return
+            if allow_refused_orders and _REFUSED_ORDER_NOISE in m.text:
+                return
+            console.append(m.text)
+        page.on("console", _console)
         page.on("pageerror", lambda e: console.append(str(e)))
     if chain is not None:
         page.route("**/api/chain*", lambda route: route.fulfill(
@@ -1192,10 +1207,299 @@ def check_review_explains_at_guided_only(browser, base, c: Checks,
     page.close()
 
 
+# ── 7. Should I place this order? ────────────────────────────────────────────
+
+HOLD_JS = """() => {
+  const b = document.getElementById('rv-commit');
+  const bar = document.getElementById('rv-hold-bar');
+  const fill = document.getElementById('rv-hold-fill');
+  // The absent shape must carry EVERY key the present one does. It did not
+  // carry `reduced`, and reverting the commit turned a clean set of failures
+  // into a KeyError three checks later — the fourth time in this file that a
+  // gate crashed where it should have reported.
+  if (!b || !bar) return {missing: true, role: '', value: null, width: null,
+                          trackWidth: null, label: '', says: '', error: '',
+                          open: false, disabled: true, orders: 0,
+                          reduced: false};
+  return {
+    missing: false,
+    // The accessible value, which §6.2 requires: "progress is exposed as a
+    // progress bar with a value, so a screen-reader user knows how much of
+    // the hold remains."
+    role: bar.getAttribute('role') || '',
+    value: +(bar.getAttribute('aria-valuenow') || -1),
+    width: parseFloat(getComputedStyle(fill).width),
+    trackWidth: parseFloat(getComputedStyle(bar).width),
+    label: (document.getElementById('rv-hold-label')?.textContent || '').trim(),
+    says: (document.getElementById('rv-hold-say')?.textContent || '').trim(),
+    error: (document.getElementById('rv-hold-error')?.textContent || '').trim(),
+    open: document.getElementById('review-overlay').classList.contains('show'),
+    disabled: b.disabled,
+    orders: window.__orders || 0,
+    reduced: document.documentElement.classList.contains('gd-nomotion'),
+  };
+}"""
+
+
+def _count_orders(page):
+    """Count POSTs to /api/orders, and refuse every one of them.
+
+    The gate must never place a paper order — it runs against a real server
+    with a real journal. Refusing also exercises §6.2's Failed state, which
+    is the half of the contract a happy path can never reach.
+    """
+    page.evaluate("() => { window.__orders = 0; }")
+    page.route("**/api/orders", lambda route: (
+        route.fulfill(status=400, content_type="application/json",
+                      body=json.dumps({"error": "refused by the check"}))))
+    page.on("request", lambda r: page.evaluate(
+        "() => { window.__orders = (window.__orders || 0) + 1; }")
+        if r.url.endswith("/api/orders") and r.method == "POST" else None)
+
+
+def check_hold_to_confirm(browser, base, c: Checks, console: list) -> None:
+    """The commit gesture (M4-C8).
+
+    Fails against the previous build on every assertion: C7 shipped a plain
+    `Place order` button that committed on one click, which is exactly what
+    §6.6 forbids — "a click is indistinguishable from a mis-click".
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[],
+                      allow_refused_orders=True)
+    _count_orders(page)
+    _open_review(page)
+    h = page.evaluate(HOLD_JS)
+    if h["missing"] or not h["open"]:
+        c.check("the commit control exists and can be reached", False,
+                "no hold control in an open review")
+        page.close()
+        return
+
+    c.check("the commit exposes its progress as a progress bar with a value",
+            h["role"] == "progressbar" and h["value"] == 0,
+            f"role={h['role']} value={h['value']}")
+    c.check("it is armed, not filled", h["width"] < 2, str(h["width"]))
+
+    # §6.2's last rule: "never reachable by a single click, a double-click, or
+    # an un-held Enter." THE assertion of this commit.
+    page.click("#rv-commit")
+    page.wait_for_timeout(250)
+    h = page.evaluate(HOLD_JS)
+    c.check("a single click does not place the order",
+            h["open"] and h["orders"] == 0,
+            f"open={h['open']} orders={h['orders']}")
+    page.dblclick("#rv-commit")
+    page.wait_for_timeout(250)
+    h = page.evaluate(HOLD_JS)
+    c.check("nor does a double-click", h["open"] and h["orders"] == 0,
+            f"open={h['open']} orders={h['orders']}")
+    page.focus("#rv-commit")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(250)
+    h = page.evaluate(HOLD_JS)
+    c.check("nor does an un-held Enter", h["open"] and h["orders"] == 0,
+            f"open={h['open']} orders={h['orders']}")
+
+    # A hold, released early. §6.2: "no message, no dialog."
+    box = page.query_selector("#rv-commit").bounding_box()
+    x, y = box["x"] + box["width"] / 2, box["y"] + box["height"] / 2
+    page.mouse.move(x, y)
+    page.mouse.down()
+    page.wait_for_timeout(260)
+    mid = page.evaluate(HOLD_JS)
+    c.check("holding fills the indicator", 20 < mid["value"] < 90,
+            f"{mid['value']}%")
+    c.check("and announces that the hold started",
+            "holding" in mid["says"].lower(), mid["says"][:70])
+    page.mouse.up()
+    page.wait_for_timeout(350)
+    h = page.evaluate(HOLD_JS)
+    c.check("releasing early cancels it", h["open"] and h["orders"] == 0,
+            f"open={h['open']} orders={h['orders']}")
+    c.check("with no message and no dialog", h["error"] == "", h["error"][:70])
+    c.check("and the indicator returns to empty", h["value"] == 0,
+            str(h["value"]))
+
+    # The label switches at 50% to the maximum loss (§6.2's Holding state).
+    page.mouse.down()
+    page.wait_for_timeout(150)
+    early = page.evaluate(HOLD_JS)
+    page.wait_for_timeout(260)
+    late = page.evaluate(HOLD_JS)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    c.check("before halfway the label states the action",
+            "hold to place" in early["label"].lower(),
+            f"{early['label']!r} at {early['value']}%")
+    c.check("past halfway it states the maximum loss instead",
+            "412.34" in late["label"] and "risk" in late["label"].lower(),
+            f"{late['label']!r} at {late['value']}%")
+    page.close()
+
+
+def check_hold_completes_and_can_fail(browser, base, c: Checks,
+                                      console: list) -> None:
+    """Qualifying, submitting, and §6.2's Failed state (M4-C8).
+
+    The Failed state is the half of the contract a happy path never reaches,
+    and it is the reason the placement runs inside the modal at all: a modal
+    that closed on qualify could only report a refusal as a toast, which
+    leaves before the decision it belongs to.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[],
+                      allow_refused_orders=True)
+    _count_orders(page)          # every order is refused, deliberately
+    _open_review(page)
+    if not page.evaluate(HOLD_JS)["open"]:
+        c.check("a full hold can be performed", False, "review did not open")
+        page.close()
+        return
+
+    box = page.query_selector("#rv-commit").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    page.wait_for_timeout(900)          # past the 600ms qualification
+    page.mouse.up()
+    page.wait_for_timeout(600)
+    h = page.evaluate(HOLD_JS)
+
+    c.check("a completed hold submits the order", h["orders"] == 1,
+            f"{h['orders']} order request(s)")
+    c.check("a refused order keeps the review open rather than closing on it",
+            h["open"])
+    # §6.2 Failed: "the control re-arms; an action-scoped error appears
+    # beneath." Beneath the control — not a toast.
+    c.check("and states the refusal beneath the control",
+            "refused" in h["error"].lower(), h["error"][:80])
+    c.check("the control re-arms rather than staying inert",
+            not h["disabled"] and h["value"] == 0,
+            f"disabled={h['disabled']} value={h['value']}")
+    c.check("and the refusal is announced, not only shown",
+            "not placed" in h["says"].lower(), h["says"][:80])
+    page.close()
+
+
+def check_hold_by_keyboard(browser, base, c: Checks, console: list) -> None:
+    """§6.6: "Hold `Enter`. Same duration, same fill indicator, same early-
+    release cancel. P8 is not satisfied by a mouse-only gesture."
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[],
+                      allow_refused_orders=True)
+    _count_orders(page)
+    _open_review(page)
+    if not page.evaluate(HOLD_JS)["open"]:
+        c.check("the commit can be held from the keyboard", False,
+                "review did not open")
+        page.close()
+        return
+
+    # Opening a review puts focus on the commit, so the whole gesture is
+    # reachable with no pointer at all.
+    focused = page.evaluate("() => document.activeElement.id")
+    c.check("opening a review focuses the commit control",
+            focused == "rv-commit", focused)
+
+    page.keyboard.down("Enter")
+    page.wait_for_timeout(250)
+    mid = page.evaluate(HOLD_JS)
+    c.check("holding Enter fills the same indicator",
+            20 < mid["value"] < 90, f"{mid['value']}%")
+    page.keyboard.up("Enter")
+    page.wait_for_timeout(350)
+    h = page.evaluate(HOLD_JS)
+    c.check("releasing Enter early cancels, exactly like the pointer",
+            h["open"] and h["orders"] == 0 and h["value"] == 0,
+            f"open={h['open']} orders={h['orders']} value={h['value']}")
+
+    page.keyboard.down("Enter")
+    page.wait_for_timeout(900)
+    page.keyboard.up("Enter")
+    page.wait_for_timeout(600)
+    h = page.evaluate(HOLD_JS)
+    c.check("and holding it to the end submits", h["orders"] == 1,
+            f"{h['orders']} order request(s)")
+    page.close()
+
+
+def check_hold_under_reduced_motion(browser, base, c: Checks,
+                                    console: list) -> None:
+    """§7.5: the duration is UNCHANGED and the sweep becomes four steps.
+
+    The unchanged duration is the part that is easy to get wrong. Shortening
+    it under reduced motion would remove the deliberateness the gesture exists
+    for — this is a timing affordance, not decoration.
+    """
+    # Set the PREFERENCE, not the class. `applyDisplay` re-derives
+    # `gd-nomotion` from the stored setting on load and on every state
+    # refresh, so a class poked in from the test is removed again a moment
+    # later — measured, mid-gesture, which made a correct implementation look
+    # like a continuous sweep. Driving the real in-app toggle is both the
+    # honest test and the stable one.
+    post(base, "/api/guide/state", {"reduce_motion": True})
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[],
+                      allow_refused_orders=True)
+    _count_orders(page)
+    _open_review(page)
+    if not page.evaluate(HOLD_JS)["reduced"]:
+        c.check("the in-app reduced-motion toggle reaches the page", False,
+                "gd-nomotion not applied from the stored preference")
+        post(base, "/api/guide/state", {"reduce_motion": False})
+        page.close()
+        return
+    if not page.evaluate(HOLD_JS)["open"]:
+        c.check("the hold works under reduced motion", False,
+                "review did not open")
+        page.close()
+        return
+
+    # Sample WITHIN one hold that is deliberately released before qualifying —
+    # eight samples at ~40ms is under 600ms even with evaluate overhead. The
+    # first version of this loop ran past the qualification and placed the
+    # order it was about to assert had not been placed.
+    box = page.query_selector("#rv-commit").bounding_box()
+    page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    page.mouse.down()
+    seen, still_reduced = set(), True
+    for _ in range(8):
+        page.wait_for_timeout(40)
+        h = page.evaluate(HOLD_JS)
+        seen.add(h["value"])
+        still_reduced = still_reduced and h["reduced"]
+    page.mouse.up()
+    page.wait_for_timeout(300)
+
+    c.check("reduced motion stays on for the length of the gesture",
+            still_reduced, "gd-nomotion was removed mid-hold")
+    steps = sorted(v for v in seen if v is not None and 0 <= v <= 100)
+    c.check("under reduced motion the sweep is discrete, not continuous",
+            len(set(steps)) <= 5, f"{len(set(steps))} distinct values: {steps}")
+    c.check("and every step is one of the four the design names",
+            all(v in (0, 25, 50, 75, 100) for v in steps), str(steps))
+
+    # §7.5's harder half: "the duration is UNCHANGED." Shortening it under
+    # reduced motion would remove the deliberateness the gesture exists for.
+    before = page.evaluate(HOLD_JS)["orders"]
+    page.mouse.down()
+    page.wait_for_timeout(400)
+    page.mouse.up()
+    page.wait_for_timeout(300)
+    h = page.evaluate(HOLD_JS)
+    c.check("the duration is unchanged — 400ms still does not qualify",
+            h["orders"] == before and h["open"],
+            f"orders {before}->{h['orders']} open={h['open']}")
+    # Restore, so a later check does not inherit this one's preference.
+    post(base, "/api/guide/state", {"reduce_motion": False})
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
     """Coverage still to come, named so the gate's gaps are legible."""
     for label in (
-        "7. Should I place this order? (M4-C8/C9)",
+        "7b. The ticket's blocked state (M4-C9)",
     ):
         c.note(label)
 
@@ -1214,6 +1518,10 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_review_states_the_consequences(browser, base, c, console)
     check_review_renders_every_order_type(browser, base, c, console)
     check_review_explains_at_guided_only(browser, base, c, console)
+    check_hold_to_confirm(browser, base, c, console)
+    check_hold_completes_and_can_fail(browser, base, c, console)
+    check_hold_by_keyboard(browser, base, c, console)
+    check_hold_under_reduced_motion(browser, base, c, console)
     check_workflow_sections(c)
 
 

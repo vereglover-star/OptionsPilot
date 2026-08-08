@@ -168,6 +168,38 @@ from rather than to `<body>`.
 
 **Gate: 107 → 131 checks.**
 
+**C8 — hold to confirm.** §6.6: "A click is indistinguishable from a
+mis-click; a hold cannot be produced by accident, by a double-tap overshoot,
+or by a stray Enter on a focused button." The commit control is now a ~600ms
+hold — pointer or keyboard — with an early release that cancels silently.
+
+There is deliberately **no click handler** on it. §6.2's last rule is that it
+is never reachable by a single click, a double-click, or an un-held Enter, and
+a click listener that checked a flag would still be a click listener.
+`preventDefault` on both Enter and Space suppresses the synthetic click a
+button produces from either.
+
+The duration is read from `--dur-deliberate` rather than written in
+JavaScript: §7.1 gives the commit gesture its own token and M-12 is the only
+entry that uses it. The fill's width is driven from a rAF loop rather than a
+CSS animation, because the label must switch at exactly 50% to the maximum
+loss (§6.2's Holding state) and the track is a real `role="progressbar"` whose
+`aria-valuenow` has to track the number a sighted user is watching. A CSS
+keyframe would leave the accessible value frozen at 0 for the whole gesture.
+
+Under reduced motion the duration is **unchanged** and the sweep becomes four
+discrete steps (§7.5). Shortening it would remove the deliberateness the
+gesture exists for.
+
+The placement now runs **inside** the modal, which is what makes §6.2's
+Submitting and Failed states possible: the control goes inert and reads
+"Placing…", and a refusal re-arms it with the reason stated beneath rather
+than as a toast that leaves before the decision it belongs to. Three moments
+are announced — started, qualified, placed.
+
+**Gate: 131 → 156 checks**, including that a click, a double-click and an
+un-held Enter each place nothing.
+
 **Gate: 89 → 107 checks.** `/api/v1/quickpick` is stubbed by running the real
 `services/quickpick.py` rules over the fixture chain, so only the transport
 is faked; the catalogue route is deliberately left live, because what is

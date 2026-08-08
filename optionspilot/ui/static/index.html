@@ -955,6 +955,38 @@ tr.atm-marker td::before, tr.atm-marker td::after { content:"—"; margin:0 var(
   margin-top:var(--space-4); }
 .rv-acts .btn { text-align:center; }
 
+/* ── the commit control (M4-C8) ───────────────────────────────────────────
+   DESIGN_SYSTEM_V2.md §6.2. The ONE component through which capital moves,
+   and the only place in the product that uses `--dur-deliberate`.
+
+   The fill's width is driven from JavaScript rather than by a CSS animation,
+   for two reasons that are both requirements rather than preferences: the
+   label must switch at exactly 50% (§6.2's Holding state), and the track is a
+   `role="progressbar"` whose `aria-valuenow` has to track the same number a
+   sighted user is watching. A CSS keyframe would leave the accessible value
+   frozen at 0 for the whole gesture — present, wrong, and invisible in
+   review, which is this file's recurring failure mode.
+
+   `transition` is therefore absent while holding and applied only on RELEASE,
+   which is §6.2's "the fill retreats at `fast`". */
+.btn.hold { display:flex; align-items:center; gap:var(--space-3);
+  background:var(--action-primary-fill); border-color:var(--action-primary-fill);
+  color:#fff; font-weight:600; cursor:pointer; user-select:none;
+  -webkit-user-select:none; touch-action:none; }
+.btn.hold:disabled { cursor:default; }
+.hold-label { flex:0 0 auto; }
+.hold-track { flex:1 1 auto; height:8px; border-radius:999px;
+  background:rgba(255,255,255,.22); overflow:hidden; }
+.hold-fill { display:block; height:100%; width:0%; border-radius:999px;
+  background:#fff; }
+/* Only on the way back. Linear, per M-12, and only for the retreat. */
+.btn.hold.releasing .hold-fill { transition:width var(--dur-fast) linear; }
+.hold-hint { color:var(--ink-muted); font-size:var(--text-caption);
+  text-align:center; margin-top:calc(var(--space-2) * -1); }
+.hold-error { color:var(--market-neg-text); font-size:var(--text-caption);
+  line-height:1.5; }
+.hold-error:empty { display:none; }
+
 .modal.update { max-width:560px; width:560px; }
 .upd-head { display:flex; align-items:center; gap:var(--space-3); margin-bottom:6px; }
 .upd-head .upd-ic { font-size:var(--text-title); line-height:1; }
@@ -3689,14 +3721,38 @@ body.shell-v2 .home-legacy { display:none; }
          confusion that follows every paper fill. -->
     <p class="rv-fill" id="rv-fill"></p>
 
+    <!-- ══ COMMIT — HOLD TO CONFIRM (M4-C8) ═══════════════════════════════
+         §6.6: "A click is indistinguishable from a mis-click; a hold cannot
+         be produced by accident, by a double-tap overshoot, or by a stray
+         Enter on a focused button." DESIGN_SYSTEM_V2.md §6.2's anatomy is a
+         label and a track side by side, which is what this is.
+
+         The track is a real `role="progressbar"` with a value, because §6.2
+         requires a screen-reader user to know how much of the hold remains.
+         It sits INSIDE the button as its right-hand half rather than beside
+         it, so the fill and the thing it describes cannot become two
+         controls. -->
     <div class="rv-acts">
-      <!-- M4-C8 replaces this with the hold-to-confirm control. It is a plain
-           button here so C7 leaves the application working (R-4) with the
-           behaviour it already had, rather than shipping a review nobody can
-           act on for the length of one commit. -->
-      <button class="btn primary big" id="rv-commit">Place order</button>
+      <button class="btn big hold" id="rv-commit"
+              aria-describedby="rv-hold-hint">
+        <span class="hold-label" id="rv-hold-label">Hold to place order</span>
+        <span class="hold-track" id="rv-hold-bar" role="progressbar"
+              aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"
+              aria-label="Hold to place order">
+          <span class="hold-fill" id="rv-hold-fill"></span>
+        </span>
+      </button>
+      <p class="hold-hint" id="rv-hold-hint">Press and hold, or hold
+        <span class="kbd">Enter</span>. Let go early and nothing happens.</p>
+      <!-- §6.2's Failed state: "the control re-arms; an action-scoped error
+           appears beneath". Beneath the control, not as a toast — a toast for
+           a failure the user is standing in front of is a message that leaves
+           before the decision it belongs to. -->
+      <p class="hold-error" id="rv-hold-error" role="alert"></p>
       <button class="btn" id="rv-cancel">Cancel <span class="kbd">Esc</span></button>
     </div>
+    <!-- §6.2: "Announces three moments — started, qualified, placed." -->
+    <div class="sr-only" id="rv-hold-say" role="status" aria-live="polite"></div>
   </div>
 </div>
 
@@ -9518,16 +9574,28 @@ function rvPaint(r) {
   $("rv-fill").textContent = r.fill_note || "";
 }
 
-/* Open the modal over a `ReviewView`. Resolves true if the user commits.
-   C8 replaces the plain button in `#rv-commit-host` with the hold gesture;
-   the promise contract is the same either way, which is what lets that
-   commit be about the gesture alone. */
-function rvOpen(r) {
+/* Open the modal over a `ReviewView`, with the function that places the order
+   (M4-C8). The submit runs INSIDE the modal rather than after it, because
+   §6.2 gives the commit control a Submitting state and a Failed state — and
+   a Failed state is only possible if the control is still on screen when the
+   attempt fails. A modal that closed on qualify would have to report the
+   failure as a toast, which is a message that leaves before the decision it
+   belongs to.
+
+   `submit` returns `{ok: true}` or `{ok: false, error}`. Resolves true only
+   when an order was actually placed. */
+function rvOpen(r, submit) {
   rvPaint(r);
+  holdSubmit = submit || null;
+  // The label the hold switches to at 50% (§6.2). The maximum loss, in the
+  // words the review already used — not a second formatting of it.
+  holdRisk = r.max_loss == null ? "" : `${fmt$(r.max_loss)} at risk`;
+  $("rv-hold-error").textContent = "";
+  holdReset();
+  $("rv-commit").disabled = false;
   rvLastFocus = document.activeElement;
   $("review-overlay").classList.add("show");
-  const commit = $("rv-commit");
-  if (commit) commit.focus();
+  $("rv-commit").focus();
   return new Promise(resolve => { rvResolve = resolve; });
 }
 
@@ -9542,7 +9610,156 @@ function rvClose(result) {
 
 const rvIsOpen = () => $("review-overlay").classList.contains("show");
 
-$("rv-commit").onclick = () => rvClose(true);
+/* ── hold to confirm (M4-C8) ──────────────────────────────────────────────
+   §6.6: "A click is indistinguishable from a mis-click; a hold cannot be
+   produced by accident, by a double-tap overshoot, or by a stray Enter on a
+   focused button. It creates an unmistakable moment of commitment with a
+   built-in escape hatch that requires no second dialog to undo."
+
+   There is deliberately NO click handler on this control. §6.2's last rule:
+   "it is never reachable by a single click, a double-click, or an un-held
+   Enter." A click listener that checked a flag would still be a click
+   listener, and the next person to read it would wire something to it.
+
+   The duration is read from `--dur-deliberate` rather than written here.
+   DESIGN_SYSTEM_V2.md §7.1 gives the commit gesture its own token and §7.3's
+   M-12 is the only entry that uses it; a `600` in this file would be a second
+   copy of a number the design system owns, and the reduced-motion rule below
+   depends on it being the same one. */
+const HOLD_MS = (() => {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--dur-deliberate").trim();
+  const n = parseFloat(raw);
+  return isFinite(n) && n > 0 ? (raw.endsWith("ms") ? n : n * 1000) : 600;
+})();
+/* §7.5: under reduced motion "the duration is unchanged and the sweep becomes
+   four discrete steps — it is a timing affordance, not decoration." Unchanged
+   duration is the part that is easy to get wrong: shortening it would remove
+   the deliberateness the gesture exists for. */
+const HOLD_STEPS = 4;
+
+let holdRaf = null, holdStart = 0, holdArmed = false, holdBusy = false;
+let holdSubmit = null;          // what qualifying will do
+let holdRisk = "";              // the label shown from 50% onward
+
+const holdReduced = () =>
+  document.documentElement.classList.contains("gd-nomotion");
+
+function holdSay(msg) {
+  const el = $("rv-hold-say");
+  if (el) el.textContent = msg;
+}
+
+function holdPaint(pct) {
+  $("rv-hold-fill").style.width = pct + "%";
+  $("rv-hold-bar").setAttribute("aria-valuenow", String(Math.round(pct)));
+  // §6.2's Holding state: "the label switches at 50% from the action to the
+  // maximum loss." Halfway through committing is exactly when the worst case
+  // is worth restating, and it is the last moment letting go is free.
+  $("rv-hold-label").textContent =
+    (pct >= 50 && holdRisk) ? holdRisk : "Hold to place order";
+}
+
+function holdReset() {
+  if (holdRaf) cancelAnimationFrame(holdRaf);
+  holdRaf = null;
+  holdArmed = false;
+  $("rv-commit").classList.add("releasing");
+  holdPaint(0);
+}
+
+function holdTick() {
+  if (!holdArmed) return;
+  const elapsed = Date.now() - holdStart;
+  let pct = Math.min(100, elapsed / HOLD_MS * 100);
+  if (holdReduced()) pct = Math.floor(pct / (100 / HOLD_STEPS)) * (100 / HOLD_STEPS);
+  holdPaint(pct);
+  if (elapsed >= HOLD_MS) { holdQualify(); return; }
+  holdRaf = requestAnimationFrame(holdTick);
+}
+
+function holdBegin() {
+  if (holdArmed || holdBusy || $("rv-commit").disabled) return;
+  $("rv-hold-error").textContent = "";
+  $("rv-commit").classList.remove("releasing");
+  holdArmed = true;
+  holdStart = Date.now();
+  holdSay("Holding to place order.");          // moment 1 of 3
+  holdRaf = requestAnimationFrame(holdTick);
+}
+
+/* Released early. §6.2: "no message, no dialog." The fill retreats and the
+   label comes back, and that is the whole of it — a gesture whose escape
+   hatch scolds you is one people stop using. */
+function holdCancel() {
+  if (!holdArmed) return;
+  holdReset();
+}
+
+async function holdQualify() {
+  holdArmed = false;
+  if (holdRaf) cancelAnimationFrame(holdRaf);
+  holdRaf = null;
+  holdPaint(100);
+  holdSay("Hold complete. Placing your order.");   // moment 2 of 3
+  // §6.2's Submitting state: the label becomes "Placing…" and the control is
+  // inert. Inert BEFORE the await, so a second gesture during a slow round
+  // trip cannot place a second order.
+  holdBusy = true;
+  $("rv-commit").disabled = true;
+  $("rv-hold-label").textContent = "Placing…";
+  let outcome;
+  try {
+    outcome = await (holdSubmit ? holdSubmit() : Promise.resolve({ok: true}));
+  } catch (err) {
+    outcome = {ok: false, error: "The order could not be sent."};
+  }
+  holdBusy = false;
+  $("rv-commit").disabled = false;
+  if (outcome && outcome.ok) {
+    holdSay("Order placed.");                      // moment 3 of 3
+    // §6.2: "No success animation follows." The modal closes; the toast the
+    // order path already raises is the confirmation.
+    holdReset();
+    rvClose(true);
+    return;
+  }
+  // §6.2's Failed state: re-arm, with the reason beneath the control.
+  holdReset();
+  $("rv-hold-error").textContent =
+    (outcome && outcome.error) || "The order was not placed.";
+  holdSay("The order was not placed. " +
+          ((outcome && outcome.error) || ""));
+}
+
+(() => {
+  const b = $("rv-commit");
+  b.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    b.setPointerCapture?.(e.pointerId);
+    holdBegin();
+  });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(ev =>
+    b.addEventListener(ev, holdCancel));
+  b.addEventListener("keydown", e => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    // `preventDefault` on BOTH: a button turns Enter and Space into a
+    // synthetic `click`, and a synthetic click is exactly the single
+    // un-held press §6.2 forbids. `e.repeat` is ignored rather than
+    // restarting — key auto-repeat would reset the timer forever and the
+    // hold could never qualify.
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.repeat) holdBegin();
+  });
+  b.addEventListener("keyup", e => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); holdCancel(); }
+  });
+  // Losing focus mid-hold is a release. Without this, tabbing away while
+  // holding leaves a timer running against a control nobody is touching.
+  b.addEventListener("blur", holdCancel);
+})();
+
 $("rv-cancel").onclick = () => rvClose(false);
 $("rv-close").onclick = () => rvClose(false);
 $("review-overlay").onclick = e => {
@@ -9793,9 +10010,6 @@ $("tk-form").onsubmit = async e => {
     toast("Could not price this order for review — nothing was placed.", false);
     return;
   }
-  const ok = await rvOpen(r);
-  if (!ok) return;
-
   const body = {
     kind, side: tkSide,
     tif: $("tk-tif").value, symbol: tkChain.symbol,
@@ -9805,9 +10019,21 @@ $("tk-form").onsubmit = async e => {
     stop_level: +$("tk-stop").value || 0,
     trail: +$("tk-trail").value || 0, trail_pct: +$("tk-trailpct").value || 0,
   };
-  const resp = await post("/api/orders", body);
-  const d = await resp.json();
-  if (!resp.ok) { toast(d.error, false); return; }
+
+  // The placement runs INSIDE the modal (M4-C8). §6.2 gives the commit
+  // control a Submitting state and a Failed state, and a Failed state is only
+  // possible while the control is still on screen — a modal that closed on
+  // qualify would have to report a rejection as a toast, which is a message
+  // that leaves before the decision it belongs to. `OrderManager`'s refusals
+  // now land beneath the button that tried, and the hold re-arms.
+  let d = null;
+  const ok = await rvOpen(r, async () => {
+    const resp = await post("/api/orders", body);
+    d = await resp.json();
+    if (!resp.ok) return {ok: false, error: d.error || "The order was refused."};
+    return {ok: true};
+  });
+  if (!ok || !d) return;
   Guide.mark("order.reviewed");
   if (d.event === "filled")
     toast(`filled: ${d.order.result}`, true, {celebrate: true});
