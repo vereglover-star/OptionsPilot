@@ -817,8 +817,13 @@ tr.expandable:hover td { background:var(--surface-sunken); }
 /* The reason a submit is unavailable, stated adjacent to it — §6.2's Disabled
    treatment, "always". Empty and therefore invisible when nothing blocks. */
 .tk-blocked { font-size:var(--text-caption); color:var(--ink-muted);
-  padding:var(--space-2) 2px 0; }
+  padding:var(--space-2) 2px 0; line-height:1.5; }
 .tk-blocked:empty { display:none; }
+/* §6.2's Invalid state marks the OFFENDING FIELD, not just the control that
+   refused. Border only — a red fill on a field the user is about to type into
+   is punishment rather than information, and §6.3's input rules already say
+   validation runs on blur and submit rather than on every keystroke. */
+.tk-row input.tk-invalid { border-color:var(--market-neg-mark); }
 /* Quick picks (M4-C6). A row of chips, wrapping rather than scrolling — four
    is a bounded set and a horizontally scrolling group of four hides the last
    one for no reason. `aria-pressed` marks the chip that produced the current
@@ -9384,8 +9389,13 @@ function tkDraft() {
     strike: tkSel.strike, right: tkSel.right,
     quantity: Math.max(1, +$("tk-qty").value || 1),
     limit: kind === "limit" ? (+$("tk-limit").value || 0) : 0,
+    // `review.py::_sentence` reads `stop` as the TRIGGER for a stop/target
+    // and as the TRAIL DISTANCE for a trailing stop — "Only if SPY falls $2
+    // from its best price". Sending 0 for a trailing stop, as this did before
+    // M4-C9, silently dropped that clause from the review's first line.
     stop: (kind === "stop_loss" || kind === "take_profit")
-      ? (+$("tk-stop").value || 0) : 0,
+      ? (+$("tk-stop").value || 0)
+      : (kind === "trailing_stop" ? (+$("tk-trail").value || 0) : 0),
   };
 }
 
@@ -9447,17 +9457,94 @@ function tkPaintFigures(r) {
   tkArmSubmit();
 }
 
-/* The submit's label, colour and availability. Split out because C9 adds
-   guardrail reasons to the same control and they must not be two mechanisms
-   fighting over one button. */
+/* ── the blocked state (M4-C9) ────────────────────────────────────────────
+   §6.2's Invalid state: "the specific reason, in place, with the offending
+   field marked and the impossible option removed — plus a line saying what
+   changed and why."
+
+   `OrderManager.place` refuses ten distinct things. The V0.6.1 guardrails
+   already cover the three that are about the SIDE — exit types on the buy
+   side, selling what you do not hold, selling more than you hold — by
+   removing the impossible option and saying why (`tkSyncTicket`, unchanged
+   here). The three below are about a MISSING FIELD, and until now every one
+   of them was reachable in two clicks and only discovered on submit:
+
+       limit_price <= 0        "limit orders need limit_price > 0"
+       stop_level <= 0         "{kind} orders need stop_level > 0"
+       trail / trail_pct       "trailing stops need exactly one of ..."
+
+   Each returns the field to mark and a sentence that says what is missing,
+   why it is needed, and — where the app knows a useful number — what to put
+   there. "limit orders need limit_price > 0" is accurate and useless; the
+   ask is right there on screen and naming it is the difference between an
+   error and an instruction.
+
+   **This is a SECOND gate and never a replacement for the first.**
+   `OrderManager` still refuses all ten, `tests/test_orders.py` still asserts
+   it, and M4-C8's Failed state puts the refusal beneath the button that tried
+   — so the refusals this cannot derive (a quantity reserved by working sell
+   orders needs an OCC symbol the client does not build) are still explained,
+   just later. */
+function tkBlockers() {
+  if (!tkSel || !tkChain) return [{
+    field: "", message: "Select a contract from the chain to review an order."}];
+  const kind = $("tk-kind").value, out = [];
+  const num = id => +$(id).value || 0;
+
+  if (kind === "limit" && num("tk-limit") <= 0) out.push({
+    field: "tk-limit",
+    message: `A limit order needs a price. Enter the most you will pay per ` +
+      `contract — the ask is $${tkSel.ask.toFixed(2)} right now.`});
+
+  if ((kind === "stop_loss" || kind === "take_profit")
+      && num("tk-stop") <= 0) out.push({
+    field: "tk-stop",
+    message: `A ${kind === "stop_loss" ? "stop loss" : "take profit"} ` +
+      `triggers on the price of ${tkChain.symbol}, not on the option. Enter ` +
+      `the ${tkChain.symbol} level that should fire it — it is ` +
+      `$${tkChain.spot.toFixed(2)} now.`});
+
+  if (kind === "trailing_stop") {
+    const pts = num("tk-trail") > 0, pct = num("tk-trailpct") > 0;
+    if (!pts && !pct) out.push({
+      field: "tk-trail",
+      message: `A trailing stop needs a trail. Give it either a distance in ` +
+        `points or a percentage — not both.`});
+    else if (pts && pct) out.push({
+      field: "tk-trailpct",
+      message: `A trailing stop takes points OR a percentage, not both. ` +
+        `Clear one of them.`});
+  }
+  return out;
+}
+
+/* The submit's label, colour and availability, plus the blocked state. One
+   function, because a reason and a disabled button are one fact and two
+   mechanisms writing to the same control is how they end up disagreeing. */
+const TK_MARKABLE = ["tk-limit", "tk-stop", "tk-trail", "tk-trailpct"];
+
 function tkArmSubmit() {
   const sub = $("tk-submit"), buying = tkSide === "buy_to_open";
   sub.className = "btn big " + (buying ? "buy" : "sell");
-  if (!tkSel || !tkChain) {
+  const blockers = tkBlockers();
+  const marked = new Set(blockers.map(b => b.field));
+  // The offending field is MARKED, per §6.2 — and un-marked when it stops
+  // offending, which is the half that gets forgotten.
+  TK_MARKABLE.forEach(id => {
+    const el = $(id);
+    if (!el) return;
+    el.classList.toggle("tk-invalid", marked.has(id));
+    if (marked.has(id)) el.setAttribute("aria-invalid", "true");
+    else el.removeAttribute("aria-invalid");
+  });
+
+  if (blockers.length) {
     sub.disabled = true;
-    sub.textContent = "Review order";
-    $("tk-blocked").textContent =
-      "Select a contract from the chain to review an order.";
+    // One reason at a time. Two simultaneous blockers is possible only for
+    // the trailing stop, which reports whichever half is wrong; listing
+    // several would make the ticket an error report rather than a control.
+    $("tk-blocked").textContent = blockers[0].message;
+    sub.textContent = tkSel && tkChain ? "Review order" : "Review order";
     return;
   }
   sub.disabled = false;
@@ -9967,6 +10054,15 @@ $("tk-qty-dn").onclick = () => { $("tk-qty").value = Math.max(1, +$("tk-qty").va
 $("tk-qty-up").onclick = () => { $("tk-qty").value = +$("tk-qty").value + 1; updateEstimate(); };
 $("tk-qty").oninput = updateEstimate;
 $("tk-limit").oninput = updateEstimate;
+/* The trigger fields had NO input handler before M4-C9, which is why their
+   blocked state could not exist: typing a stop level changed nothing on the
+   ticket, so nothing could notice it had become valid. `tk-stop` also feeds
+   the review's sentence ("Only if SPY falls to $465"), so this fixes a second
+   thing quietly — the review used to describe a trigger the user had typed
+   after the figures were last fetched. */
+["tk-stop", "tk-trail", "tk-trailpct"].forEach(
+  id => { $(id).oninput = updateEstimate; });
+$("tk-tif").onchange = updateEstimate;
 $("tk-kind").onchange = () => { tkKindFields(); updateEstimate(); };
 
 /* `KIND_LABEL` lived here and is gone with the generic confirm modal it fed

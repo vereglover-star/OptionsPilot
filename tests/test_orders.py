@@ -248,3 +248,105 @@ class TestManualVsAI:
         # even at absurd spots, the AI manager must not touch a manual position
         assert PositionManager().review(pos, spot=1.0, ts=TS) == []
         assert PositionManager().review(pos, spot=99999.0, ts=TS) == []
+
+
+class TestEveryRefusalIsStillARefusal:
+    """`OrderManager.place`'s complete refusal set, re-asserted (UI V2 M4-C9).
+
+    M4-C9 adds a SECOND gate in the order ticket, which removes impossible
+    options and marks missing fields before submit. `CLAUDE.md` records the
+    inverse of this mistake — a gate that was added and never wired up — and
+    this class is the guard against the cheaper version: a UI guardrail that
+    quietly becomes the ONLY check because someone assumed the earlier one
+    made the later one redundant.
+
+    Every branch below is enumerated from `orders.py::place` in source order.
+    If a refusal is deleted or weakened, this fails whatever the ticket does.
+    """
+
+    def test_quantity_below_one_is_refused(self, rig):
+        _, om = rig
+        with pytest.raises(ValueError, match="invalid quantity"):
+            om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45),
+                     0, TS)
+
+    def test_an_unknown_side_is_refused(self, rig):
+        _, om = rig
+        with pytest.raises(ValueError, match="invalid side"):
+            om.place(OrderKind.MARKET, "sell_short", make_call(100, 0.45),
+                     1, TS)
+
+    def test_selling_what_you_do_not_hold_is_refused(self, rig):
+        _, om = rig
+        with pytest.raises(BrokerError, match="no open position"):
+            om.place(OrderKind.MARKET, "sell_to_close", make_call(100, 0.45),
+                     1, TS)
+
+    def test_selling_more_than_you_hold_is_refused(self, rig):
+        _, om = rig
+        om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45), 2, TS)
+        with pytest.raises(BrokerError, match="only 2 contract"):
+            om.place(OrderKind.MARKET, "sell_to_close", make_call(100, 0.45),
+                     3, TS)
+
+    def test_quantity_already_reserved_by_a_working_sell_is_refused(self, rig):
+        """The one refusal the ticket's second gate cannot derive.
+
+        Matching a working order to the selected contract needs the OCC
+        symbol, which the client does not build — deliberately, because that
+        format has one owner in `core/models.py`. So this branch is covered by
+        the backend alone, and M4-C8's Failed state is what puts its message
+        in front of the user.
+        """
+        _, om = rig
+        om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45), 2, TS)
+        om.place(OrderKind.LIMIT, "sell_to_close", make_call(100, 0.45), 2, TS,
+                 limit_price=5.0)
+        with pytest.raises(BrokerError, match="already.*reserved"):
+            om.place(OrderKind.LIMIT, "sell_to_close", make_call(100, 0.45),
+                     1, TS, limit_price=5.0)
+
+    def test_a_limit_order_without_a_price_is_refused(self, rig):
+        _, om = rig
+        with pytest.raises(ValueError, match="limit_price"):
+            om.place(OrderKind.LIMIT, "buy_to_open", make_call(100, 0.45),
+                     1, TS, limit_price=0.0)
+
+    @pytest.mark.parametrize("kind", [OrderKind.STOP_LOSS,
+                                      OrderKind.TAKE_PROFIT])
+    def test_a_stop_or_target_without_a_level_is_refused(self, rig, kind):
+        _, om = rig
+        om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45), 1, TS)
+        with pytest.raises(ValueError, match="stop_level"):
+            om.place(kind, "sell_to_close", make_call(100, 0.45), 1, TS,
+                     stop_level=0.0)
+
+    @pytest.mark.parametrize("kind", [OrderKind.STOP_LOSS,
+                                      OrderKind.TAKE_PROFIT])
+    def test_a_stop_or_target_on_the_buy_side_is_refused(self, rig, kind):
+        _, om = rig
+        with pytest.raises(ValueError, match="exit orders"):
+            om.place(kind, "buy_to_open", make_call(100, 0.45), 1, TS,
+                     stop_level=95.0)
+
+    def test_a_trailing_stop_on_the_buy_side_is_refused(self, rig):
+        _, om = rig
+        with pytest.raises(ValueError, match="exit orders"):
+            om.place(OrderKind.TRAILING_STOP, "buy_to_open",
+                     make_call(100, 0.45), 1, TS, trail=2.0)
+
+    def test_a_trailing_stop_with_neither_trail_nor_percent_is_refused(self, rig):
+        _, om = rig
+        om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45), 1, TS)
+        with pytest.raises(ValueError, match="exactly one"):
+            om.place(OrderKind.TRAILING_STOP, "sell_to_close",
+                     make_call(100, 0.45), 1, TS, trail=0.0, trail_pct=0.0)
+
+    def test_a_trailing_stop_with_BOTH_is_refused(self, rig):
+        # The ticket marks this one too, and the wording it uses ("points OR a
+        # percentage, not both") describes exactly this branch.
+        _, om = rig
+        om.place(OrderKind.MARKET, "buy_to_open", make_call(100, 0.45), 1, TS)
+        with pytest.raises(ValueError, match="exactly one"):
+            om.place(OrderKind.TRAILING_STOP, "sell_to_close",
+                     make_call(100, 0.45), 1, TS, trail=2.0, trail_pct=5.0)

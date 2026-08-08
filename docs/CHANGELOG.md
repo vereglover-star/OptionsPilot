@@ -197,6 +197,46 @@ Submitting and Failed states possible: the control goes inert and reads
 than as a toast that leaves before the decision it belongs to. Three moments
 are announced — started, qualified, placed.
 
+**C9 — the blocked state.** §6.2's Invalid state: "the specific reason, in
+place, with the offending field marked and the impossible option removed —
+plus a line saying what changed and why."
+
+`OrderManager.place` refuses ten distinct things. The V0.6.1 guardrails
+already covered the three that are about the *side*. Three more are about a
+**missing field**, and until now every one was reachable in two clicks and
+discovered only on submit:
+
+| Refusal | What the user used to get |
+| --- | --- |
+| `limit_price <= 0` | "limit orders need limit_price > 0" |
+| `stop_level <= 0` | "stop_loss orders need stop_level > 0" |
+| trail / trail_pct | "trailing stops need exactly one of trail / trail_pct" |
+
+Each is now caught before submit, marks the offending field (`aria-invalid`
+as well as a border), and states what to do — naming a number where the app
+knows a useful one. "A limit order needs a price. Enter the most you will pay
+per contract — the ask is $3.95 right now" is the same fact as
+`limit_price > 0` and a different thing to read.
+
+**This is a second gate, never a replacement.** All twelve refusals are
+re-asserted in `tests/test_orders.py::TestEveryRefusalIsStillARefusal`,
+enumerated from `orders.py::place` in source order. `CLAUDE.md` records the
+inverse mistake — a gate added and never wired up; this class guards the
+cheaper version, where a UI guardrail quietly becomes the only check.
+
+The one refusal the client cannot derive — a quantity already reserved by
+working sell orders, which needs an OCC symbol the client deliberately does
+not build — stays with the backend, and C8's Failed state is what puts its
+message in front of the user.
+
+**Two things fixed on the way.** The trigger fields had no input handler at
+all, so typing a stop level changed nothing on the ticket — which is why this
+state could not previously exist. And the draft sent `stop: 0` for a trailing
+stop, silently dropping the "Only if SPY falls $2 from its best price" clause
+from the review's first line.
+
+**Gate: 156 → 172 checks.**
+
 **Gate: 131 → 156 checks**, including that a click, a double-click and an
 un-held Enter each place nothing.
 

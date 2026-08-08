@@ -567,7 +567,7 @@ mapping.
 
 ### M4 · V0.14.0 Trade — in progress
 
-**9 of 11 commits.** The backend tier (C1–C2) is complete and the
+**10 of 11 commits.** The backend tier (C1–C2) is complete and the
 gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
 commit that protects the seven frontend commits, and seven commits of new
 surface with no behavioural coverage is how a destination ships broken.
@@ -581,8 +581,8 @@ surface with no behavioural coverage is how a destination ships broken.
 | C5 | ✅ | The chain: spot-anchored, roving tabindex, Surface-Level columns. Closes **D3** (greek provenance); found the Enter collision and the squashed expiry strip | `68d792e` |
 | C6 | ✅ | Quick picks wired to the ticket and marked in the chain; the catalogue is fetched, and every pick explains both axes it resolved | `59cb872` |
 | C7 | ✅ | The review modal, five elements in order, for every order type; the Guided explanation line | `1959c33` |
-| C8 | ✅ | Hold-to-confirm: pointer and keyboard, early-release cancel, reduced-motion stepping, three announcements, Submitting and Failed states | `TBD-C8` |
-| C9 | ⬜ | The ticket's blocked state; `OrderManager` refusals re-asserted | |
+| C8 | ✅ | Hold-to-confirm: pointer and keyboard, early-release cancel, reduced-motion stepping, three announcements, Submitting and Failed states | `6bd4925` |
+| C9 | ✅ | The ticket's blocked state — three refusals that were submit-only now have a second gate; all twelve `OrderManager` refusals re-asserted | `TBD-C9` |
 | C10 | 🟡 | `scripts/trade_check.py` + wired into `verify.ps1` — structure + the expiry-label section; grows per commit | `73e81cd` |
 | C11 | ⬜ | Legacy trade and charts markup deleted | |
 

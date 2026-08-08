@@ -1496,12 +1496,143 @@ def check_hold_under_reduced_motion(browser, base, c: Checks,
     page.close()
 
 
+BLOCK_JS = """() => {
+  const sub = document.getElementById('tk-submit');
+  const marked = ['tk-limit','tk-stop','tk-trail','tk-trailpct']
+    .filter(id => document.getElementById(id)?.classList.contains('tk-invalid'));
+  return {
+    disabled: !!sub && sub.disabled,
+    reason: (document.getElementById('tk-blocked')?.textContent || '').trim(),
+    marked,
+    invalidAttr: marked.filter(
+      id => document.getElementById(id).getAttribute('aria-invalid') === 'true'),
+    why: (document.getElementById('tk-kind-why')?.textContent || '').trim(),
+  };
+}"""
+
+
+def check_blocked_states(browser, base, c: Checks, console: list) -> None:
+    """§6.2's Invalid state (M4-C9).
+
+    "The specific reason, in place, with the offending field marked and the
+    impossible option removed — plus a line saying what changed and why."
+
+    The three refusals asserted here were, until this commit, reachable in two
+    clicks and discovered only on submit — `OrderManager` raised
+    "limit orders need limit_price > 0", which is accurate and useless. Every
+    assertion fails against the previous build, where `#tk-submit` was enabled
+    with all three fields empty.
+    """
+    page = open_trade(browser, base, console=console,
+                      chain=_chain_payload(date.today()), review_log=[])
+    page.click("#tk-chain tr[data-strike='470']")
+    page.wait_for_timeout(500)
+
+    b = page.evaluate(BLOCK_JS)
+    c.check("[preserved] a complete market order is not blocked",
+            not b["disabled"] and b["reason"] == "", b["reason"][:70])
+
+    # 1. A limit order with no price.
+    page.select_option("#tk-kind", "limit")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("a limit order with no price cannot be submitted", b["disabled"])
+    c.check("and the price field is the one marked",
+            b["marked"] == ["tk-limit"], str(b["marked"]))
+    c.check("marked for a screen reader too, not only in colour",
+            b["invalidAttr"] == ["tk-limit"], str(b["invalidAttr"]))
+    # "Actionable guidance", not a restatement of the rule: the ask is on
+    # screen and naming it is the difference between an error and an
+    # instruction.
+    c.check("the reason says what to enter and names a number to use",
+            "limit order needs a price" in b["reason"]
+            and "3.95" in b["reason"], b["reason"][:120])
+
+    page.fill("#tk-limit", "3.90")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("filling it clears the block", not b["disabled"] and not b["marked"],
+            f"disabled={b['disabled']} marked={b['marked']}")
+    c.check("and clears the reason with it", b["reason"] == "", b["reason"][:70])
+
+    # 2. A stop with no trigger level. Reached from the SELL side, because
+    #    the buy side removes exit types entirely — the V0.6.1 guardrail,
+    #    which this commit does not touch.
+    # The position list is injected because opening a real one needs a live
+    # chain the backend cannot fetch offline; everything the guardrail then
+    # does is the real code path. Same technique `guide_check.py` uses.
+    page.evaluate("""() => {
+      lastStatus = lastStatus || {};
+      lastStatus.positions = [{underlying: 'SPY',
+        expiration: tkChain.expiration, strike: tkSel.strike,
+        right: tkSel.right, quantity: 5, managed_by: 'manual', unrealized: 0}];
+      tkSyncTicket();
+    }""")
+    page.wait_for_timeout(300)
+    sell = page.query_selector('#tk-side-seg button[data-side="sell_to_close"]')
+    if not sell or sell.is_disabled():
+        c.check("a held contract can be armed to sell", False,
+                "sell stayed disabled with a position injected")
+        page.close()
+        return
+    page.click('#tk-side-seg button[data-side="sell_to_close"]')
+    page.wait_for_timeout(300)
+    page.select_option("#tk-kind", "stop_loss")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("a stop loss with no trigger level cannot be submitted",
+            b["disabled"])
+    c.check("and the trigger field is the one marked",
+            b["marked"] == ["tk-stop"], str(b["marked"]))
+    c.check("the reason says it triggers on the underlying, and names spot",
+            "price of SPY" in b["reason"] and "471.20" in b["reason"],
+            b["reason"][:130])
+
+    # 3. A trailing stop needs exactly one of trail / trail percent.
+    page.select_option("#tk-kind", "trailing_stop")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("a trailing stop with neither trail nor percent is blocked",
+            b["disabled"] and b["marked"] == ["tk-trail"],
+            f"disabled={b['disabled']} marked={b['marked']}")
+    page.fill("#tk-trail", "2")
+    page.fill("#tk-trailpct", "5")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("and one with BOTH is blocked too, naming the second",
+            b["disabled"] and b["marked"] == ["tk-trailpct"],
+            f"disabled={b['disabled']} marked={b['marked']}")
+    c.check("saying to clear one rather than restating the rule",
+            "not both" in b["reason"].lower()
+            and "clear one" in b["reason"].lower(), b["reason"][:120])
+    page.fill("#tk-trailpct", "")
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("clearing one unblocks it", not b["disabled"] and not b["marked"],
+            f"disabled={b['disabled']} marked={b['marked']}")
+
+    # The V0.6.1 side guardrails are untouched and must stay that way — they
+    # are the other half of the same state, and this commit is where someone
+    # would most plausibly rewrite them.
+    page.click('#tk-side-seg button[data-side="buy_to_open"]')
+    page.wait_for_timeout(400)
+    b = page.evaluate(BLOCK_JS)
+    c.check("[preserved] switching to buy still withdraws the exit type",
+            page.input_value("#tk-kind") in ("market", "limit"),
+            page.input_value("#tk-kind"))
+    c.check("[preserved] and still says what changed and why",
+            "exit order" in b["why"].lower(), b["why"][:110])
+    page.close()
+
+
 def check_workflow_sections(c: Checks) -> None:
-    """Coverage still to come, named so the gate's gaps are legible."""
-    for label in (
-        "7b. The ticket's blocked state (M4-C9)",
-    ):
-        c.note(label)
+    """Every section of this file now has assertions.
+
+    Kept as a function rather than deleted: the next milestone to extend Trade
+    adds its section here first, empty, so the gate's coverage stays legible
+    from its own output.
+    """
+    return
 
 
 def run_checks(browser, base: str, c: Checks, console: list) -> None:
@@ -1522,6 +1653,7 @@ def run_checks(browser, base: str, c: Checks, console: list) -> None:
     check_hold_completes_and_can_fail(browser, base, c, console)
     check_hold_by_keyboard(browser, base, c, console)
     check_hold_under_reduced_motion(browser, base, c, console)
+    check_blocked_states(browser, base, c, console)
     check_workflow_sections(c)
 
 
