@@ -9,23 +9,44 @@ what's next" tracker — keep it current as you work.
 
 ## Exact stopping point
 
-**The UI V2 programme is under way. M0–M3.5 are complete; M4 (Trade) is IN
-PROGRESS — its backend tier (C1–C2) has shipped and C3–C11 are not started.** `verify.ps1` is green across all **17** gates at **2806 tests**.
+**The UI V2 programme is under way. M0–M4 are complete; M5 (Portfolio and
+Journal) is next and not started.** `verify.ps1` is green across all **18**
+gates at **2849 tests**.
 
-**M4 · Trade — backend tier complete (`1191281`, `7ef7968`).** Two commits,
-both additive: no existing route, contract or payload changed, and no pixel
-has moved. `services/quickpick.py` resolves §6.3's four intents into concrete
-contracts, server-side and two-phase — server-side because Pilot and the AI
-engine must express the same intents through one implementation, two-phase
-because an intent has two axes and choosing both at once would need the chain
-of an expiration not yet chosen. `services/review.py` builds §6.5's five
-elements and prices them with `broker/paper.py`'s own fill model rather than
-the mid, because a review quoting a price the engine will not use describes a
-trade the system is not going to place.
+**M4 · Trade — complete, 11 of 11 commits (`1191281`…`a600285`).** The
+destination §6 calls "the most important workflow in the product and the one
+where cognitive load does actual financial damage". One screen now carries
+chart, chain and ticket; a contract can be chosen with the keyboard alone;
+review states consequences rather than mechanics; and capital moves only
+through a deliberate hold.
 
-**C3–C11 — the Trade destination itself — are not started.** The stopping
-point is the backend/frontend boundary, the same one M3 used between C3 and
-C4.
+The backend tier (C1–C2) resolves §6.3's four intents server-side and prices
+§6.5's five elements with `broker/paper.py`'s own fill model. The frontend
+tier (C3–C9, C11) built the workspace, the always-present ticket, the chain
+as a grid, the quick picks, the review modal, the commit gesture and the
+blocked state — and the gate (C10, brought forward) grew from 18 to **177**
+checks alongside them, one section per commit.
+
+**Six defects were found by building it**, every one of them invisible in
+review and none of them reported:
+
+| # | Defect | Found by |
+| --- | --- | --- |
+| 1 | The ticket stated the **mid** as a cost. Measured on a live SPY chain: mid 40.40 against an expected fill of 40.804 — one contract read $40 light, ten read $404 light. | Writing the figures down (C4) |
+| 2 | The sizing advisory compared **buying power** against a budget `RiskManager` measures on **equity**, so it tripped at the wrong point on any account holding a position. | Reading `risk/manager.py` for the denominator (C4) |
+| 3 | `Enter` in the chain both armed the ticket and opened the review, because the document-level shortcut tests `tkSel` and `selectContract` had just set it. The modal then stole focus out of the chain. | The gate asserting focus survives a selection (C5) |
+| 4 | `#trade-chain` is a column flex container, so the expiry strip was compressed to **57% of its natural height** by a realistic-length chain. Every pill present, readable by `textContent`, clickable, and unreadable. | Making the fixture chain longer than the region showing it (C5) |
+| 5 | A quick pick naming a strike the loaded chain did not contain returned silently — the chip appeared to do nothing. | The fixture and the server disagreeing (C6) |
+| 6 | The stop/trail fields had **no input handler**, so the review described a trigger the user had typed after the figures were last fetched, and `tkDraft` sent `stop: 0` for a trailing stop — dropping its clause from the review's first line. | Building the blocked state, which needs those fields to notify (C9) |
+
+**`PRODUCT_STANDARDS.md`'s D3 is closed** (C5): the chain marks rows whose
+greeks were computed rather than supplied, a fact `chain_payload` already
+knew and was discarding.
+
+**Next: M5 (Portfolio and Journal).** Nothing in M4 blocks it. Two deferrals
+carry forward and both are recorded with their reasoning in
+`ROADMAP-UI-V2.md` §12 — draggable splitters (C3, needs a workspace field)
+and the legacy navigation deletion (C11, which is M9-C7's existing scope).
 
 **M3.5 · Home polish — complete (`f87debe`…`ec79c7c`).** A refinement
 milestone run before M4 so the remaining five destinations inherit a corrected

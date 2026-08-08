@@ -5,14 +5,21 @@ is. This file is the flat, actionable checklist version.
 
 ## High Priority
 
-- [ ] **UI V2 — M0–M3.5 complete; start M4 (V0.14.0, Trade).** The
-      design is **frozen** across four documents; the implementation plan is
-      written and **four of ten milestones are built**, plus the M3.5
-      refinement pass. Before writing M4's markup read `DESIGN_SYSTEM_V2.md`
+- [ ] **UI V2 — M0–M4 complete; start M5 (V0.15.0, Portfolio and Journal).**
+      The design is **frozen** across four documents; the implementation plan
+      is written and **five of ten milestones are built**, plus the M3.5
+      refinement pass. Before writing M5's markup read `DESIGN_SYSTEM_V2.md`
       §5.5–5.7 and §6.6 — M3.5 corrected four things in the shared design
       language (visibility rules may only HIDE; `.dest-split` owns the seam;
       three instrument tiers, at most one focal per destination; the rail is
-      two states at 216/64).
+      two states at 216/64) — and note that M5-C3 should reuse M4's `rvOpen`
+      and hold gesture rather than growing a second confirmation path: §6.6
+      is explicit that the identical gesture confirms every consequential
+      action in the product.
+      **Two M4 deferrals carry forward**, both with reasoning in
+      `ROADMAP-UI-V2.md` §12: draggable splitters (need a server-owned
+      workspace field, R-8) and the legacy-navigation deletion (still the
+      shell's rollback path; cleanest as M9-C7's existing scope).
       **Start at `ROADMAP-UI-V2.md`** — ten independently shippable
       milestones, ~85 commits, with §12's commit map as the authority for
       which commit comes next. **M0 landed in 9 commits**

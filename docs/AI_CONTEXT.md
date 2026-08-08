@@ -399,6 +399,28 @@ into long-term memory:
    `OrderManager.place` refuses, and `place` still refuses all three. The
    long-standing lesson here is that adding a gate function is not the same as
    the gate being active; the inverse is equally true, and cheaper to get wrong.
+   UI V2 M4-C9 extended the ticket's gate to six of `place`'s ten refusals and
+   added `tests/test_orders.py::TestEveryRefusalIsStillARefusal`, which
+   enumerates **all** of them from the source in order — so the second gate
+   growing can never quietly become the only one.
+
+25. **Never let a screen state the MID as a price something will trade at**
+   (UI V2 M4-C4, `PRODUCT_STANDARDS.md` §3.2). `PaperBroker` fills a market buy
+   at `ask × (1 + slippage_pct)` and a market sell at `bid × (1 − slippage_pct)`.
+   The mid is neither, and it is *always* the closest wrong number to hand.
+   `services/review.py::estimate_premium` is the one implementation of the fill
+   model, pinned by test against the broker's own arithmetic, and every screen
+   that quotes a cost reads it — the ticket, the review modal, and the chain's
+   break-even column all go through it.
+
+   This is on the list because it had already happened and looked fine for two
+   milestones: the order ticket computed `tkSel.mid * qty * 100` in JavaScript.
+   Measured against a live SPY chain, a mid of 40.40 against an expected fill
+   of 40.804 — one contract $40 light, ten contracts $404 light, on the screen
+   where a user decides whether they can afford it. Nothing was red, nothing
+   was missing, and the number was plausible. **A confidently wrong number is
+   worse than an absent one**, and a mid is the most confident wrong number in
+   an options interface.
 
 ## Common mistakes to avoid
 

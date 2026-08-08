@@ -565,7 +565,7 @@ exists because three sessions have had to stop and ask which commit came
 next after context compaction, and nothing in the repository recorded the
 mapping.
 
-### M4 · V0.14.0 Trade — in progress
+### M4 · V0.14.0 Trade — complete
 
 **11 of 11 commits — complete.** The backend tier (C1–C2) is complete and the
 gate (C10) was brought FORWARD, as M2 did for the shell: it is the only
@@ -583,8 +583,8 @@ surface with no behavioural coverage is how a destination ships broken.
 | C7 | ✅ | The review modal, five elements in order, for every order type; the Guided explanation line | `1959c33` |
 | C8 | ✅ | Hold-to-confirm: pointer and keyboard, early-release cancel, reduced-motion stepping, three announcements, Submitting and Failed states | `6bd4925` |
 | C9 | ✅ | The ticket's blocked state — three refusals that were submit-only now have a second gate; all twelve `OrderManager` refusals re-asserted | `2b164d7` |
-| C10 | 🟡 | `scripts/trade_check.py` + wired into `verify.ps1` — structure + the expiry-label section; grows per commit | `73e81cd` |
-| C11 | ✅ | Legacy **trade** markup deleted. **Charts re-scoped to M6** and the legacy navigation left standing — see below | `TBD-C11` |
+| C10 | ✅ | `scripts/trade_check.py` + wired into `verify.ps1`. Grew 18 → 177 checks across C4–C11, one section per commit | `73e81cd` |
+| C11 | ✅ | Legacy **trade** markup deleted. **Charts re-scoped to M6** and the legacy navigation left standing — see below | `a600285` |
 
 **C11 deleted less than its title says, and the difference is not a
 shortfall.** §6 wrote it as "legacy trade and charts markup deleted" on the

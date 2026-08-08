@@ -5,66 +5,78 @@ of every significant session, not "later." For the detailed narrative behind
 any of this, see `PROJECT_STATE.md`; for the structured snapshot, see
 `PROJECT_STATUS.md`.
 
-**Last updated:** 2026-08-07. **UI V2 · M4 — Trade** is in progress:
-C1–C2 (backend) and C10 (the gate, brought forward) are done;
-**C3–C9 and C11 are not started.**
+**Last updated:** 2026-08-07. **UI V2 · M4 — Trade is COMPLETE**, all eleven
+commits (`1191281`…`a600285`). M0–M4 are done; **M5 (Portfolio and Journal)
+is next and not started.**
 
 ## What to do next
 
-**Continue UI V2 · M4 — Trade at C3**, the workspace layout.
+**Start UI V2 · M5 — Portfolio and Journal at C1**, the Portfolio view model.
 `ROADMAP-UI-V2.md` §12 is the authority for which commit comes next, and its
-M4 table is current. `verify.ps1` is green across **17 gates** at 2849 tests.
+M4 table is now closed out with every hash. `verify.ps1` is green across
+**18 gates** at **2849 tests**.
 
-**M4's backend tier (C1–C2) is complete and shipped**, the same shape M3 took:
-services first, then pixels. Nothing on screen has changed yet. What is
-already there for C3–C11 to build on:
+Nothing in M4 blocks M5. Two things it hands over deliberately:
 
-* `GET /api/v1/quickpicks` — the four chips as a catalogue. **Render from it;
-  do not restate the four in `index.html`.** That is the two-catalogue drift
-  `services/guide.py` has a bidirectional test for, after it happened twice.
-* `GET /api/v1/quickpick` — resolves one intent. Carries a `reason` when it
-  cannot; show it rather than treating the chip as a no-op.
-* `POST /api/v1/review` — all five §6.5 elements plus the fill line. Every
-  numeric field is paired with a `*_note`; when the number is `null`, **render
-  the note**, because that is the whole point of the pairing.
+* **Portfolio still BORROWS `#pf-blocks`** — the positions, working-orders and
+  history markup physically living inside `#trade-ticket` and relocated on
+  entry (M2-C2). Trade hides it by POSITION (`body.shell-v2 #trade-ticket
+  #pf-blocks`), so the moment M5-C2 moves that block into a real Portfolio
+  interior the rule stops matching and nothing needs unpicking. That is why
+  the selector is positional; do not "tidy" it into a class.
+* **`services/review.py` and `services/chain.py` are reusable.** M5-C3 closes
+  positions through review + commit, and both the review modal (`rvOpen`) and
+  the hold gesture (`holdBegin`/`holdQualify`) are already generic: `rvOpen`
+  takes a `ReviewView` and a submit function and resolves true only when
+  something was actually placed. Closing a position should reuse them rather
+  than grow a second confirmation path — §6.6 is explicit that the identical
+  gesture confirms every consequential action in the product.
 
-**C10 (`scripts/trade_check.py`) is XL and is the gate for everything C3–C9
-builds.** M2 deliberately brought its equivalent forward out of order for
-exactly this reason — five commits of new surface with no automated coverage
-is how a destination ships broken. Consider doing the same here.
+## What M4 delivered
 
-**Read `DESIGN_SYSTEM_V2.md` §5.5–5.7 and §6.6 before writing any of M4's
-markup.** M3.5 corrected four things in the shared design language and every
-remaining destination inherits them:
+One screen for the whole trading workflow, and six defects found on the way.
 
-* **A visibility rule may only ever HIDE** (§5.7). Writing
-  `body.shell-v2 #trade { display:block }` will silently kill Trade's own
-  `display` and any `gap` on it, exactly as it did to Home for a whole
-  milestone. Write the negative form.
-* **`.dest-split`** (§5.6) is the two-column body. Do not restate a ratio.
-* **Three instrument tiers** (§6.6): at most ONE `.ins--focal` per
-  destination, `.ins--quiet` for context.
-* **The rail is two states, 216/64 at 1280** (§5.2), and the frame's left
-  zone is rail-width so the vertical rule is continuous (§5.5).
+**The shape.** Chart above chain on the left, an always-present ticket on the
+right, sharing Home's column seam. §6.1's three named faults are reversed:
+the flow no longer spans two destinations, the ticket exists before a contract
+is chosen, and positions/orders/history no longer stack in the ticket column.
 
-**M3.5 is complete.** Two things it deliberately did NOT do, both recorded in
-`UI_MIGRATION_TRACKER.md` §9, and the first needs a decision before M4-C11:
+**Things a later milestone must not undo, and why:**
 
-1. **The legacy navigation and header are still in the file.** They were
-   scheduled for M3-C10. Deleting them removes the shell's rollback path and
-   `shell_check`'s last three assertions, and the M3 brief forbade touching
-   navigation. The one-release requirement (`UI_V2_DESIGN.md` §16 Phase 2) is
-   satisfied — v0.12.0 shipped the shell — so it is unblocked, not blocked.
-   Replace those three assertions rather than deleting them, or the flag stops
-   meaning anything.
-2. **The metric cluster wraps below 1280** rather than dropping to four then
-   three metrics with `[More]`, per §2.12. Revisit if M7's Surface Level work
-   gives a better home for an overflow.
+* **Every number the ticket and the review state comes from
+  `/api/v1/review`.** The old ticket computed `tkSel.mid * qty * 100`, and the
+  mid is not a price anything fills at — measured on a live SPY chain, that
+  read $404 light on ten contracts. `PRODUCT_STANDARDS.md` §3.2 has one owner
+  for the fill model and this is it. Do not reintroduce a client-side cost.
+* **The chain does not re-render on selection.** It used to, and that made
+  keyboard navigation impossible — rebuilding `innerHTML` destroys the focused
+  element, so focus fell to `<body>` and the next arrow scrolled the page.
+  `chMarkSelection` toggles two classes; keep it that way.
+* **The chain owns the keys it handles.** `Enter` there both armed the ticket
+  and opened the review, because the document-level order shortcuts test
+  `tkSel` and `selectContract` had just set it. `Enter` on an *already-armed*
+  row deliberately bubbles — that is what makes §6.7's `↓ ↓ ⏎ ⏎` work.
+* **The commit control has no click handler**, deliberately. §6.2: never
+  reachable by a single click, a double-click or an un-held `Enter`. A click
+  listener that checked a flag would still be a click listener.
+* **`#trade-chain` is a column flex container**, so its two headers are
+  `flex:0 0 auto`. Without that a realistic-length chain squashes the expiry
+  strip to 57% of its height — present, readable by `textContent`, clickable,
+  and unreadable on screen.
 
-Reusable from M3, and worth reading before writing M4's markup: the
-`instrument` component (`.ins`, `.ins-well`, `.ins-cluster`) with its two
-invariants enforced in `token_check.py`, and `scripts/home_check.py` as the
-model for a destination gate that measures geometry rather than structure.
+**Deferred, with reasoning in `ROADMAP-UI-V2.md` §12:** draggable splitters
+(C3 — needs a server-owned workspace field, R-8) and the legacy navigation
+deletion (C11 — it is still the shell's rollback path, and its cleanest form
+is M9-C7's existing scope, which also removes the flag's off-branch).
+
+**The gate is the thing to lean on.** `scripts/trade_check.py` went 18 → 177
+checks, organised by the seven questions §6 says Trade exists to answer.
+Assertions that cannot fail against the previous build are labelled
+`[preserved]`, `[guard]` or `[deferred]` in their own names, so an unlabelled
+one is a claim that reverting its commit turns it red. Four times during M4 a
+reverted build made the gate *crash* rather than report — every probe it uses
+is now null-safe and every section bails with a failure when its precondition
+is missing. Keep that property.
 
 ## What M3.5 delivered
 

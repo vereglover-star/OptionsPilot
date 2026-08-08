@@ -5,14 +5,14 @@ minute. For the session-by-session narrative (why things are where they
 are, exact stopping points, verification detail), see `PROJECT_STATE.md`.
 For "what do I do right now," see `NEXT_SESSION.md`.
 
-**Last verified:** 2026-08-06, **UI V2 · M2 — the shell, CLOSED**.
-`verify.ps1` green across **all 17 gates**: full `pytest` suite
+**Last verified:** 2026-08-07, **UI V2 · M4 — Trade, CLOSED**.
+`verify.ps1` green across **all 18 gates**: full `pytest` suite
 (**2849 tests**), ruff, HTML-id, **design-token** and **motion** checks, doc
 checks, API contract check, pip check, `scripts/marketdata_stress.py` **88/88**
-offline, and the six browser suites (`browser_check`, `chart_check`,
+offline, and the nine browser suites (`browser_check`, `chart_check`,
 `marketdata_check`, `intelligence_check`, `guide_check`, `workspace_check`,
-and the new `shell_check` — 33 assertions, the last three of which are the
-rollback) in a real headless browser, **with the new shell on by default**.
+`shell_check`, `home_check` and **`trade_check` — 177 assertions**) in a real
+headless browser, **with the new shell on by default**.
 
 **Two browser checks are known-flaky** and both are tracked in `TODO.md`:
 `chart_check` is the only gate that fetches from **live providers**, and two of
@@ -545,14 +545,45 @@ called the risk preflight that existed but wasn't wired up.
    pausing feature work to accumulate paper-trading data.
 6. Exe rebuild + smoke test — deferred until the V3 branch is approved.
 
-## Current milestone (in progress)
+## Current milestone
 
-**UI V2 · M4 — Trade, in progress.** Its backend tier (C1–C2: quick-pick
-resolution and the review view model) shipped on 2026-08-07; **C3–C11, the
-destination itself, are not started.** The ten-milestone plan, its commit map and the six open design
-decisions are in `docs/ROADMAP-UI-V2.md`; `docs/UI_MIGRATION_TRACKER.md` §10
-carries the per-commit record. The sections below are the historical milestone
-narrative, newest first.
+**UI V2 · M5 — Portfolio and Journal. Not started.** Nothing blocks it.
+
+### UI V2 · M4 — Trade (complete, `1191281`…`a600285`)
+
+Eleven commits. The workflow §6 calls "the most important in the product and
+the one where cognitive load does actual financial damage" is now one screen:
+chart above chain on the left, an always-present ticket on the right.
+
+* **The ticket exists before a contract does** (C4), showing entry, estimated
+  cost, buying-power impact and the most you can lose — every figure from
+  `/api/v1/review`, because the previous ticket derived its cost from the
+  **mid**, which is not a price anything fills at.
+* **The chain is a grid** (C5): `role="grid"`, roving tabindex, arrows and
+  `Enter`, anchored on the strike nearest spot, with §8.2's four Surface-Level
+  column sets complete — break-even and chance-ITM at Guided, the full greek
+  set at Full. Selection toggles two classes instead of rebuilding 300 rows.
+* **Quick picks are fetched, not restated** (C6), and every pick explains both
+  axes it resolved.
+* **Review restates consequences** (C7), five elements in order, for every
+  order type, with the shape unchanged when a figure does not apply.
+* **Capital moves only through a hold** (C8) — ~600ms, pointer or keyboard,
+  never a click, with Submitting and Failed states inside the modal.
+* **Three refusals that were submit-only now have a second gate** (C9), and
+  all twelve of `OrderManager`'s are re-asserted unchanged.
+
+`scripts/trade_check.py` grew **18 → 177** checks, one section per commit.
+Six defects were found building it; `docs/PROJECT_STATE.md` tabulates them.
+`PRODUCT_STANDARDS.md`'s **D3** (greek provenance) is closed.
+
+Two deferrals, both with recorded reasoning in `ROADMAP-UI-V2.md` §12:
+draggable splitters (need a server-owned workspace field) and the legacy
+navigation deletion (M9-C7's existing scope).
+
+The ten-milestone plan, its commit map and the open design decisions are in
+`docs/ROADMAP-UI-V2.md`; `docs/UI_MIGRATION_TRACKER.md` §10 carries the
+per-commit record. The sections below are the historical milestone narrative,
+newest first.
 
 ### UI V2 · M2 — The shell (complete, `b380141`…`12510b3`)
 

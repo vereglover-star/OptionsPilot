@@ -4,7 +4,7 @@ Major features by development phase. Committed history is authoritative for
 exact dates/diffs (`git log`); this file summarizes intent and scope for
 someone who doesn't want to read 12 commit bodies.
 
-## [Uncommitted] — UI V2 M4: the Trade destination (C4–)
+## [2026-08-07] — UI V2 M4: the Trade destination, complete
 
 *The frontend tier. C3 put three regions on one screen; these commits make
 them work.*

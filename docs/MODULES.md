@@ -539,7 +539,22 @@ transport. Every service takes **injected, duck-typed** collaborators and return
   yields `None` rather than falling back. An element that does not apply (a
   closing order has no breakeven, no new maximum loss) is `None` **with a note
   saying why**; printing a zero there is the same class of error as scoring a
-  metric that could not be measured.
+  metric that could not be measured. M4-C4 added the buying-power group —
+  affordability, which is a **different question from position size** and has a
+  different denominator (cash, not equity), so on any account holding a
+  position the two disagree. M4-C7 added `guided_note`, the ONE most
+  consequential term about this particular order, chosen by a ranking rather
+  than accumulated as a list, and rendered at the Guided Surface Level only.
+- `chain.py` (UI V2 M4-C5) — the two conventions the option chain reads by.
+  `breakeven` is priced at the **expected fill** rather than the mid and is the
+  same function `review.py` calls, so a chain row and the review modal cannot
+  disagree about where one contract breaks even. `chance_itm` is |delta| as a
+  percentage, and `CHANCE_ITM_NOTE` is the sentence that keeps it honest:
+  delta is N(d1) and the probability of finishing in the money is N(d2).
+  Computing N(d2) instead was rejected — §6.4 asks for a reading of *delta*,
+  and a second probability disagreeing with the delta beside it would be two
+  owners of one idea. Zero delta returns `None`, not `0.0`: zero means "nobody
+  measured this", and "0% chance" would be a claim about the contract.
 - `watchlist.py` — parse, validate, add/remove/reorder. The four disjoint outcome
   buckets (`added` / `invalid` / `duplicates` / `over_cap`) exist because a user
   who pastes twelve tickers and gets eight must be able to see which four went
